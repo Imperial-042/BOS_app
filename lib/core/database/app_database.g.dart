@@ -27,6 +27,132 @@ class $BusinessesTable extends Businesses
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _ownerNameMeta = const VerificationMeta(
+    'ownerName',
+  );
+  @override
+  late final GeneratedColumn<String> ownerName = GeneratedColumn<String>(
+    'owner_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _managerNameMeta = const VerificationMeta(
+    'managerName',
+  );
+  @override
+  late final GeneratedColumn<String> managerName = GeneratedColumn<String>(
+    'manager_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _businessCategoryMeta = const VerificationMeta(
+    'businessCategory',
+  );
+  @override
+  late final GeneratedColumn<String> businessCategory = GeneratedColumn<String>(
+    'business_category',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _addressCountryMeta = const VerificationMeta(
+    'addressCountry',
+  );
+  @override
+  late final GeneratedColumn<String> addressCountry = GeneratedColumn<String>(
+    'address_country',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _addressProvinceMeta = const VerificationMeta(
+    'addressProvince',
+  );
+  @override
+  late final GeneratedColumn<String> addressProvince = GeneratedColumn<String>(
+    'address_province',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _addressCityMeta = const VerificationMeta(
+    'addressCity',
+  );
+  @override
+  late final GeneratedColumn<String> addressCity = GeneratedColumn<String>(
+    'address_city',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _addressBarangayMeta = const VerificationMeta(
+    'addressBarangay',
+  );
+  @override
+  late final GeneratedColumn<String> addressBarangay = GeneratedColumn<String>(
+    'address_barangay',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _addressZipCodeMeta = const VerificationMeta(
+    'addressZipCode',
+  );
+  @override
+  late final GeneratedColumn<String> addressZipCode = GeneratedColumn<String>(
+    'address_zip_code',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _startingCapitalMeta = const VerificationMeta(
+    'startingCapital',
+  );
+  @override
+  late final GeneratedColumn<int> startingCapital = GeneratedColumn<int>(
+    'starting_capital',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _startingCapitalAccountIdMeta =
+      const VerificationMeta('startingCapitalAccountId');
+  @override
+  late final GeneratedColumn<String> startingCapitalAccountId =
+      GeneratedColumn<String>(
+        'starting_capital_account_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _isCurrentMeta = const VerificationMeta(
+    'isCurrent',
+  );
+  @override
+  late final GeneratedColumn<bool> isCurrent = GeneratedColumn<bool>(
+    'is_current',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_current" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _currencyMeta = const VerificationMeta(
     'currency',
   );
@@ -66,6 +192,17 @@ class $BusinessesTable extends Businesses
   List<GeneratedColumn> get $columns => [
     id,
     name,
+    ownerName,
+    managerName,
+    businessCategory,
+    addressCountry,
+    addressProvince,
+    addressCity,
+    addressBarangay,
+    addressZipCode,
+    startingCapital,
+    startingCapitalAccountId,
+    isCurrent,
     currency,
     ownerUserId,
     createdAt,
@@ -94,6 +231,99 @@ class $BusinessesTable extends Businesses
       );
     } else if (isInserting) {
       context.missing(_nameMeta);
+    }
+    if (data.containsKey('owner_name')) {
+      context.handle(
+        _ownerNameMeta,
+        ownerName.isAcceptableOrUnknown(data['owner_name']!, _ownerNameMeta),
+      );
+    }
+    if (data.containsKey('manager_name')) {
+      context.handle(
+        _managerNameMeta,
+        managerName.isAcceptableOrUnknown(
+          data['manager_name']!,
+          _managerNameMeta,
+        ),
+      );
+    }
+    if (data.containsKey('business_category')) {
+      context.handle(
+        _businessCategoryMeta,
+        businessCategory.isAcceptableOrUnknown(
+          data['business_category']!,
+          _businessCategoryMeta,
+        ),
+      );
+    }
+    if (data.containsKey('address_country')) {
+      context.handle(
+        _addressCountryMeta,
+        addressCountry.isAcceptableOrUnknown(
+          data['address_country']!,
+          _addressCountryMeta,
+        ),
+      );
+    }
+    if (data.containsKey('address_province')) {
+      context.handle(
+        _addressProvinceMeta,
+        addressProvince.isAcceptableOrUnknown(
+          data['address_province']!,
+          _addressProvinceMeta,
+        ),
+      );
+    }
+    if (data.containsKey('address_city')) {
+      context.handle(
+        _addressCityMeta,
+        addressCity.isAcceptableOrUnknown(
+          data['address_city']!,
+          _addressCityMeta,
+        ),
+      );
+    }
+    if (data.containsKey('address_barangay')) {
+      context.handle(
+        _addressBarangayMeta,
+        addressBarangay.isAcceptableOrUnknown(
+          data['address_barangay']!,
+          _addressBarangayMeta,
+        ),
+      );
+    }
+    if (data.containsKey('address_zip_code')) {
+      context.handle(
+        _addressZipCodeMeta,
+        addressZipCode.isAcceptableOrUnknown(
+          data['address_zip_code']!,
+          _addressZipCodeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('starting_capital')) {
+      context.handle(
+        _startingCapitalMeta,
+        startingCapital.isAcceptableOrUnknown(
+          data['starting_capital']!,
+          _startingCapitalMeta,
+        ),
+      );
+    }
+    if (data.containsKey('starting_capital_account_id')) {
+      context.handle(
+        _startingCapitalAccountIdMeta,
+        startingCapitalAccountId.isAcceptableOrUnknown(
+          data['starting_capital_account_id']!,
+          _startingCapitalAccountIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('is_current')) {
+      context.handle(
+        _isCurrentMeta,
+        isCurrent.isAcceptableOrUnknown(data['is_current']!, _isCurrentMeta),
+      );
     }
     if (data.containsKey('currency')) {
       context.handle(
@@ -135,6 +365,50 @@ class $BusinessesTable extends Businesses
         DriftSqlType.string,
         data['${effectivePrefix}name'],
       )!,
+      ownerName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_name'],
+      ),
+      managerName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}manager_name'],
+      ),
+      businessCategory: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}business_category'],
+      ),
+      addressCountry: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}address_country'],
+      ),
+      addressProvince: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}address_province'],
+      ),
+      addressCity: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}address_city'],
+      ),
+      addressBarangay: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}address_barangay'],
+      ),
+      addressZipCode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}address_zip_code'],
+      ),
+      startingCapital: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}starting_capital'],
+      )!,
+      startingCapitalAccountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}starting_capital_account_id'],
+      ),
+      isCurrent: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_current'],
+      )!,
       currency: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}currency'],
@@ -159,12 +433,34 @@ class $BusinessesTable extends Businesses
 class BusinessesData extends DataClass implements Insertable<BusinessesData> {
   final String id;
   final String name;
+  final String? ownerName;
+  final String? managerName;
+  final String? businessCategory;
+  final String? addressCountry;
+  final String? addressProvince;
+  final String? addressCity;
+  final String? addressBarangay;
+  final String? addressZipCode;
+  final int startingCapital;
+  final String? startingCapitalAccountId;
+  final bool isCurrent;
   final String currency;
   final String ownerUserId;
   final DateTime createdAt;
   const BusinessesData({
     required this.id,
     required this.name,
+    this.ownerName,
+    this.managerName,
+    this.businessCategory,
+    this.addressCountry,
+    this.addressProvince,
+    this.addressCity,
+    this.addressBarangay,
+    this.addressZipCode,
+    required this.startingCapital,
+    this.startingCapitalAccountId,
+    required this.isCurrent,
     required this.currency,
     required this.ownerUserId,
     required this.createdAt,
@@ -174,6 +470,37 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['name'] = Variable<String>(name);
+    if (!nullToAbsent || ownerName != null) {
+      map['owner_name'] = Variable<String>(ownerName);
+    }
+    if (!nullToAbsent || managerName != null) {
+      map['manager_name'] = Variable<String>(managerName);
+    }
+    if (!nullToAbsent || businessCategory != null) {
+      map['business_category'] = Variable<String>(businessCategory);
+    }
+    if (!nullToAbsent || addressCountry != null) {
+      map['address_country'] = Variable<String>(addressCountry);
+    }
+    if (!nullToAbsent || addressProvince != null) {
+      map['address_province'] = Variable<String>(addressProvince);
+    }
+    if (!nullToAbsent || addressCity != null) {
+      map['address_city'] = Variable<String>(addressCity);
+    }
+    if (!nullToAbsent || addressBarangay != null) {
+      map['address_barangay'] = Variable<String>(addressBarangay);
+    }
+    if (!nullToAbsent || addressZipCode != null) {
+      map['address_zip_code'] = Variable<String>(addressZipCode);
+    }
+    map['starting_capital'] = Variable<int>(startingCapital);
+    if (!nullToAbsent || startingCapitalAccountId != null) {
+      map['starting_capital_account_id'] = Variable<String>(
+        startingCapitalAccountId,
+      );
+    }
+    map['is_current'] = Variable<bool>(isCurrent);
     map['currency'] = Variable<String>(currency);
     map['owner_user_id'] = Variable<String>(ownerUserId);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -184,6 +511,35 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     return BusinessesCompanion(
       id: Value(id),
       name: Value(name),
+      ownerName: ownerName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerName),
+      managerName: managerName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(managerName),
+      businessCategory: businessCategory == null && nullToAbsent
+          ? const Value.absent()
+          : Value(businessCategory),
+      addressCountry: addressCountry == null && nullToAbsent
+          ? const Value.absent()
+          : Value(addressCountry),
+      addressProvince: addressProvince == null && nullToAbsent
+          ? const Value.absent()
+          : Value(addressProvince),
+      addressCity: addressCity == null && nullToAbsent
+          ? const Value.absent()
+          : Value(addressCity),
+      addressBarangay: addressBarangay == null && nullToAbsent
+          ? const Value.absent()
+          : Value(addressBarangay),
+      addressZipCode: addressZipCode == null && nullToAbsent
+          ? const Value.absent()
+          : Value(addressZipCode),
+      startingCapital: Value(startingCapital),
+      startingCapitalAccountId: startingCapitalAccountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(startingCapitalAccountId),
+      isCurrent: Value(isCurrent),
       currency: Value(currency),
       ownerUserId: Value(ownerUserId),
       createdAt: Value(createdAt),
@@ -198,6 +554,19 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     return BusinessesData(
       id: serializer.fromJson<String>(json['id']),
       name: serializer.fromJson<String>(json['name']),
+      ownerName: serializer.fromJson<String?>(json['ownerName']),
+      managerName: serializer.fromJson<String?>(json['managerName']),
+      businessCategory: serializer.fromJson<String?>(json['businessCategory']),
+      addressCountry: serializer.fromJson<String?>(json['addressCountry']),
+      addressProvince: serializer.fromJson<String?>(json['addressProvince']),
+      addressCity: serializer.fromJson<String?>(json['addressCity']),
+      addressBarangay: serializer.fromJson<String?>(json['addressBarangay']),
+      addressZipCode: serializer.fromJson<String?>(json['addressZipCode']),
+      startingCapital: serializer.fromJson<int>(json['startingCapital']),
+      startingCapitalAccountId: serializer.fromJson<String?>(
+        json['startingCapitalAccountId'],
+      ),
+      isCurrent: serializer.fromJson<bool>(json['isCurrent']),
       currency: serializer.fromJson<String>(json['currency']),
       ownerUserId: serializer.fromJson<String>(json['ownerUserId']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -209,6 +578,19 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'name': serializer.toJson<String>(name),
+      'ownerName': serializer.toJson<String?>(ownerName),
+      'managerName': serializer.toJson<String?>(managerName),
+      'businessCategory': serializer.toJson<String?>(businessCategory),
+      'addressCountry': serializer.toJson<String?>(addressCountry),
+      'addressProvince': serializer.toJson<String?>(addressProvince),
+      'addressCity': serializer.toJson<String?>(addressCity),
+      'addressBarangay': serializer.toJson<String?>(addressBarangay),
+      'addressZipCode': serializer.toJson<String?>(addressZipCode),
+      'startingCapital': serializer.toJson<int>(startingCapital),
+      'startingCapitalAccountId': serializer.toJson<String?>(
+        startingCapitalAccountId,
+      ),
+      'isCurrent': serializer.toJson<bool>(isCurrent),
       'currency': serializer.toJson<String>(currency),
       'ownerUserId': serializer.toJson<String>(ownerUserId),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -218,12 +600,46 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
   BusinessesData copyWith({
     String? id,
     String? name,
+    Value<String?> ownerName = const Value.absent(),
+    Value<String?> managerName = const Value.absent(),
+    Value<String?> businessCategory = const Value.absent(),
+    Value<String?> addressCountry = const Value.absent(),
+    Value<String?> addressProvince = const Value.absent(),
+    Value<String?> addressCity = const Value.absent(),
+    Value<String?> addressBarangay = const Value.absent(),
+    Value<String?> addressZipCode = const Value.absent(),
+    int? startingCapital,
+    Value<String?> startingCapitalAccountId = const Value.absent(),
+    bool? isCurrent,
     String? currency,
     String? ownerUserId,
     DateTime? createdAt,
   }) => BusinessesData(
     id: id ?? this.id,
     name: name ?? this.name,
+    ownerName: ownerName.present ? ownerName.value : this.ownerName,
+    managerName: managerName.present ? managerName.value : this.managerName,
+    businessCategory: businessCategory.present
+        ? businessCategory.value
+        : this.businessCategory,
+    addressCountry: addressCountry.present
+        ? addressCountry.value
+        : this.addressCountry,
+    addressProvince: addressProvince.present
+        ? addressProvince.value
+        : this.addressProvince,
+    addressCity: addressCity.present ? addressCity.value : this.addressCity,
+    addressBarangay: addressBarangay.present
+        ? addressBarangay.value
+        : this.addressBarangay,
+    addressZipCode: addressZipCode.present
+        ? addressZipCode.value
+        : this.addressZipCode,
+    startingCapital: startingCapital ?? this.startingCapital,
+    startingCapitalAccountId: startingCapitalAccountId.present
+        ? startingCapitalAccountId.value
+        : this.startingCapitalAccountId,
+    isCurrent: isCurrent ?? this.isCurrent,
     currency: currency ?? this.currency,
     ownerUserId: ownerUserId ?? this.ownerUserId,
     createdAt: createdAt ?? this.createdAt,
@@ -232,6 +648,35 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     return BusinessesData(
       id: data.id.present ? data.id.value : this.id,
       name: data.name.present ? data.name.value : this.name,
+      ownerName: data.ownerName.present ? data.ownerName.value : this.ownerName,
+      managerName: data.managerName.present
+          ? data.managerName.value
+          : this.managerName,
+      businessCategory: data.businessCategory.present
+          ? data.businessCategory.value
+          : this.businessCategory,
+      addressCountry: data.addressCountry.present
+          ? data.addressCountry.value
+          : this.addressCountry,
+      addressProvince: data.addressProvince.present
+          ? data.addressProvince.value
+          : this.addressProvince,
+      addressCity: data.addressCity.present
+          ? data.addressCity.value
+          : this.addressCity,
+      addressBarangay: data.addressBarangay.present
+          ? data.addressBarangay.value
+          : this.addressBarangay,
+      addressZipCode: data.addressZipCode.present
+          ? data.addressZipCode.value
+          : this.addressZipCode,
+      startingCapital: data.startingCapital.present
+          ? data.startingCapital.value
+          : this.startingCapital,
+      startingCapitalAccountId: data.startingCapitalAccountId.present
+          ? data.startingCapitalAccountId.value
+          : this.startingCapitalAccountId,
+      isCurrent: data.isCurrent.present ? data.isCurrent.value : this.isCurrent,
       currency: data.currency.present ? data.currency.value : this.currency,
       ownerUserId: data.ownerUserId.present
           ? data.ownerUserId.value
@@ -245,6 +690,17 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
     return (StringBuffer('BusinessesData(')
           ..write('id: $id, ')
           ..write('name: $name, ')
+          ..write('ownerName: $ownerName, ')
+          ..write('managerName: $managerName, ')
+          ..write('businessCategory: $businessCategory, ')
+          ..write('addressCountry: $addressCountry, ')
+          ..write('addressProvince: $addressProvince, ')
+          ..write('addressCity: $addressCity, ')
+          ..write('addressBarangay: $addressBarangay, ')
+          ..write('addressZipCode: $addressZipCode, ')
+          ..write('startingCapital: $startingCapital, ')
+          ..write('startingCapitalAccountId: $startingCapitalAccountId, ')
+          ..write('isCurrent: $isCurrent, ')
           ..write('currency: $currency, ')
           ..write('ownerUserId: $ownerUserId, ')
           ..write('createdAt: $createdAt')
@@ -253,13 +709,41 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
   }
 
   @override
-  int get hashCode => Object.hash(id, name, currency, ownerUserId, createdAt);
+  int get hashCode => Object.hash(
+    id,
+    name,
+    ownerName,
+    managerName,
+    businessCategory,
+    addressCountry,
+    addressProvince,
+    addressCity,
+    addressBarangay,
+    addressZipCode,
+    startingCapital,
+    startingCapitalAccountId,
+    isCurrent,
+    currency,
+    ownerUserId,
+    createdAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is BusinessesData &&
           other.id == this.id &&
           other.name == this.name &&
+          other.ownerName == this.ownerName &&
+          other.managerName == this.managerName &&
+          other.businessCategory == this.businessCategory &&
+          other.addressCountry == this.addressCountry &&
+          other.addressProvince == this.addressProvince &&
+          other.addressCity == this.addressCity &&
+          other.addressBarangay == this.addressBarangay &&
+          other.addressZipCode == this.addressZipCode &&
+          other.startingCapital == this.startingCapital &&
+          other.startingCapitalAccountId == this.startingCapitalAccountId &&
+          other.isCurrent == this.isCurrent &&
           other.currency == this.currency &&
           other.ownerUserId == this.ownerUserId &&
           other.createdAt == this.createdAt);
@@ -268,6 +752,17 @@ class BusinessesData extends DataClass implements Insertable<BusinessesData> {
 class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
   final Value<String> id;
   final Value<String> name;
+  final Value<String?> ownerName;
+  final Value<String?> managerName;
+  final Value<String?> businessCategory;
+  final Value<String?> addressCountry;
+  final Value<String?> addressProvince;
+  final Value<String?> addressCity;
+  final Value<String?> addressBarangay;
+  final Value<String?> addressZipCode;
+  final Value<int> startingCapital;
+  final Value<String?> startingCapitalAccountId;
+  final Value<bool> isCurrent;
   final Value<String> currency;
   final Value<String> ownerUserId;
   final Value<DateTime> createdAt;
@@ -275,6 +770,17 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
   const BusinessesCompanion({
     this.id = const Value.absent(),
     this.name = const Value.absent(),
+    this.ownerName = const Value.absent(),
+    this.managerName = const Value.absent(),
+    this.businessCategory = const Value.absent(),
+    this.addressCountry = const Value.absent(),
+    this.addressProvince = const Value.absent(),
+    this.addressCity = const Value.absent(),
+    this.addressBarangay = const Value.absent(),
+    this.addressZipCode = const Value.absent(),
+    this.startingCapital = const Value.absent(),
+    this.startingCapitalAccountId = const Value.absent(),
+    this.isCurrent = const Value.absent(),
     this.currency = const Value.absent(),
     this.ownerUserId = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -283,6 +789,17 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
   BusinessesCompanion.insert({
     required String id,
     required String name,
+    this.ownerName = const Value.absent(),
+    this.managerName = const Value.absent(),
+    this.businessCategory = const Value.absent(),
+    this.addressCountry = const Value.absent(),
+    this.addressProvince = const Value.absent(),
+    this.addressCity = const Value.absent(),
+    this.addressBarangay = const Value.absent(),
+    this.addressZipCode = const Value.absent(),
+    this.startingCapital = const Value.absent(),
+    this.startingCapitalAccountId = const Value.absent(),
+    this.isCurrent = const Value.absent(),
     this.currency = const Value.absent(),
     required String ownerUserId,
     this.createdAt = const Value.absent(),
@@ -293,6 +810,17 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
   static Insertable<BusinessesData> custom({
     Expression<String>? id,
     Expression<String>? name,
+    Expression<String>? ownerName,
+    Expression<String>? managerName,
+    Expression<String>? businessCategory,
+    Expression<String>? addressCountry,
+    Expression<String>? addressProvince,
+    Expression<String>? addressCity,
+    Expression<String>? addressBarangay,
+    Expression<String>? addressZipCode,
+    Expression<int>? startingCapital,
+    Expression<String>? startingCapitalAccountId,
+    Expression<bool>? isCurrent,
     Expression<String>? currency,
     Expression<String>? ownerUserId,
     Expression<DateTime>? createdAt,
@@ -301,6 +829,18 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (name != null) 'name': name,
+      if (ownerName != null) 'owner_name': ownerName,
+      if (managerName != null) 'manager_name': managerName,
+      if (businessCategory != null) 'business_category': businessCategory,
+      if (addressCountry != null) 'address_country': addressCountry,
+      if (addressProvince != null) 'address_province': addressProvince,
+      if (addressCity != null) 'address_city': addressCity,
+      if (addressBarangay != null) 'address_barangay': addressBarangay,
+      if (addressZipCode != null) 'address_zip_code': addressZipCode,
+      if (startingCapital != null) 'starting_capital': startingCapital,
+      if (startingCapitalAccountId != null)
+        'starting_capital_account_id': startingCapitalAccountId,
+      if (isCurrent != null) 'is_current': isCurrent,
       if (currency != null) 'currency': currency,
       if (ownerUserId != null) 'owner_user_id': ownerUserId,
       if (createdAt != null) 'created_at': createdAt,
@@ -311,6 +851,17 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
   BusinessesCompanion copyWith({
     Value<String>? id,
     Value<String>? name,
+    Value<String?>? ownerName,
+    Value<String?>? managerName,
+    Value<String?>? businessCategory,
+    Value<String?>? addressCountry,
+    Value<String?>? addressProvince,
+    Value<String?>? addressCity,
+    Value<String?>? addressBarangay,
+    Value<String?>? addressZipCode,
+    Value<int>? startingCapital,
+    Value<String?>? startingCapitalAccountId,
+    Value<bool>? isCurrent,
     Value<String>? currency,
     Value<String>? ownerUserId,
     Value<DateTime>? createdAt,
@@ -319,6 +870,18 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
     return BusinessesCompanion(
       id: id ?? this.id,
       name: name ?? this.name,
+      ownerName: ownerName ?? this.ownerName,
+      managerName: managerName ?? this.managerName,
+      businessCategory: businessCategory ?? this.businessCategory,
+      addressCountry: addressCountry ?? this.addressCountry,
+      addressProvince: addressProvince ?? this.addressProvince,
+      addressCity: addressCity ?? this.addressCity,
+      addressBarangay: addressBarangay ?? this.addressBarangay,
+      addressZipCode: addressZipCode ?? this.addressZipCode,
+      startingCapital: startingCapital ?? this.startingCapital,
+      startingCapitalAccountId:
+          startingCapitalAccountId ?? this.startingCapitalAccountId,
+      isCurrent: isCurrent ?? this.isCurrent,
       currency: currency ?? this.currency,
       ownerUserId: ownerUserId ?? this.ownerUserId,
       createdAt: createdAt ?? this.createdAt,
@@ -334,6 +897,41 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
     }
     if (name.present) {
       map['name'] = Variable<String>(name.value);
+    }
+    if (ownerName.present) {
+      map['owner_name'] = Variable<String>(ownerName.value);
+    }
+    if (managerName.present) {
+      map['manager_name'] = Variable<String>(managerName.value);
+    }
+    if (businessCategory.present) {
+      map['business_category'] = Variable<String>(businessCategory.value);
+    }
+    if (addressCountry.present) {
+      map['address_country'] = Variable<String>(addressCountry.value);
+    }
+    if (addressProvince.present) {
+      map['address_province'] = Variable<String>(addressProvince.value);
+    }
+    if (addressCity.present) {
+      map['address_city'] = Variable<String>(addressCity.value);
+    }
+    if (addressBarangay.present) {
+      map['address_barangay'] = Variable<String>(addressBarangay.value);
+    }
+    if (addressZipCode.present) {
+      map['address_zip_code'] = Variable<String>(addressZipCode.value);
+    }
+    if (startingCapital.present) {
+      map['starting_capital'] = Variable<int>(startingCapital.value);
+    }
+    if (startingCapitalAccountId.present) {
+      map['starting_capital_account_id'] = Variable<String>(
+        startingCapitalAccountId.value,
+      );
+    }
+    if (isCurrent.present) {
+      map['is_current'] = Variable<bool>(isCurrent.value);
     }
     if (currency.present) {
       map['currency'] = Variable<String>(currency.value);
@@ -355,6 +953,17 @@ class BusinessesCompanion extends UpdateCompanion<BusinessesData> {
     return (StringBuffer('BusinessesCompanion(')
           ..write('id: $id, ')
           ..write('name: $name, ')
+          ..write('ownerName: $ownerName, ')
+          ..write('managerName: $managerName, ')
+          ..write('businessCategory: $businessCategory, ')
+          ..write('addressCountry: $addressCountry, ')
+          ..write('addressProvince: $addressProvince, ')
+          ..write('addressCity: $addressCity, ')
+          ..write('addressBarangay: $addressBarangay, ')
+          ..write('addressZipCode: $addressZipCode, ')
+          ..write('startingCapital: $startingCapital, ')
+          ..write('startingCapitalAccountId: $startingCapitalAccountId, ')
+          ..write('isCurrent: $isCurrent, ')
           ..write('currency: $currency, ')
           ..write('ownerUserId: $ownerUserId, ')
           ..write('createdAt: $createdAt, ')
@@ -6671,10 +7280,52 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _brandMeta = const VerificationMeta('brand');
+  @override
+  late final GeneratedColumn<String> brand = GeneratedColumn<String>(
+    'brand',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _unitQuantityMeta = const VerificationMeta(
+    'unitQuantity',
+  );
+  @override
+  late final GeneratedColumn<double> unitQuantity = GeneratedColumn<double>(
+    'unit_quantity',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _unitMeta = const VerificationMeta('unit');
   @override
   late final GeneratedColumn<String> unit = GeneratedColumn<String>(
     'unit',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastStoreNameMeta = const VerificationMeta(
+    'lastStoreName',
+  );
+  @override
+  late final GeneratedColumn<String> lastStoreName = GeneratedColumn<String>(
+    'last_store_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastStoreAddressMeta = const VerificationMeta(
+    'lastStoreAddress',
+  );
+  @override
+  late final GeneratedColumn<String> lastStoreAddress = GeneratedColumn<String>(
+    'last_store_address',
     aliasedName,
     true,
     type: DriftSqlType.string,
@@ -6744,7 +7395,11 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
     id,
     businessId,
     name,
+    brand,
+    unitQuantity,
     unit,
+    lastStoreName,
+    lastStoreAddress,
     currentPrice,
     notes,
     isActive,
@@ -6784,10 +7439,43 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
     } else if (isInserting) {
       context.missing(_nameMeta);
     }
+    if (data.containsKey('brand')) {
+      context.handle(
+        _brandMeta,
+        brand.isAcceptableOrUnknown(data['brand']!, _brandMeta),
+      );
+    }
+    if (data.containsKey('unit_quantity')) {
+      context.handle(
+        _unitQuantityMeta,
+        unitQuantity.isAcceptableOrUnknown(
+          data['unit_quantity']!,
+          _unitQuantityMeta,
+        ),
+      );
+    }
     if (data.containsKey('unit')) {
       context.handle(
         _unitMeta,
         unit.isAcceptableOrUnknown(data['unit']!, _unitMeta),
+      );
+    }
+    if (data.containsKey('last_store_name')) {
+      context.handle(
+        _lastStoreNameMeta,
+        lastStoreName.isAcceptableOrUnknown(
+          data['last_store_name']!,
+          _lastStoreNameMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_store_address')) {
+      context.handle(
+        _lastStoreAddressMeta,
+        lastStoreAddress.isAcceptableOrUnknown(
+          data['last_store_address']!,
+          _lastStoreAddressMeta,
+        ),
       );
     }
     if (data.containsKey('current_price')) {
@@ -6846,9 +7534,25 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
         DriftSqlType.string,
         data['${effectivePrefix}name'],
       )!,
+      brand: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}brand'],
+      ),
+      unitQuantity: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}unit_quantity'],
+      ),
       unit: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}unit'],
+      ),
+      lastStoreName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_store_name'],
+      ),
+      lastStoreAddress: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_store_address'],
       ),
       currentPrice: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
@@ -6883,7 +7587,11 @@ class Supply extends DataClass implements Insertable<Supply> {
   final String id;
   final String businessId;
   final String name;
+  final String? brand;
+  final double? unitQuantity;
   final String? unit;
+  final String? lastStoreName;
+  final String? lastStoreAddress;
   final int currentPrice;
   final String? notes;
   final bool isActive;
@@ -6893,7 +7601,11 @@ class Supply extends DataClass implements Insertable<Supply> {
     required this.id,
     required this.businessId,
     required this.name,
+    this.brand,
+    this.unitQuantity,
     this.unit,
+    this.lastStoreName,
+    this.lastStoreAddress,
     required this.currentPrice,
     this.notes,
     required this.isActive,
@@ -6906,8 +7618,20 @@ class Supply extends DataClass implements Insertable<Supply> {
     map['id'] = Variable<String>(id);
     map['business_id'] = Variable<String>(businessId);
     map['name'] = Variable<String>(name);
+    if (!nullToAbsent || brand != null) {
+      map['brand'] = Variable<String>(brand);
+    }
+    if (!nullToAbsent || unitQuantity != null) {
+      map['unit_quantity'] = Variable<double>(unitQuantity);
+    }
     if (!nullToAbsent || unit != null) {
       map['unit'] = Variable<String>(unit);
+    }
+    if (!nullToAbsent || lastStoreName != null) {
+      map['last_store_name'] = Variable<String>(lastStoreName);
+    }
+    if (!nullToAbsent || lastStoreAddress != null) {
+      map['last_store_address'] = Variable<String>(lastStoreAddress);
     }
     map['current_price'] = Variable<int>(currentPrice);
     if (!nullToAbsent || notes != null) {
@@ -6924,7 +7648,19 @@ class Supply extends DataClass implements Insertable<Supply> {
       id: Value(id),
       businessId: Value(businessId),
       name: Value(name),
+      brand: brand == null && nullToAbsent
+          ? const Value.absent()
+          : Value(brand),
+      unitQuantity: unitQuantity == null && nullToAbsent
+          ? const Value.absent()
+          : Value(unitQuantity),
       unit: unit == null && nullToAbsent ? const Value.absent() : Value(unit),
+      lastStoreName: lastStoreName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastStoreName),
+      lastStoreAddress: lastStoreAddress == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastStoreAddress),
       currentPrice: Value(currentPrice),
       notes: notes == null && nullToAbsent
           ? const Value.absent()
@@ -6944,7 +7680,11 @@ class Supply extends DataClass implements Insertable<Supply> {
       id: serializer.fromJson<String>(json['id']),
       businessId: serializer.fromJson<String>(json['businessId']),
       name: serializer.fromJson<String>(json['name']),
+      brand: serializer.fromJson<String?>(json['brand']),
+      unitQuantity: serializer.fromJson<double?>(json['unitQuantity']),
       unit: serializer.fromJson<String?>(json['unit']),
+      lastStoreName: serializer.fromJson<String?>(json['lastStoreName']),
+      lastStoreAddress: serializer.fromJson<String?>(json['lastStoreAddress']),
       currentPrice: serializer.fromJson<int>(json['currentPrice']),
       notes: serializer.fromJson<String?>(json['notes']),
       isActive: serializer.fromJson<bool>(json['isActive']),
@@ -6959,7 +7699,11 @@ class Supply extends DataClass implements Insertable<Supply> {
       'id': serializer.toJson<String>(id),
       'businessId': serializer.toJson<String>(businessId),
       'name': serializer.toJson<String>(name),
+      'brand': serializer.toJson<String?>(brand),
+      'unitQuantity': serializer.toJson<double?>(unitQuantity),
       'unit': serializer.toJson<String?>(unit),
+      'lastStoreName': serializer.toJson<String?>(lastStoreName),
+      'lastStoreAddress': serializer.toJson<String?>(lastStoreAddress),
       'currentPrice': serializer.toJson<int>(currentPrice),
       'notes': serializer.toJson<String?>(notes),
       'isActive': serializer.toJson<bool>(isActive),
@@ -6972,7 +7716,11 @@ class Supply extends DataClass implements Insertable<Supply> {
     String? id,
     String? businessId,
     String? name,
+    Value<String?> brand = const Value.absent(),
+    Value<double?> unitQuantity = const Value.absent(),
     Value<String?> unit = const Value.absent(),
+    Value<String?> lastStoreName = const Value.absent(),
+    Value<String?> lastStoreAddress = const Value.absent(),
     int? currentPrice,
     Value<String?> notes = const Value.absent(),
     bool? isActive,
@@ -6982,7 +7730,15 @@ class Supply extends DataClass implements Insertable<Supply> {
     id: id ?? this.id,
     businessId: businessId ?? this.businessId,
     name: name ?? this.name,
+    brand: brand.present ? brand.value : this.brand,
+    unitQuantity: unitQuantity.present ? unitQuantity.value : this.unitQuantity,
     unit: unit.present ? unit.value : this.unit,
+    lastStoreName: lastStoreName.present
+        ? lastStoreName.value
+        : this.lastStoreName,
+    lastStoreAddress: lastStoreAddress.present
+        ? lastStoreAddress.value
+        : this.lastStoreAddress,
     currentPrice: currentPrice ?? this.currentPrice,
     notes: notes.present ? notes.value : this.notes,
     isActive: isActive ?? this.isActive,
@@ -6996,7 +7752,17 @@ class Supply extends DataClass implements Insertable<Supply> {
           ? data.businessId.value
           : this.businessId,
       name: data.name.present ? data.name.value : this.name,
+      brand: data.brand.present ? data.brand.value : this.brand,
+      unitQuantity: data.unitQuantity.present
+          ? data.unitQuantity.value
+          : this.unitQuantity,
       unit: data.unit.present ? data.unit.value : this.unit,
+      lastStoreName: data.lastStoreName.present
+          ? data.lastStoreName.value
+          : this.lastStoreName,
+      lastStoreAddress: data.lastStoreAddress.present
+          ? data.lastStoreAddress.value
+          : this.lastStoreAddress,
       currentPrice: data.currentPrice.present
           ? data.currentPrice.value
           : this.currentPrice,
@@ -7013,7 +7779,11 @@ class Supply extends DataClass implements Insertable<Supply> {
           ..write('id: $id, ')
           ..write('businessId: $businessId, ')
           ..write('name: $name, ')
+          ..write('brand: $brand, ')
+          ..write('unitQuantity: $unitQuantity, ')
           ..write('unit: $unit, ')
+          ..write('lastStoreName: $lastStoreName, ')
+          ..write('lastStoreAddress: $lastStoreAddress, ')
           ..write('currentPrice: $currentPrice, ')
           ..write('notes: $notes, ')
           ..write('isActive: $isActive, ')
@@ -7028,7 +7798,11 @@ class Supply extends DataClass implements Insertable<Supply> {
     id,
     businessId,
     name,
+    brand,
+    unitQuantity,
     unit,
+    lastStoreName,
+    lastStoreAddress,
     currentPrice,
     notes,
     isActive,
@@ -7042,7 +7816,11 @@ class Supply extends DataClass implements Insertable<Supply> {
           other.id == this.id &&
           other.businessId == this.businessId &&
           other.name == this.name &&
+          other.brand == this.brand &&
+          other.unitQuantity == this.unitQuantity &&
           other.unit == this.unit &&
+          other.lastStoreName == this.lastStoreName &&
+          other.lastStoreAddress == this.lastStoreAddress &&
           other.currentPrice == this.currentPrice &&
           other.notes == this.notes &&
           other.isActive == this.isActive &&
@@ -7054,7 +7832,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
   final Value<String> id;
   final Value<String> businessId;
   final Value<String> name;
+  final Value<String?> brand;
+  final Value<double?> unitQuantity;
   final Value<String?> unit;
+  final Value<String?> lastStoreName;
+  final Value<String?> lastStoreAddress;
   final Value<int> currentPrice;
   final Value<String?> notes;
   final Value<bool> isActive;
@@ -7065,7 +7847,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     this.id = const Value.absent(),
     this.businessId = const Value.absent(),
     this.name = const Value.absent(),
+    this.brand = const Value.absent(),
+    this.unitQuantity = const Value.absent(),
     this.unit = const Value.absent(),
+    this.lastStoreName = const Value.absent(),
+    this.lastStoreAddress = const Value.absent(),
     this.currentPrice = const Value.absent(),
     this.notes = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -7077,7 +7863,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     required String id,
     required String businessId,
     required String name,
+    this.brand = const Value.absent(),
+    this.unitQuantity = const Value.absent(),
     this.unit = const Value.absent(),
+    this.lastStoreName = const Value.absent(),
+    this.lastStoreAddress = const Value.absent(),
     required int currentPrice,
     this.notes = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -7092,7 +7882,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     Expression<String>? id,
     Expression<String>? businessId,
     Expression<String>? name,
+    Expression<String>? brand,
+    Expression<double>? unitQuantity,
     Expression<String>? unit,
+    Expression<String>? lastStoreName,
+    Expression<String>? lastStoreAddress,
     Expression<int>? currentPrice,
     Expression<String>? notes,
     Expression<bool>? isActive,
@@ -7104,7 +7898,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
       if (id != null) 'id': id,
       if (businessId != null) 'business_id': businessId,
       if (name != null) 'name': name,
+      if (brand != null) 'brand': brand,
+      if (unitQuantity != null) 'unit_quantity': unitQuantity,
       if (unit != null) 'unit': unit,
+      if (lastStoreName != null) 'last_store_name': lastStoreName,
+      if (lastStoreAddress != null) 'last_store_address': lastStoreAddress,
       if (currentPrice != null) 'current_price': currentPrice,
       if (notes != null) 'notes': notes,
       if (isActive != null) 'is_active': isActive,
@@ -7118,7 +7916,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     Value<String>? id,
     Value<String>? businessId,
     Value<String>? name,
+    Value<String?>? brand,
+    Value<double?>? unitQuantity,
     Value<String?>? unit,
+    Value<String?>? lastStoreName,
+    Value<String?>? lastStoreAddress,
     Value<int>? currentPrice,
     Value<String?>? notes,
     Value<bool>? isActive,
@@ -7130,7 +7932,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
       id: id ?? this.id,
       businessId: businessId ?? this.businessId,
       name: name ?? this.name,
+      brand: brand ?? this.brand,
+      unitQuantity: unitQuantity ?? this.unitQuantity,
       unit: unit ?? this.unit,
+      lastStoreName: lastStoreName ?? this.lastStoreName,
+      lastStoreAddress: lastStoreAddress ?? this.lastStoreAddress,
       currentPrice: currentPrice ?? this.currentPrice,
       notes: notes ?? this.notes,
       isActive: isActive ?? this.isActive,
@@ -7152,8 +7958,20 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     if (name.present) {
       map['name'] = Variable<String>(name.value);
     }
+    if (brand.present) {
+      map['brand'] = Variable<String>(brand.value);
+    }
+    if (unitQuantity.present) {
+      map['unit_quantity'] = Variable<double>(unitQuantity.value);
+    }
     if (unit.present) {
       map['unit'] = Variable<String>(unit.value);
+    }
+    if (lastStoreName.present) {
+      map['last_store_name'] = Variable<String>(lastStoreName.value);
+    }
+    if (lastStoreAddress.present) {
+      map['last_store_address'] = Variable<String>(lastStoreAddress.value);
     }
     if (currentPrice.present) {
       map['current_price'] = Variable<int>(currentPrice.value);
@@ -7182,7 +8000,11 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
           ..write('id: $id, ')
           ..write('businessId: $businessId, ')
           ..write('name: $name, ')
+          ..write('brand: $brand, ')
+          ..write('unitQuantity: $unitQuantity, ')
           ..write('unit: $unit, ')
+          ..write('lastStoreName: $lastStoreName, ')
+          ..write('lastStoreAddress: $lastStoreAddress, ')
           ..write('currentPrice: $currentPrice, ')
           ..write('notes: $notes, ')
           ..write('isActive: $isActive, ')
@@ -8354,6 +9176,35 @@ class $ShoppingCartItemsTable extends ShoppingCartItems
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _brandMeta = const VerificationMeta('brand');
+  @override
+  late final GeneratedColumn<String> brand = GeneratedColumn<String>(
+    'brand',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _unitQuantityMeta = const VerificationMeta(
+    'unitQuantity',
+  );
+  @override
+  late final GeneratedColumn<double> unitQuantity = GeneratedColumn<double>(
+    'unit_quantity',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _unitMeta = const VerificationMeta('unit');
+  @override
+  late final GeneratedColumn<String> unit = GeneratedColumn<String>(
+    'unit',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _unitPriceMeta = const VerificationMeta(
     'unitPrice',
   );
@@ -8394,6 +9245,9 @@ class $ShoppingCartItemsTable extends ShoppingCartItems
     cartId,
     supplyId,
     itemName,
+    brand,
+    unitQuantity,
+    unit,
     unitPrice,
     quantity,
     lineTotal,
@@ -8436,6 +9290,27 @@ class $ShoppingCartItemsTable extends ShoppingCartItems
       );
     } else if (isInserting) {
       context.missing(_itemNameMeta);
+    }
+    if (data.containsKey('brand')) {
+      context.handle(
+        _brandMeta,
+        brand.isAcceptableOrUnknown(data['brand']!, _brandMeta),
+      );
+    }
+    if (data.containsKey('unit_quantity')) {
+      context.handle(
+        _unitQuantityMeta,
+        unitQuantity.isAcceptableOrUnknown(
+          data['unit_quantity']!,
+          _unitQuantityMeta,
+        ),
+      );
+    }
+    if (data.containsKey('unit')) {
+      context.handle(
+        _unitMeta,
+        unit.isAcceptableOrUnknown(data['unit']!, _unitMeta),
+      );
     }
     if (data.containsKey('unit_price')) {
       context.handle(
@@ -8484,6 +9359,18 @@ class $ShoppingCartItemsTable extends ShoppingCartItems
         DriftSqlType.string,
         data['${effectivePrefix}item_name'],
       )!,
+      brand: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}brand'],
+      ),
+      unitQuantity: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}unit_quantity'],
+      ),
+      unit: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}unit'],
+      ),
       unitPrice: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}unit_price'],
@@ -8511,6 +9398,9 @@ class ShoppingCartItem extends DataClass
   final String cartId;
   final String? supplyId;
   final String itemName;
+  final String? brand;
+  final double? unitQuantity;
+  final String? unit;
   final int unitPrice;
   final int quantity;
   final int lineTotal;
@@ -8519,6 +9409,9 @@ class ShoppingCartItem extends DataClass
     required this.cartId,
     this.supplyId,
     required this.itemName,
+    this.brand,
+    this.unitQuantity,
+    this.unit,
     required this.unitPrice,
     required this.quantity,
     required this.lineTotal,
@@ -8532,6 +9425,15 @@ class ShoppingCartItem extends DataClass
       map['supply_id'] = Variable<String>(supplyId);
     }
     map['item_name'] = Variable<String>(itemName);
+    if (!nullToAbsent || brand != null) {
+      map['brand'] = Variable<String>(brand);
+    }
+    if (!nullToAbsent || unitQuantity != null) {
+      map['unit_quantity'] = Variable<double>(unitQuantity);
+    }
+    if (!nullToAbsent || unit != null) {
+      map['unit'] = Variable<String>(unit);
+    }
     map['unit_price'] = Variable<int>(unitPrice);
     map['quantity'] = Variable<int>(quantity);
     map['line_total'] = Variable<int>(lineTotal);
@@ -8546,6 +9448,13 @@ class ShoppingCartItem extends DataClass
           ? const Value.absent()
           : Value(supplyId),
       itemName: Value(itemName),
+      brand: brand == null && nullToAbsent
+          ? const Value.absent()
+          : Value(brand),
+      unitQuantity: unitQuantity == null && nullToAbsent
+          ? const Value.absent()
+          : Value(unitQuantity),
+      unit: unit == null && nullToAbsent ? const Value.absent() : Value(unit),
       unitPrice: Value(unitPrice),
       quantity: Value(quantity),
       lineTotal: Value(lineTotal),
@@ -8562,6 +9471,9 @@ class ShoppingCartItem extends DataClass
       cartId: serializer.fromJson<String>(json['cartId']),
       supplyId: serializer.fromJson<String?>(json['supplyId']),
       itemName: serializer.fromJson<String>(json['itemName']),
+      brand: serializer.fromJson<String?>(json['brand']),
+      unitQuantity: serializer.fromJson<double?>(json['unitQuantity']),
+      unit: serializer.fromJson<String?>(json['unit']),
       unitPrice: serializer.fromJson<int>(json['unitPrice']),
       quantity: serializer.fromJson<int>(json['quantity']),
       lineTotal: serializer.fromJson<int>(json['lineTotal']),
@@ -8575,6 +9487,9 @@ class ShoppingCartItem extends DataClass
       'cartId': serializer.toJson<String>(cartId),
       'supplyId': serializer.toJson<String?>(supplyId),
       'itemName': serializer.toJson<String>(itemName),
+      'brand': serializer.toJson<String?>(brand),
+      'unitQuantity': serializer.toJson<double?>(unitQuantity),
+      'unit': serializer.toJson<String?>(unit),
       'unitPrice': serializer.toJson<int>(unitPrice),
       'quantity': serializer.toJson<int>(quantity),
       'lineTotal': serializer.toJson<int>(lineTotal),
@@ -8586,6 +9501,9 @@ class ShoppingCartItem extends DataClass
     String? cartId,
     Value<String?> supplyId = const Value.absent(),
     String? itemName,
+    Value<String?> brand = const Value.absent(),
+    Value<double?> unitQuantity = const Value.absent(),
+    Value<String?> unit = const Value.absent(),
     int? unitPrice,
     int? quantity,
     int? lineTotal,
@@ -8594,6 +9512,9 @@ class ShoppingCartItem extends DataClass
     cartId: cartId ?? this.cartId,
     supplyId: supplyId.present ? supplyId.value : this.supplyId,
     itemName: itemName ?? this.itemName,
+    brand: brand.present ? brand.value : this.brand,
+    unitQuantity: unitQuantity.present ? unitQuantity.value : this.unitQuantity,
+    unit: unit.present ? unit.value : this.unit,
     unitPrice: unitPrice ?? this.unitPrice,
     quantity: quantity ?? this.quantity,
     lineTotal: lineTotal ?? this.lineTotal,
@@ -8604,6 +9525,11 @@ class ShoppingCartItem extends DataClass
       cartId: data.cartId.present ? data.cartId.value : this.cartId,
       supplyId: data.supplyId.present ? data.supplyId.value : this.supplyId,
       itemName: data.itemName.present ? data.itemName.value : this.itemName,
+      brand: data.brand.present ? data.brand.value : this.brand,
+      unitQuantity: data.unitQuantity.present
+          ? data.unitQuantity.value
+          : this.unitQuantity,
+      unit: data.unit.present ? data.unit.value : this.unit,
       unitPrice: data.unitPrice.present ? data.unitPrice.value : this.unitPrice,
       quantity: data.quantity.present ? data.quantity.value : this.quantity,
       lineTotal: data.lineTotal.present ? data.lineTotal.value : this.lineTotal,
@@ -8617,6 +9543,9 @@ class ShoppingCartItem extends DataClass
           ..write('cartId: $cartId, ')
           ..write('supplyId: $supplyId, ')
           ..write('itemName: $itemName, ')
+          ..write('brand: $brand, ')
+          ..write('unitQuantity: $unitQuantity, ')
+          ..write('unit: $unit, ')
           ..write('unitPrice: $unitPrice, ')
           ..write('quantity: $quantity, ')
           ..write('lineTotal: $lineTotal')
@@ -8630,6 +9559,9 @@ class ShoppingCartItem extends DataClass
     cartId,
     supplyId,
     itemName,
+    brand,
+    unitQuantity,
+    unit,
     unitPrice,
     quantity,
     lineTotal,
@@ -8642,6 +9574,9 @@ class ShoppingCartItem extends DataClass
           other.cartId == this.cartId &&
           other.supplyId == this.supplyId &&
           other.itemName == this.itemName &&
+          other.brand == this.brand &&
+          other.unitQuantity == this.unitQuantity &&
+          other.unit == this.unit &&
           other.unitPrice == this.unitPrice &&
           other.quantity == this.quantity &&
           other.lineTotal == this.lineTotal);
@@ -8652,6 +9587,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
   final Value<String> cartId;
   final Value<String?> supplyId;
   final Value<String> itemName;
+  final Value<String?> brand;
+  final Value<double?> unitQuantity;
+  final Value<String?> unit;
   final Value<int> unitPrice;
   final Value<int> quantity;
   final Value<int> lineTotal;
@@ -8661,6 +9599,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
     this.cartId = const Value.absent(),
     this.supplyId = const Value.absent(),
     this.itemName = const Value.absent(),
+    this.brand = const Value.absent(),
+    this.unitQuantity = const Value.absent(),
+    this.unit = const Value.absent(),
     this.unitPrice = const Value.absent(),
     this.quantity = const Value.absent(),
     this.lineTotal = const Value.absent(),
@@ -8671,6 +9612,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
     required String cartId,
     this.supplyId = const Value.absent(),
     required String itemName,
+    this.brand = const Value.absent(),
+    this.unitQuantity = const Value.absent(),
+    this.unit = const Value.absent(),
     required int unitPrice,
     this.quantity = const Value.absent(),
     required int lineTotal,
@@ -8685,6 +9629,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
     Expression<String>? cartId,
     Expression<String>? supplyId,
     Expression<String>? itemName,
+    Expression<String>? brand,
+    Expression<double>? unitQuantity,
+    Expression<String>? unit,
     Expression<int>? unitPrice,
     Expression<int>? quantity,
     Expression<int>? lineTotal,
@@ -8695,6 +9642,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
       if (cartId != null) 'cart_id': cartId,
       if (supplyId != null) 'supply_id': supplyId,
       if (itemName != null) 'item_name': itemName,
+      if (brand != null) 'brand': brand,
+      if (unitQuantity != null) 'unit_quantity': unitQuantity,
+      if (unit != null) 'unit': unit,
       if (unitPrice != null) 'unit_price': unitPrice,
       if (quantity != null) 'quantity': quantity,
       if (lineTotal != null) 'line_total': lineTotal,
@@ -8707,6 +9657,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
     Value<String>? cartId,
     Value<String?>? supplyId,
     Value<String>? itemName,
+    Value<String?>? brand,
+    Value<double?>? unitQuantity,
+    Value<String?>? unit,
     Value<int>? unitPrice,
     Value<int>? quantity,
     Value<int>? lineTotal,
@@ -8717,6 +9670,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
       cartId: cartId ?? this.cartId,
       supplyId: supplyId ?? this.supplyId,
       itemName: itemName ?? this.itemName,
+      brand: brand ?? this.brand,
+      unitQuantity: unitQuantity ?? this.unitQuantity,
+      unit: unit ?? this.unit,
       unitPrice: unitPrice ?? this.unitPrice,
       quantity: quantity ?? this.quantity,
       lineTotal: lineTotal ?? this.lineTotal,
@@ -8738,6 +9694,15 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
     }
     if (itemName.present) {
       map['item_name'] = Variable<String>(itemName.value);
+    }
+    if (brand.present) {
+      map['brand'] = Variable<String>(brand.value);
+    }
+    if (unitQuantity.present) {
+      map['unit_quantity'] = Variable<double>(unitQuantity.value);
+    }
+    if (unit.present) {
+      map['unit'] = Variable<String>(unit.value);
     }
     if (unitPrice.present) {
       map['unit_price'] = Variable<int>(unitPrice.value);
@@ -8761,6 +9726,9 @@ class ShoppingCartItemsCompanion extends UpdateCompanion<ShoppingCartItem> {
           ..write('cartId: $cartId, ')
           ..write('supplyId: $supplyId, ')
           ..write('itemName: $itemName, ')
+          ..write('brand: $brand, ')
+          ..write('unitQuantity: $unitQuantity, ')
+          ..write('unit: $unit, ')
           ..write('unitPrice: $unitPrice, ')
           ..write('quantity: $quantity, ')
           ..write('lineTotal: $lineTotal, ')
@@ -9385,6 +10353,17 @@ typedef $$BusinessesTableCreateCompanionBuilder =
     BusinessesCompanion Function({
       required String id,
       required String name,
+      Value<String?> ownerName,
+      Value<String?> managerName,
+      Value<String?> businessCategory,
+      Value<String?> addressCountry,
+      Value<String?> addressProvince,
+      Value<String?> addressCity,
+      Value<String?> addressBarangay,
+      Value<String?> addressZipCode,
+      Value<int> startingCapital,
+      Value<String?> startingCapitalAccountId,
+      Value<bool> isCurrent,
       Value<String> currency,
       required String ownerUserId,
       Value<DateTime> createdAt,
@@ -9394,6 +10373,17 @@ typedef $$BusinessesTableUpdateCompanionBuilder =
     BusinessesCompanion Function({
       Value<String> id,
       Value<String> name,
+      Value<String?> ownerName,
+      Value<String?> managerName,
+      Value<String?> businessCategory,
+      Value<String?> addressCountry,
+      Value<String?> addressProvince,
+      Value<String?> addressCity,
+      Value<String?> addressBarangay,
+      Value<String?> addressZipCode,
+      Value<int> startingCapital,
+      Value<String?> startingCapitalAccountId,
+      Value<bool> isCurrent,
       Value<String> currency,
       Value<String> ownerUserId,
       Value<DateTime> createdAt,
@@ -9671,6 +10661,61 @@ class $$BusinessesTableFilterComposer
 
   ColumnFilters<String> get name => $composableBuilder(
     column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerName => $composableBuilder(
+    column: $table.ownerName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get managerName => $composableBuilder(
+    column: $table.managerName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get businessCategory => $composableBuilder(
+    column: $table.businessCategory,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get addressCountry => $composableBuilder(
+    column: $table.addressCountry,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get addressProvince => $composableBuilder(
+    column: $table.addressProvince,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get addressCity => $composableBuilder(
+    column: $table.addressCity,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get addressBarangay => $composableBuilder(
+    column: $table.addressBarangay,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get addressZipCode => $composableBuilder(
+    column: $table.addressZipCode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get startingCapital => $composableBuilder(
+    column: $table.startingCapital,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get startingCapitalAccountId => $composableBuilder(
+    column: $table.startingCapitalAccountId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isCurrent => $composableBuilder(
+    column: $table.isCurrent,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -10034,6 +11079,61 @@ class $$BusinessesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get ownerName => $composableBuilder(
+    column: $table.ownerName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get managerName => $composableBuilder(
+    column: $table.managerName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get businessCategory => $composableBuilder(
+    column: $table.businessCategory,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get addressCountry => $composableBuilder(
+    column: $table.addressCountry,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get addressProvince => $composableBuilder(
+    column: $table.addressProvince,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get addressCity => $composableBuilder(
+    column: $table.addressCity,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get addressBarangay => $composableBuilder(
+    column: $table.addressBarangay,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get addressZipCode => $composableBuilder(
+    column: $table.addressZipCode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get startingCapital => $composableBuilder(
+    column: $table.startingCapital,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get startingCapitalAccountId => $composableBuilder(
+    column: $table.startingCapitalAccountId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isCurrent => $composableBuilder(
+    column: $table.isCurrent,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get currency => $composableBuilder(
     column: $table.currency,
     builder: (column) => ColumnOrderings(column),
@@ -10064,6 +11164,57 @@ class $$BusinessesTableAnnotationComposer
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerName =>
+      $composableBuilder(column: $table.ownerName, builder: (column) => column);
+
+  GeneratedColumn<String> get managerName => $composableBuilder(
+    column: $table.managerName,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get businessCategory => $composableBuilder(
+    column: $table.businessCategory,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get addressCountry => $composableBuilder(
+    column: $table.addressCountry,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get addressProvince => $composableBuilder(
+    column: $table.addressProvince,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get addressCity => $composableBuilder(
+    column: $table.addressCity,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get addressBarangay => $composableBuilder(
+    column: $table.addressBarangay,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get addressZipCode => $composableBuilder(
+    column: $table.addressZipCode,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get startingCapital => $composableBuilder(
+    column: $table.startingCapital,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get startingCapitalAccountId => $composableBuilder(
+    column: $table.startingCapitalAccountId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get isCurrent =>
+      $composableBuilder(column: $table.isCurrent, builder: (column) => column);
 
   GeneratedColumn<String> get currency =>
       $composableBuilder(column: $table.currency, builder: (column) => column);
@@ -10449,6 +11600,17 @@ class $$BusinessesTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> name = const Value.absent(),
+                Value<String?> ownerName = const Value.absent(),
+                Value<String?> managerName = const Value.absent(),
+                Value<String?> businessCategory = const Value.absent(),
+                Value<String?> addressCountry = const Value.absent(),
+                Value<String?> addressProvince = const Value.absent(),
+                Value<String?> addressCity = const Value.absent(),
+                Value<String?> addressBarangay = const Value.absent(),
+                Value<String?> addressZipCode = const Value.absent(),
+                Value<int> startingCapital = const Value.absent(),
+                Value<String?> startingCapitalAccountId = const Value.absent(),
+                Value<bool> isCurrent = const Value.absent(),
                 Value<String> currency = const Value.absent(),
                 Value<String> ownerUserId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -10456,6 +11618,17 @@ class $$BusinessesTableTableManager
               }) => BusinessesCompanion(
                 id: id,
                 name: name,
+                ownerName: ownerName,
+                managerName: managerName,
+                businessCategory: businessCategory,
+                addressCountry: addressCountry,
+                addressProvince: addressProvince,
+                addressCity: addressCity,
+                addressBarangay: addressBarangay,
+                addressZipCode: addressZipCode,
+                startingCapital: startingCapital,
+                startingCapitalAccountId: startingCapitalAccountId,
+                isCurrent: isCurrent,
                 currency: currency,
                 ownerUserId: ownerUserId,
                 createdAt: createdAt,
@@ -10465,6 +11638,17 @@ class $$BusinessesTableTableManager
               ({
                 required String id,
                 required String name,
+                Value<String?> ownerName = const Value.absent(),
+                Value<String?> managerName = const Value.absent(),
+                Value<String?> businessCategory = const Value.absent(),
+                Value<String?> addressCountry = const Value.absent(),
+                Value<String?> addressProvince = const Value.absent(),
+                Value<String?> addressCity = const Value.absent(),
+                Value<String?> addressBarangay = const Value.absent(),
+                Value<String?> addressZipCode = const Value.absent(),
+                Value<int> startingCapital = const Value.absent(),
+                Value<String?> startingCapitalAccountId = const Value.absent(),
+                Value<bool> isCurrent = const Value.absent(),
                 Value<String> currency = const Value.absent(),
                 required String ownerUserId,
                 Value<DateTime> createdAt = const Value.absent(),
@@ -10472,6 +11656,17 @@ class $$BusinessesTableTableManager
               }) => BusinessesCompanion.insert(
                 id: id,
                 name: name,
+                ownerName: ownerName,
+                managerName: managerName,
+                businessCategory: businessCategory,
+                addressCountry: addressCountry,
+                addressProvince: addressProvince,
+                addressCity: addressCity,
+                addressBarangay: addressBarangay,
+                addressZipCode: addressZipCode,
+                startingCapital: startingCapital,
+                startingCapitalAccountId: startingCapitalAccountId,
+                isCurrent: isCurrent,
                 currency: currency,
                 ownerUserId: ownerUserId,
                 createdAt: createdAt,
@@ -18399,7 +19594,11 @@ typedef $$SuppliesTableCreateCompanionBuilder =
       required String id,
       required String businessId,
       required String name,
+      Value<String?> brand,
+      Value<double?> unitQuantity,
       Value<String?> unit,
+      Value<String?> lastStoreName,
+      Value<String?> lastStoreAddress,
       required int currentPrice,
       Value<String?> notes,
       Value<bool> isActive,
@@ -18412,7 +19611,11 @@ typedef $$SuppliesTableUpdateCompanionBuilder =
       Value<String> id,
       Value<String> businessId,
       Value<String> name,
+      Value<String?> brand,
+      Value<double?> unitQuantity,
       Value<String?> unit,
+      Value<String?> lastStoreName,
+      Value<String?> lastStoreAddress,
       Value<int> currentPrice,
       Value<String?> notes,
       Value<bool> isActive,
@@ -18507,8 +19710,28 @@ class $$SuppliesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get brand => $composableBuilder(
+    column: $table.brand,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get unit => $composableBuilder(
     column: $table.unit,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastStoreName => $composableBuilder(
+    column: $table.lastStoreName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastStoreAddress => $composableBuilder(
+    column: $table.lastStoreAddress,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -18630,8 +19853,28 @@ class $$SuppliesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get brand => $composableBuilder(
+    column: $table.brand,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get unit => $composableBuilder(
     column: $table.unit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastStoreName => $composableBuilder(
+    column: $table.lastStoreName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastStoreAddress => $composableBuilder(
+    column: $table.lastStoreAddress,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -18699,8 +19942,26 @@ class $$SuppliesTableAnnotationComposer
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
 
+  GeneratedColumn<String> get brand =>
+      $composableBuilder(column: $table.brand, builder: (column) => column);
+
+  GeneratedColumn<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get unit =>
       $composableBuilder(column: $table.unit, builder: (column) => column);
+
+  GeneratedColumn<String> get lastStoreName => $composableBuilder(
+    column: $table.lastStoreName,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastStoreAddress => $composableBuilder(
+    column: $table.lastStoreAddress,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get currentPrice => $composableBuilder(
     column: $table.currentPrice,
@@ -18830,7 +20091,11 @@ class $$SuppliesTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> businessId = const Value.absent(),
                 Value<String> name = const Value.absent(),
+                Value<String?> brand = const Value.absent(),
+                Value<double?> unitQuantity = const Value.absent(),
                 Value<String?> unit = const Value.absent(),
+                Value<String?> lastStoreName = const Value.absent(),
+                Value<String?> lastStoreAddress = const Value.absent(),
                 Value<int> currentPrice = const Value.absent(),
                 Value<String?> notes = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
@@ -18841,7 +20106,11 @@ class $$SuppliesTableTableManager
                 id: id,
                 businessId: businessId,
                 name: name,
+                brand: brand,
+                unitQuantity: unitQuantity,
                 unit: unit,
+                lastStoreName: lastStoreName,
+                lastStoreAddress: lastStoreAddress,
                 currentPrice: currentPrice,
                 notes: notes,
                 isActive: isActive,
@@ -18854,7 +20123,11 @@ class $$SuppliesTableTableManager
                 required String id,
                 required String businessId,
                 required String name,
+                Value<String?> brand = const Value.absent(),
+                Value<double?> unitQuantity = const Value.absent(),
                 Value<String?> unit = const Value.absent(),
+                Value<String?> lastStoreName = const Value.absent(),
+                Value<String?> lastStoreAddress = const Value.absent(),
                 required int currentPrice,
                 Value<String?> notes = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
@@ -18865,7 +20138,11 @@ class $$SuppliesTableTableManager
                 id: id,
                 businessId: businessId,
                 name: name,
+                brand: brand,
+                unitQuantity: unitQuantity,
                 unit: unit,
+                lastStoreName: lastStoreName,
+                lastStoreAddress: lastStoreAddress,
                 currentPrice: currentPrice,
                 notes: notes,
                 isActive: isActive,
@@ -20085,6 +21362,9 @@ typedef $$ShoppingCartItemsTableCreateCompanionBuilder =
       required String cartId,
       Value<String?> supplyId,
       required String itemName,
+      Value<String?> brand,
+      Value<double?> unitQuantity,
+      Value<String?> unit,
       required int unitPrice,
       Value<int> quantity,
       required int lineTotal,
@@ -20096,6 +21376,9 @@ typedef $$ShoppingCartItemsTableUpdateCompanionBuilder =
       Value<String> cartId,
       Value<String?> supplyId,
       Value<String> itemName,
+      Value<String?> brand,
+      Value<double?> unitQuantity,
+      Value<String?> unit,
       Value<int> unitPrice,
       Value<int> quantity,
       Value<int> lineTotal,
@@ -20166,6 +21449,21 @@ class $$ShoppingCartItemsTableFilterComposer
 
   ColumnFilters<String> get itemName => $composableBuilder(
     column: $table.itemName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get brand => $composableBuilder(
+    column: $table.brand,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get unit => $composableBuilder(
+    column: $table.unit,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -20250,6 +21548,21 @@ class $$ShoppingCartItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get brand => $composableBuilder(
+    column: $table.brand,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get unit => $composableBuilder(
+    column: $table.unit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get unitPrice => $composableBuilder(
     column: $table.unitPrice,
     builder: (column) => ColumnOrderings(column),
@@ -20326,6 +21639,17 @@ class $$ShoppingCartItemsTableAnnotationComposer
 
   GeneratedColumn<String> get itemName =>
       $composableBuilder(column: $table.itemName, builder: (column) => column);
+
+  GeneratedColumn<String> get brand =>
+      $composableBuilder(column: $table.brand, builder: (column) => column);
+
+  GeneratedColumn<double> get unitQuantity => $composableBuilder(
+    column: $table.unitQuantity,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get unit =>
+      $composableBuilder(column: $table.unit, builder: (column) => column);
 
   GeneratedColumn<int> get unitPrice =>
       $composableBuilder(column: $table.unitPrice, builder: (column) => column);
@@ -20420,6 +21744,9 @@ class $$ShoppingCartItemsTableTableManager
                 Value<String> cartId = const Value.absent(),
                 Value<String?> supplyId = const Value.absent(),
                 Value<String> itemName = const Value.absent(),
+                Value<String?> brand = const Value.absent(),
+                Value<double?> unitQuantity = const Value.absent(),
+                Value<String?> unit = const Value.absent(),
                 Value<int> unitPrice = const Value.absent(),
                 Value<int> quantity = const Value.absent(),
                 Value<int> lineTotal = const Value.absent(),
@@ -20429,6 +21756,9 @@ class $$ShoppingCartItemsTableTableManager
                 cartId: cartId,
                 supplyId: supplyId,
                 itemName: itemName,
+                brand: brand,
+                unitQuantity: unitQuantity,
+                unit: unit,
                 unitPrice: unitPrice,
                 quantity: quantity,
                 lineTotal: lineTotal,
@@ -20440,6 +21770,9 @@ class $$ShoppingCartItemsTableTableManager
                 required String cartId,
                 Value<String?> supplyId = const Value.absent(),
                 required String itemName,
+                Value<String?> brand = const Value.absent(),
+                Value<double?> unitQuantity = const Value.absent(),
+                Value<String?> unit = const Value.absent(),
                 required int unitPrice,
                 Value<int> quantity = const Value.absent(),
                 required int lineTotal,
@@ -20449,6 +21782,9 @@ class $$ShoppingCartItemsTableTableManager
                 cartId: cartId,
                 supplyId: supplyId,
                 itemName: itemName,
+                brand: brand,
+                unitQuantity: unitQuantity,
+                unit: unit,
                 unitPrice: unitPrice,
                 quantity: quantity,
                 lineTotal: lineTotal,

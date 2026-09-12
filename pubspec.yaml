@@ -28,6 +28,8 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+
+
   flutter:
     sdk: flutter
 
@@ -46,10 +48,15 @@ dependencies:
   riverpod_annotation: ^4.0.7
   flutter_slidable: ^4.0.3
   intl: ^0.20.3
+  flutter_launcher_icons: ^0.14.4
+  http: ^1.6.0
+
+  
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+    
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -81,6 +88,11 @@ flutter:
   #   - images/a_dot_burr.jpeg
   assets:
     - lib/core/assets/images/BOS_Icon.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "lib/core/assets/images/BOS_Icon.png"
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -14,7 +14,7 @@ import '../../../../core/ledger/ledger_service.dart';
 // CONSTANTS
 // ============================================================
 
-const kCurrentBusinessId = 'biz_001';
+String kCurrentBusinessId = 'biz_001';
 
 const _incomeColor = Color(0xFF159B67);
 const _expenseColor = Color(0xFFE05252);
@@ -25,6 +25,14 @@ const _expenseColor = Color(0xFFE05252);
 
 final ledgerVersionProvider = StateProvider<int>((ref) => 0);
 
+final businessProfileProvider = StreamProvider<BusinessesData>((ref) {
+  ref.watch(ledgerVersionProvider);
+  final db = ref.watch(databaseProvider);
+  return (db.select(
+    db.businesses,
+  )..where((business) => business.id.equals(kCurrentBusinessId))).watchSingle();
+});
+
 final ledgerServiceProvider = Provider<LedgerService>((ref) {
   return LedgerService(ref.watch(databaseProvider));
 });
@@ -33,6 +41,7 @@ final categoriesByTypeProvider = FutureProvider.family<List<Category>, String>((
   ref,
   txnType,
 ) {
+  ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
 
   return (db.select(db.categories)..where(
@@ -45,6 +54,7 @@ final categoriesByTypeProvider = FutureProvider.family<List<Category>, String>((
 });
 
 final paymentAccountsProvider = FutureProvider<List<Account>>((ref) {
+  ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
 
   return (db.select(db.accounts)..where(
@@ -66,7 +76,7 @@ class TransactionService {
 
   TransactionService(this.db, this.ledgerService);
 
-  Future<void> saveExpense({
+  Future<String> saveExpense({
     String? existingId,
     required DateTime date,
     required String categoryId,
@@ -114,7 +124,7 @@ class TransactionService {
 
       final companion = ExpensesCompanion(
         id: Value(id),
-        businessId: const Value(kCurrentBusinessId),
+        businessId: Value(kCurrentBusinessId),
         expenseDate: Value(date),
         categoryId: Value(categoryId),
         amount: Value(amount),
@@ -133,6 +143,8 @@ class TransactionService {
         await db.update(db.expenses).replace(companion);
       }
     });
+
+    return id;
   }
 
   Future<void> saveIncome({
@@ -183,7 +195,7 @@ class TransactionService {
 
       final companion = IncomeTransactionsCompanion(
         id: Value(id),
-        businessId: const Value(kCurrentBusinessId),
+        businessId: Value(kCurrentBusinessId),
         txnDate: Value(date),
         categoryId: Value(categoryId),
         amount: Value(amount),
@@ -212,6 +224,10 @@ class TransactionService {
       )..where((e) => e.id.equals(id))).getSingle();
 
       if (expense.journalEntryId != null) {
+        await (db.delete(db.ledgerLines)..where(
+              (line) => line.journalEntryId.equals(expense.journalEntryId!),
+            ))
+            .go();
         await (db.delete(
           db.journalEntries,
         )..where((j) => j.id.equals(expense.journalEntryId!))).go();
@@ -228,6 +244,10 @@ class TransactionService {
       )..where((i) => i.id.equals(id))).getSingle();
 
       if (income.journalEntryId != null) {
+        await (db.delete(db.ledgerLines)..where(
+              (line) => line.journalEntryId.equals(income.journalEntryId!),
+            ))
+            .go();
         await (db.delete(
           db.journalEntries,
         )..where((j) => j.id.equals(income.journalEntryId!))).go();
@@ -827,9 +847,29 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
       loading: () => _loadingBox(),
       error: (error, _) => _errorBox('Could not load categories.'),
       data: (categories) {
-        if (categories.isEmpty) {
+        final matchingCategories = categories
+            .where(
+              (category) =>
+                  category.txnType == (_isIncome ? 'income' : 'expense'),
+            )
+            .toList();
+
+        if (_categoryId != null &&
+            !matchingCategories.any((category) => category.id == _categoryId)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _categoryId != null) {
+              setState(() {
+                _categoryId = null;
+              });
+            }
+          });
+        }
+
+        if (matchingCategories.isEmpty) {
           return _emptySelection(
-            text: 'No categories yet',
+            text: _isIncome
+                ? 'No income categories yet'
+                : 'No expense categories yet',
             actionText: 'Add category',
             onPressed: _addNewCategory,
           );
@@ -839,7 +879,7 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            ...categories.map((category) {
+            ...matchingCategories.map((category) {
               final selected = _categoryId == category.id;
 
               return _selectionChip(

@@ -88,7 +88,7 @@ class AppColors {
 class AppStrings {
   AppStrings._();
 
-  static const appName = 'BOS Mobile';
+  static const appName = 'Business OS';
   static const appFullName = 'Business Operating System';
   static const tagline = 'Run your business from one place.';
 
@@ -127,7 +127,7 @@ class AppAssets {
   static const logoIcon =
       'lib/core/assets/images/BOS_Icon.png'; // mark only, square — app icon, splash
   static const logoFull =
-      'core/assets/images/BOS_Icon.png'; // mark + wordmark — login/startup screens
+      'lib/core/assets/images/BOS_Icon.png'; // mark + wordmark — login/startup screens
 }
 
 // ============================================================

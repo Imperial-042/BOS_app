@@ -15,11 +15,12 @@ import 'package:intl/intl.dart';
 import 'package:drift/drift.dart' hide Column, Table;
 import '../../../../core/database/database_provider.dart';
 import '../../../transactions/presentation/screens/transaction_page.dart'
-    show ledgerVersionProvider, kCurrentBusinessId;
+    show businessProfileProvider, ledgerVersionProvider, kCurrentBusinessId;
 import '../../../transactions/presentation/screens/journal_entry_page.dart'
     show journalEntriesProvider, JournalEntryRow, JournalEntryType;
 import '../../../transactions/presentation/screens/cashflow_page.dart'
     show accountBalancesProvider;
+import '../providers/transaction_date_filter.dart';
 
 String _peso(int cents, {bool compact = false}) {
   if (compact && cents.abs() >= 100000 * 100) {
@@ -32,30 +33,9 @@ String _peso(int cents, {bool compact = false}) {
 // PERIOD
 // ============================================================
 
-enum Period { today, week, month }
-
-extension on Period {
-  String get label => switch (this) {
-    Period.today => 'Today',
-    Period.week => 'This Week',
-    Period.month => 'This Month',
-  };
-
-  DateTime get start {
-    final now = DateTime.now();
-    return switch (this) {
-      Period.today => DateTime(now.year, now.month, now.day),
-      Period.week => DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ).subtract(Duration(days: now.weekday - 1)),
-      Period.month => DateTime(now.year, now.month, 1),
-    };
-  }
-}
-
-final selectedPeriodProvider = StateProvider<Period>((ref) => Period.month);
+final selectedPeriodProvider = StateProvider<TransactionDateFilter>(
+  (ref) => const TransactionDateFilter.month(),
+);
 
 // ============================================================
 // MODELS
@@ -83,23 +63,24 @@ class DaySummary {
 // ============================================================
 
 final periodTotalsProvider =
-    FutureProvider.family<({int income, int expense}), Period>((
+    FutureProvider.family<({int income, int expense}), TransactionDateFilter>((
       ref,
-      period,
+      filter,
     ) async {
       ref.watch(ledgerVersionProvider);
       final db = ref.watch(databaseProvider);
-      final start = period.start;
+      final range = filter.range;
 
       final incomeRow = await db
           .customSelect(
             '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM income_transactions
-    WHERE business_id = ? AND status = 'completed' AND txn_date >= ?
+    WHERE business_id = ? AND status = 'completed' AND txn_date >= ? AND txn_date < ?
     ''',
             variables: [
               Variable.withString(kCurrentBusinessId),
-              Variable.withDateTime(start),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
             ],
           )
           .getSingle();
@@ -108,11 +89,12 @@ final periodTotalsProvider =
           .customSelect(
             '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM expenses
-    WHERE business_id = ? AND status = 'completed' AND expense_date >= ?
+    WHERE business_id = ? AND status = 'completed' AND expense_date >= ? AND expense_date < ?
     ''',
             variables: [
               Variable.withString(kCurrentBusinessId),
-              Variable.withDateTime(start),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
             ],
           )
           .getSingle();
@@ -124,89 +106,72 @@ final periodTotalsProvider =
     });
 
 final categoryBreakdownProvider =
-    FutureProvider.family<List<CategoryTotal>, (String txnType, Period period)>(
-      (ref, args) async {
-        ref.watch(ledgerVersionProvider);
-        final db = ref.watch(databaseProvider);
-        final (txnType, period) = args;
-        final table = txnType == 'income' ? 'income_transactions' : 'expenses';
-        final dateCol = txnType == 'income' ? 'txn_date' : 'expense_date';
+    FutureProvider.family<
+      List<CategoryTotal>,
+      (String txnType, TransactionDateFilter filter)
+    >((ref, args) async {
+      ref.watch(ledgerVersionProvider);
+      final db = ref.watch(databaseProvider);
+      final (txnType, filter) = args;
+      final range = filter.range;
+      final table = txnType == 'income' ? 'income_transactions' : 'expenses';
+      final dateCol = txnType == 'income' ? 'txn_date' : 'expense_date';
 
-        final rows = await db
-            .customSelect(
-              '''
+      final rows = await db
+          .customSelect(
+            '''
     SELECT c.name AS category_name, SUM(t.amount) AS total
     FROM $table t
     JOIN categories c ON c.id = t.category_id
-    WHERE t.business_id = ? AND t.status = 'completed' AND t.$dateCol >= ?
+    WHERE t.business_id = ? AND t.status = 'completed' AND t.$dateCol >= ? AND t.$dateCol < ?
     GROUP BY c.name
     ORDER BY total DESC
     ''',
-              variables: [
-                Variable.withString(kCurrentBusinessId),
-                Variable.withDateTime(period.start),
-              ],
-            )
-            .get();
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
+            ],
+          )
+          .get();
 
-        return rows
-            .map(
-              (r) => CategoryTotal(
-                name: r.read<String>('category_name'),
-                total: r.read<int>('total'),
-              ),
-            )
-            .toList();
-      },
-    );
+      return rows
+          .map(
+            (r) => CategoryTotal(
+              name: r.read<String>('category_name'),
+              total: r.read<int>('total'),
+            ),
+          )
+          .toList();
+    });
 
 // ============================================================
 // TREND PROVIDER — income vs expense over time
 // ============================================================
 
-final trendProvider = FutureProvider.family<List<DaySummary>, Period>((
-  ref,
-  period,
-) async {
-  ref.watch(ledgerVersionProvider);
+final trendProvider =
+    FutureProvider.family<List<DaySummary>, TransactionDateFilter>((
+      ref,
+      filter,
+    ) async {
+      ref.watch(ledgerVersionProvider);
 
-  final db = ref.watch(databaseProvider);
+      final db = ref.watch(databaseProvider);
 
-  final now = DateTime.now();
+      final range = filter.range;
+      final start = range.start;
+      final endExclusive = range.end;
+      final monthly =
+          filter.preset == TransactionDatePreset.year ||
+          filter.preset == TransactionDatePreset.lastYear;
 
-  late final DateTime start;
-  late final DateTime endExclusive;
+      // ------------------------------------------------------------
+      // INCOME
+      // ------------------------------------------------------------
 
-  switch (period) {
-    case Period.today:
-      start = DateTime(now.year, now.month, now.day);
-      endExclusive = start.add(const Duration(days: 1));
-      break;
-
-    case Period.week:
-      start = DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ).subtract(Duration(days: now.weekday - 1));
-
-      endExclusive = start.add(const Duration(days: 7));
-      break;
-
-    case Period.month:
-      start = DateTime(now.year, now.month, 1);
-
-      endExclusive = DateTime(now.year, now.month + 1, 1);
-      break;
-  }
-
-  // ------------------------------------------------------------
-  // INCOME
-  // ------------------------------------------------------------
-
-  final incomeRows = await db
-      .customSelect(
-        '''
+      final incomeRows = await db
+          .customSelect(
+            '''
     SELECT
       txn_date,
       amount
@@ -217,21 +182,21 @@ final trendProvider = FutureProvider.family<List<DaySummary>, Period>((
       AND txn_date < ?
     ORDER BY txn_date
     ''',
-        variables: [
-          Variable.withString(kCurrentBusinessId),
-          Variable.withDateTime(start),
-          Variable.withDateTime(endExclusive),
-        ],
-      )
-      .get();
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(start),
+              Variable.withDateTime(endExclusive),
+            ],
+          )
+          .get();
 
-  // ------------------------------------------------------------
-  // EXPENSE
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // EXPENSE
+      // ------------------------------------------------------------
 
-  final expenseRows = await db
-      .customSelect(
-        '''
+      final expenseRows = await db
+          .customSelect(
+            '''
     SELECT
       expense_date,
       amount
@@ -242,90 +207,96 @@ final trendProvider = FutureProvider.family<List<DaySummary>, Period>((
       AND expense_date < ?
     ORDER BY expense_date
     ''',
-        variables: [
-          Variable.withString(kCurrentBusinessId),
-          Variable.withDateTime(start),
-          Variable.withDateTime(endExclusive),
-        ],
-      )
-      .get();
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(start),
+              Variable.withDateTime(endExclusive),
+            ],
+          )
+          .get();
 
-  // ------------------------------------------------------------
-  // AGGREGATE IN DART
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // AGGREGATE IN DART
+      // ------------------------------------------------------------
 
-  final incomeByDay = <String, int>{};
-  final expenseByDay = <String, int>{};
+      final incomeByDay = <String, int>{};
+      final expenseByDay = <String, int>{};
 
-  // ------------------------------------------------------------
-  // INCOME ROWS
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // INCOME ROWS
+      // ------------------------------------------------------------
 
-  for (final row in incomeRows) {
-    final date = row.readNullable<DateTime>('txn_date');
-    final amount = row.readNullable<int>('amount') ?? 0;
+      for (final row in incomeRows) {
+        final date = row.readNullable<DateTime>('txn_date');
+        final amount = row.readNullable<int>('amount') ?? 0;
 
-    if (date == null) {
-      debugPrint('TREND DEBUG: income row has NULL txn_date');
-      continue;
-    }
+        if (date == null) {
+          debugPrint('TREND DEBUG: income row has NULL txn_date');
+          continue;
+        }
 
-    final key = DateFormat('yyyy-MM-dd').format(date);
+        final key = DateFormat(monthly ? 'yyyy-MM' : 'yyyy-MM-dd').format(date);
 
-    incomeByDay[key] = (incomeByDay[key] ?? 0) + amount;
-  }
+        incomeByDay[key] = (incomeByDay[key] ?? 0) + amount;
+      }
 
-  // ------------------------------------------------------------
-  // EXPENSE ROWS
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // EXPENSE ROWS
+      // ------------------------------------------------------------
 
-  for (final row in expenseRows) {
-    final date = row.readNullable<DateTime>('expense_date');
-    final amount = row.readNullable<int>('amount') ?? 0;
+      for (final row in expenseRows) {
+        final date = row.readNullable<DateTime>('expense_date');
+        final amount = row.readNullable<int>('amount') ?? 0;
 
-    if (date == null) {
-      debugPrint('TREND DEBUG: expense row has NULL expense_date');
-      continue;
-    }
+        if (date == null) {
+          debugPrint('TREND DEBUG: expense row has NULL expense_date');
+          continue;
+        }
 
-    final key = DateFormat('yyyy-MM-dd').format(date);
+        final key = DateFormat(monthly ? 'yyyy-MM' : 'yyyy-MM-dd').format(date);
 
-    expenseByDay[key] = (expenseByDay[key] ?? 0) + amount;
-  }
+        expenseByDay[key] = (expenseByDay[key] ?? 0) + amount;
+      }
 
-  // ------------------------------------------------------------
-  // DEBUG
-  // ------------------------------------------------------------
-  // ------------------------------------------------------------
-  // DEBBUGER TREND CHART
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // DEBUG
+      // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // DEBBUGER TREND CHART
+      // ------------------------------------------------------------
 
-  debugPrint(
-    'TREND DEBUG: incomeRows=${incomeRows.length}, '
-    'expenseRows=${expenseRows.length}',
-  );
+      // debugPrint(
+      //   'TREND DEBUG: incomeRows=${incomeRows.length}, '
+      //   'expenseRows=${expenseRows.length}',
+      // );
 
-  debugPrint('TREND DEBUG income: $incomeByDay');
-  debugPrint('TREND DEBUG expense: $expenseByDay');
+      // debugPrint('TREND DEBUG income: $incomeByDay');
+      // debugPrint('TREND DEBUG expense: $expenseByDay');
 
-  // ------------------------------------------------------------
-  // BUILD COMPLETE DATE RANGE
-  // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // BUILD COMPLETE DATE RANGE
+      // ------------------------------------------------------------
 
-  final dayCount = endExclusive.difference(start).inDays;
+      final pointCount = monthly
+          ? (endExclusive.year - start.year) * 12 +
+                endExclusive.month -
+                start.month
+          : endExclusive.difference(start).inDays;
 
-  return List.generate(dayCount, (index) {
-    final date = start.add(Duration(days: index));
+      return List.generate(pointCount, (index) {
+        final date = monthly
+            ? DateTime(start.year, start.month + index)
+            : start.add(Duration(days: index));
 
-    final key = DateFormat('yyyy-MM-dd').format(date);
+        final key = DateFormat(monthly ? 'yyyy-MM' : 'yyyy-MM-dd').format(date);
 
-    return DaySummary(
-      date: date,
-      income: incomeByDay[key] ?? 0,
-      expense: expenseByDay[key] ?? 0,
-    );
-  });
-});
+        return DaySummary(
+          date: date,
+          income: incomeByDay[key] ?? 0,
+          expense: expenseByDay[key] ?? 0,
+        );
+      });
+    });
 
 // ============================================================
 // TREND CHART — responsive income vs expense chart
@@ -536,9 +507,7 @@ class _TrendChart extends StatelessWidget {
                         sideTitles: SideTitles(
                           showTitles: true,
 
-                          // Smaller reserved area prevents the chart
-                          // from consuming unnecessary vertical space.
-                          reservedSize: 20,
+                          reservedSize: 28,
 
                           interval: xInterval,
 
@@ -551,16 +520,24 @@ class _TrendChart extends StatelessWidget {
 
                             return SideTitleWidget(
                               meta: meta,
-                              space: 2,
-                              child: Text(
-                                _formatDateLabel(days[index].date, days.length),
-                                maxLines: 1,
-                                overflow: TextOverflow.clip,
-                                style: TextStyle(
-                                  fontSize: width < 400 ? 8 : 9,
-                                  height: 1.0,
-                                  color: Theme.of(context).colorScheme.outline,
-                                  fontWeight: FontWeight.w500,
+                              space: 4,
+                              child: RotatedBox(
+                                quarterTurns: days.length > 14 ? 1 : 0,
+                                child: Text(
+                                  _formatDateLabel(
+                                    days[index].date,
+                                    days.length,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.clip,
+                                  style: TextStyle(
+                                    fontSize: width < 400 ? 8 : 9,
+                                    height: 1.0,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.outline,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ),
                             );
@@ -783,6 +760,10 @@ class _TrendChart extends StatelessWidget {
       return DateFormat('EEE').format(date);
     }
 
+    if (totalDays == 12 && date.day == 1) {
+      return DateFormat('MMM').format(date);
+    }
+
     return DateFormat('M/d').format(date);
   }
 }
@@ -905,7 +886,14 @@ class DashboardPage extends ConsumerWidget {
     final period = ref.watch(selectedPeriodProvider);
     final totalsAsync = ref.watch(periodTotalsProvider(period));
     final balancesAsync = ref.watch(accountBalancesProvider);
-    final entriesAsync = ref.watch(journalEntriesProvider);
+    final entriesAsync = ref.watch(journalEntriesProvider(period));
+    final profileAsync = ref.watch(businessProfileProvider);
+    final profile = profileAsync.maybeWhen(
+      data: (value) => value,
+      orElse: () => null,
+    );
+    final businessName = profile?.name ?? 'My Business';
+    final ownerName = profile?.ownerName?.trim();
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -995,7 +983,7 @@ class DashboardPage extends ConsumerWidget {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        'My Business',
+                                        businessName,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
@@ -1019,7 +1007,9 @@ class DashboardPage extends ConsumerWidget {
                             // GREETING
                             // =====================================================
                             Text(
-                              _dashboardGreeting(),
+                              ownerName == null || ownerName.isEmpty
+                                  ? _dashboardGreeting()
+                                  : '${_dashboardGreeting()}, $ownerName',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
@@ -1166,7 +1156,7 @@ class DashboardPage extends ConsumerWidget {
 // ============================================================
 
 class _PeriodSelector extends ConsumerWidget {
-  final Period period;
+  final TransactionDateFilter period;
 
   const _PeriodSelector({required this.period});
 
@@ -1174,28 +1164,49 @@ class _PeriodSelector extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
 
-    return PopupMenuButton<Period>(
-      initialValue: period,
+    return PopupMenuButton<TransactionDatePreset>(
+      initialValue: period.preset,
       tooltip: 'Select period',
-      onSelected: (selected) {
-        ref.read(selectedPeriodProvider.notifier).state = selected;
+      onSelected: (selected) async {
+        if (selected == TransactionDatePreset.custom) {
+          final selectedRange = await showDateRangePicker(
+            context: context,
+            firstDate: DateTime(2000),
+            lastDate: DateTime(2100),
+            currentDate: DateTime.now(),
+            initialDateRange: period.preset == TransactionDatePreset.custom
+                ? period.range
+                : null,
+          );
+          if (selectedRange == null) return;
+          ref.read(selectedPeriodProvider.notifier).state =
+              TransactionDateFilter.custom(selectedRange);
+          return;
+        }
+
+        ref.read(selectedPeriodProvider.notifier).state = TransactionDateFilter(
+          preset: selected,
+        );
       },
       position: PopupMenuPosition.under,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 4,
       itemBuilder: (context) {
-        return Period.values.map((p) {
-          final selected = p == period;
+        return TransactionDatePreset.values.map((preset) {
+          final selected = preset == period.preset;
 
-          return PopupMenuItem<Period>(
-            value: p,
+          return PopupMenuItem<TransactionDatePreset>(
+            value: preset,
             child: Row(
               children: [
                 Icon(
-                  switch (p) {
-                    Period.today => Icons.today_rounded,
-                    Period.week => Icons.view_week_rounded,
-                    Period.month => Icons.calendar_month_rounded,
+                  switch (preset) {
+                    TransactionDatePreset.today => Icons.today_rounded,
+                    TransactionDatePreset.week => Icons.view_week_rounded,
+                    TransactionDatePreset.month => Icons.calendar_month_rounded,
+                    TransactionDatePreset.year => Icons.date_range_rounded,
+                    TransactionDatePreset.lastYear => Icons.history_rounded,
+                    TransactionDatePreset.custom => Icons.event_rounded,
                   },
                   size: 19,
                   color: selected ? scheme.primary : scheme.onSurfaceVariant,
@@ -1203,7 +1214,7 @@ class _PeriodSelector extends ConsumerWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    p.label,
+                    TransactionDateFilter(preset: preset).label,
                     style: TextStyle(
                       fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
@@ -1259,7 +1270,7 @@ class _SummaryHero extends StatelessWidget {
   final int income;
   final int expense;
   final int cashPosition;
-  final Period period;
+  final TransactionDateFilter period;
   const _SummaryHero({
     required this.income,
     required this.expense,
@@ -1311,7 +1322,7 @@ class _SummaryHero extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '${net >= 0 ? '+' : '-'}${_peso(net.abs())}',
+            '${net >= 0 ? '' : '-'}${_peso(net.abs())}',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 32,

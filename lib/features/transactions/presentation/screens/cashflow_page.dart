@@ -10,7 +10,7 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 
 import '../../../transactions/presentation/screens/transaction_page.dart'
-    show ledgerVersionProvider, kCurrentBusinessId;
+    show businessProfileProvider, ledgerVersionProvider, kCurrentBusinessId;
 
 // ============================================================
 // MODELS
@@ -28,6 +28,20 @@ class BalancePoint {
   final int runningBalance;
 
   const BalancePoint({required this.date, required this.runningBalance});
+}
+
+class PendingCashflowItem {
+  final String description;
+  final int amount;
+  final DateTime date;
+  final bool receivable;
+
+  const PendingCashflowItem({
+    required this.description,
+    required this.amount,
+    required this.date,
+    required this.receivable,
+  });
 }
 
 // ============================================================
@@ -59,8 +73,10 @@ final accountBalancesProvider = FutureProvider<List<AccountBalance>>((
           SELECT
             COALESCE(SUM(debit), 0) AS total_debit,
             COALESCE(SUM(credit), 0) AS total_credit
-          FROM ledger_lines
-          WHERE account_id = ?
+          FROM ledger_lines ll
+          INNER JOIN journal_entries je
+            ON je.id = ll.journal_entry_id
+          WHERE ll.account_id = ?
           ''',
           variables: [Variable.withString(account.id)],
         )
@@ -135,6 +151,51 @@ final accountBalanceHistoryProvider =
       return points;
     });
 
+final pendingCashflowProvider = FutureProvider<List<PendingCashflowItem>>((
+  ref,
+) async {
+  ref.watch(ledgerVersionProvider);
+  final db = ref.watch(databaseProvider);
+
+  final pendingIncome =
+      await (db.select(db.incomeTransactions)
+            ..where(
+              (income) =>
+                  income.businessId.equals(kCurrentBusinessId) &
+                  income.status.equals('pending'),
+            )
+            ..orderBy([(income) => OrderingTerm.desc(income.txnDate)]))
+          .get();
+  final pendingExpenses =
+      await (db.select(db.expenses)
+            ..where(
+              (expense) =>
+                  expense.businessId.equals(kCurrentBusinessId) &
+                  expense.status.equals('pending'),
+            )
+            ..orderBy([(expense) => OrderingTerm.desc(expense.expenseDate)]))
+          .get();
+
+  return [
+    ...pendingIncome.map(
+      (income) => PendingCashflowItem(
+        description: income.description ?? 'Pending receivable',
+        amount: income.amount,
+        date: income.txnDate,
+        receivable: true,
+      ),
+    ),
+    ...pendingExpenses.map(
+      (expense) => PendingCashflowItem(
+        description: expense.description ?? 'Pending payable',
+        amount: expense.amount,
+        date: expense.expenseDate,
+        receivable: false,
+      ),
+    ),
+  ]..sort((a, b) => b.date.compareTo(a.date));
+});
+
 // ============================================================
 // ACCOUNT VISUALS
 // ============================================================
@@ -195,6 +256,10 @@ class CashflowPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final balancesAsync = ref.watch(accountBalancesProvider);
+    final pendingAsync = ref.watch(pendingCashflowProvider);
+    final businessName = ref
+        .watch(businessProfileProvider)
+        .maybeWhen(data: (value) => value.name, orElse: () => null);
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -259,7 +324,9 @@ class CashflowPage extends ConsumerWidget {
                             children: [
                               const SizedBox(height: 5),
                               Text(
-                                'Cashflow',
+                                businessName == null || businessName.isEmpty
+                                    ? 'Cashflow'
+                                    : '$businessName cashflow',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: theme.textTheme.headlineMedium?.copyWith(
@@ -306,6 +373,17 @@ class CashflowPage extends ConsumerWidget {
               },
               loading: () => const _HeroSkeleton(),
               error: (_, __) => const SizedBox.shrink(),
+            ),
+          ),
+
+          SliverToBoxAdapter(
+            child: pendingAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.all(20),
+                child: LinearProgressIndicator(),
+              ),
+              error: (_, __) => const SizedBox.shrink(),
+              data: (items) => _PendingCashflowSection(items: items),
             ),
           ),
 
@@ -387,6 +465,79 @@ class CashflowPage extends ConsumerWidget {
       backgroundColor: Theme.of(context).colorScheme.surface,
       constraints: const BoxConstraints(maxWidth: 640),
       builder: (_) => const _TransferSheet(),
+    );
+  }
+}
+
+class _PendingCashflowSection extends StatelessWidget {
+  final List<PendingCashflowItem> items;
+
+  const _PendingCashflowSection({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Pending receivables and payables',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          ...items.map(
+            (item) => Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    item.receivable
+                        ? Icons.call_received_rounded
+                        : Icons.call_made_rounded,
+                    color: item.receivable ? Colors.green : scheme.error,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.receivable ? 'Receivable' : 'Payable',
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        Text(
+                          item.description,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    _peso(item.amount),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: item.receivable ? Colors.green : scheme.error,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -12,9 +12,14 @@
 // Existing feature pages are kept intact.
 
 import 'package:bos_application/core/branding/branding.dart';
+import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/suppliers_page.dart';
+import 'package:drift/drift.dart' hide Column, Table;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:uuid/uuid.dart';
 
 import 'core/database/app_database.dart';
 import 'core/database/database_provider.dart';
@@ -24,7 +29,12 @@ import 'features/transactions/presentation/screens/dashboard_page.dart';
 import 'features/transactions/presentation/screens/journal_entry_page.dart';
 import 'features/transactions/presentation/screens/supplies_price_list_page.dart';
 import 'features/transactions/presentation/screens/transaction_page.dart'
-    show kCurrentBusinessId;
+    show
+        businessProfileProvider,
+        kCurrentBusinessId,
+        ledgerVersionProvider,
+        paymentAccountsProvider,
+        transactionServiceProvider;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -126,7 +136,7 @@ class _StartupGate extends ConsumerStatefulWidget {
 }
 
 class _StartupGateState extends ConsumerState<_StartupGate> {
-  late Future<void> _initFuture;
+  late Future<BusinessesData> _initFuture;
 
   @override
   void initState() {
@@ -134,10 +144,10 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
     _initFuture = _ensureBusinessExists();
   }
 
-  Future<void> _ensureBusinessExists() async {
+  Future<BusinessesData> _ensureBusinessExists() async {
     final db = ref.read(databaseProvider);
 
-    final existing = await db.select(db.businesses).get();
+    var existing = await db.select(db.businesses).get();
 
     if (existing.isEmpty) {
       await db
@@ -147,16 +157,34 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
               id: kCurrentBusinessId,
               name: 'My Business',
               ownerUserId: 'owner_001',
+              isCurrent: const Value(true),
             ),
           );
 
       await db.seedDefaultsForBusiness(kCurrentBusinessId);
+      existing = await db.select(db.businesses).get();
     }
+
+    final current = existing.firstWhere(
+      (business) => business.isCurrent,
+      orElse: () => existing.first,
+    );
+    kCurrentBusinessId = current.id;
+
+    if (!current.isCurrent) {
+      await (db.update(db.businesses)
+            ..where((business) => business.id.equals(current.id)))
+          .write(const BusinessesCompanion(isCurrent: Value(true)));
+    }
+
+    return (db.select(
+      db.businesses,
+    )..where((business) => business.id.equals(kCurrentBusinessId))).getSingle();
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<void>(
+    return FutureBuilder<BusinessesData>(
       future: _initFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
@@ -167,6 +195,20 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
           return _StartupErrorScreen(
             error: snapshot.error,
             onRetry: () {
+              setState(() {
+                _initFuture = _ensureBusinessExists();
+              });
+            },
+          );
+        }
+
+        final business = snapshot.data!;
+        final profileIncomplete =
+            business.ownerName == null || business.businessCategory == null;
+
+        if (profileIncomplete) {
+          return _OnboardingScreen(
+            onFinished: () {
               setState(() {
                 _initFuture = _ensureBusinessExists();
               });
@@ -414,10 +456,24 @@ const List<NavDestinationInfo> _destinations = [
   ),
 
   NavDestinationInfo(
+    label: 'Profile',
+    icon: Icons.person_outline_rounded,
+    selectedIcon: Icons.person_rounded,
+    screen: _ProfileScreen(),
+  ),
+
+  NavDestinationInfo(
+    label: 'Settings',
+    icon: Icons.settings_outlined,
+    selectedIcon: Icons.settings_rounded,
+    screen: _SettingsScreen(),
+  ),
+
+  NavDestinationInfo(
     label: 'Customers',
     icon: Icons.people_outline_rounded,
     selectedIcon: Icons.people_rounded,
-    screen: _PlaceholderScreen(title: 'Customers'),
+    screen: CustomersPage(),
   ),
 
   NavDestinationInfo(
@@ -492,61 +548,7 @@ class _CompactLayout extends StatelessWidget {
     0, // Dashboard
     1, // Journal
     2, // Cashflow
-    5, // Supplies
   ];
-
-  bool _isMoreSelected() {
-    return selectedIndex == 3 || selectedIndex == 4;
-  }
-
-  Future<void> _showMore(BuildContext context) async {
-    final theme = Theme.of(context);
-
-    final result = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: theme.colorScheme.surface,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'More',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                _MoreDestinationTile(
-                  destination: _destinations[3],
-                  selected: selectedIndex == 3,
-                  onTap: () => Navigator.pop(context, 3),
-                ),
-
-                _MoreDestinationTile(
-                  destination: _destinations[4],
-                  selected: selectedIndex == 4,
-                  onTap: () => Navigator.pop(context, 4),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    if (result != null) {
-      onSelect(result);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -557,40 +559,10 @@ class _CompactLayout extends StatelessWidget {
           selectedIcon: Icon(_destinations[index].selectedIcon),
           label: _destinations[index].label,
         ),
-
-      NavigationDestination(
-        icon: Icon(
-          _isMoreSelected()
-              ? Icons.more_horiz_rounded
-              : Icons.more_horiz_outlined,
-        ),
-        label: 'More',
-      ),
     ];
 
-    final selectedNavIndex = _isMoreSelected()
-        ? 4
-        : _primaryIndexes.indexOf(selectedIndex);
-
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const AppLogo(height: 28),
-            const SizedBox(width: 10),
-            Text(
-              AppStrings.appName,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.4,
-                color: AppColors.primary,
-              ),
-            ),
-          ],
-        ),
-      ),
+      appBar: const _ShellAppBar(showMenu: true),
       body: IndexedStack(
         index: selectedIndex,
         children: [for (final destination in _destinations) destination.screen],
@@ -599,69 +571,16 @@ class _CompactLayout extends StatelessWidget {
       bottomNavigationBar: SafeArea(
         top: false,
         child: NavigationBar(
-          selectedIndex: selectedNavIndex < 0 ? 0 : selectedNavIndex,
+          selectedIndex: _primaryIndexes
+              .indexOf(selectedIndex)
+              .clamp(0, 2)
+              .toInt(),
           onDestinationSelected: (index) {
-            if (index == 4) {
-              _showMore(context);
-              return;
-            }
-
             onSelect(_primaryIndexes[index]);
           },
           destinations: destinations,
         ),
       ),
-    );
-  }
-}
-
-// ============================================================
-// MORE TILE
-// ============================================================
-
-class _MoreDestinationTile extends StatelessWidget {
-  final NavDestinationInfo destination;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _MoreDestinationTile({
-    required this.destination,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ListTile(
-      onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      leading: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: selected
-              ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(
-          selected ? destination.selectedIcon : destination.icon,
-          color: selected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
-      title: Text(
-        destination.label,
-        style: TextStyle(
-          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-        ),
-      ),
-      trailing: selected
-          ? Icon(Icons.check_circle_rounded, color: theme.colorScheme.primary)
-          : const Icon(Icons.chevron_right_rounded),
     );
   }
 }
@@ -702,11 +621,14 @@ class _WideLayout extends StatelessWidget {
           Expanded(
             child: ColoredBox(
               color: theme.colorScheme.surfaceContainerLowest,
-              child: IndexedStack(
-                index: selectedIndex,
-                children: [
-                  for (final destination in _destinations) destination.screen,
-                ],
+              child: Scaffold(
+                appBar: const _ShellAppBar(showMenu: false),
+                body: IndexedStack(
+                  index: selectedIndex,
+                  children: [
+                    for (final destination in _destinations) destination.screen,
+                  ],
+                ),
               ),
             ),
           ),
@@ -734,6 +656,7 @@ class _BosNavigationRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    const railIndexes = [0, 1, 2, 4, 5, 6, 7];
 
     return Material(
       color: theme.colorScheme.surface,
@@ -748,17 +671,18 @@ class _BosNavigationRail extends StatelessWidget {
 
               Expanded(
                 child: NavigationRail(
-                  selectedIndex: selectedIndex,
-                  onDestinationSelected: onSelect,
+                  selectedIndex: railIndexes.indexOf(selectedIndex),
+                  onDestinationSelected: (index) =>
+                      onSelect(railIndexes[index]),
                   extended: extended,
                   labelType: NavigationRailLabelType.none,
                   leading: null,
                   destinations: [
-                    for (final destination in _destinations)
+                    for (final index in railIndexes)
                       NavigationRailDestination(
-                        icon: Icon(destination.icon),
-                        selectedIcon: Icon(destination.selectedIcon),
-                        label: Text(destination.label),
+                        icon: Icon(_destinations[index].icon),
+                        selectedIcon: Icon(_destinations[index].selectedIcon),
+                        label: Text(_destinations[index].label),
                       ),
                   ],
                 ),
@@ -766,7 +690,11 @@ class _BosNavigationRail extends StatelessWidget {
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                child: _NavigationFooter(extended: extended),
+                child: _NavigationFooter(
+                  extended: extended,
+                  onProfile: () => onSelect(3),
+                  onSettings: () => onSelect(4),
+                ),
               ),
             ],
           ),
@@ -780,14 +708,17 @@ class _BosNavigationRail extends StatelessWidget {
 // BOS BRAND — real logo, not a stand-in icon
 // ============================================================
 
-class _BosBrand extends StatelessWidget {
+class _BosBrand extends ConsumerWidget {
   final bool extended;
 
   const _BosBrand({required this.extended});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final business = ref
+        .watch(businessProfileProvider)
+        .maybeWhen(data: (value) => value, orElse: () => null);
 
     if (!extended) {
       return Padding(
@@ -841,7 +772,9 @@ class _BosBrand extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  AppStrings.appName,
+                  business?.name.isNotEmpty == true
+                      ? business!.name
+                      : AppStrings.appName,
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
@@ -849,7 +782,9 @@ class _BosBrand extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  AppStrings.appFullName,
+                  business?.businessCategory?.isNotEmpty == true
+                      ? business!.businessCategory!
+                      : AppStrings.appFullName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
@@ -869,20 +804,1025 @@ class _BosBrand extends StatelessWidget {
 // NAVIGATION FOOTER
 // ============================================================
 
-class _NavigationFooter extends StatelessWidget {
-  final bool extended;
+class _ShellAppBar extends ConsumerWidget implements PreferredSizeWidget {
+  final bool showMenu;
 
-  const _NavigationFooter({required this.extended});
+  const _ShellAppBar({required this.showMenu});
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final business = ref
+        .watch(businessProfileProvider)
+        .maybeWhen(data: (value) => value, orElse: () => null);
+    return AppBar(
+      titleSpacing: 16,
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AppLogo(height: 28),
+          const SizedBox(width: 10),
+          Text(
+            business?.name.isNotEmpty == true
+                ? business!.name
+                : AppStrings.appName,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+              color: AppColors.primary,
+            ),
+          ),
+        ],
+      ),
+      actions: showMenu
+          ? [
+              PopupMenuButton<int>(
+                tooltip: 'More',
+                icon: const Icon(Icons.menu_rounded),
+                onSelected: (index) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => _destinations[index].screen,
+                    ),
+                  );
+                },
+                itemBuilder: (context) => [
+                  for (var index = 3; index < _destinations.length; index++)
+                    PopupMenuItem<int>(
+                      value: index,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(_destinations[index].icon),
+                        title: Text(_destinations[index].label),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 8),
+            ]
+          : null,
+    );
+  }
+}
+
+class _OnboardingScreen extends StatelessWidget {
+  final VoidCallback onFinished;
+
+  const _OnboardingScreen({required this.onFinished});
 
   @override
   Widget build(BuildContext context) {
+    return _BusinessProfileEditor(
+      title: 'Set up your profile',
+      subtitle: 'Add your details now or skip and update them later.',
+      showSkip: true,
+      showOwnerName: true,
+      onFinished: onFinished,
+    );
+  }
+}
+
+class _ProfileScreen extends ConsumerWidget {
+  const _ProfileScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final profile = ref.watch(businessProfileProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profile')),
+      body: profile.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stack) =>
+            const Center(child: Text('Unable to load profile.')),
+        data: (business) => ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            CircleAvatar(
+              radius: 42,
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: Icon(
+                Icons.person_rounded,
+                size: 44,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              business.ownerName?.isNotEmpty == true
+                  ? business.ownerName!
+                  : 'Your name',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              business.name,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
+            ),
+            if (business.businessCategory?.isNotEmpty == true) ...[
+              const SizedBox(height: 4),
+              Text(
+                business.businessCategory!,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            if (business.managerName?.isNotEmpty == true) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Manager: ${business.managerName}',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            if (business.addressCity?.isNotEmpty == true ||
+                business.addressProvince?.isNotEmpty == true ||
+                business.addressCountry?.isNotEmpty == true) ...[
+              const SizedBox(height: 4),
+              Text(
+                [
+                      business.addressCity,
+                      business.addressBarangay,
+                      business.addressProvince,
+                      business.addressCountry,
+                      business.addressZipCode,
+                    ]
+                    .whereType<String>()
+                    .where((value) => value.isNotEmpty)
+                    .join(', '),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            const SizedBox(height: 28),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => _BusinessProfileEditor(
+                      title: 'Edit profile',
+                      subtitle: 'Update your name and business details.',
+                      onFinished: () => Navigator.pop(context),
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit profile'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _openBusinessSwitcher(context, ref),
+              icon: const Icon(Icons.swap_horiz_rounded),
+              label: const Text('Switch business'),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => _addBusiness(context, ref, business),
+              icon: const Icon(Icons.add_business_outlined),
+              label: const Text('Add another business'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBusinessSwitcher(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final db = ref.read(databaseProvider);
+    final businesses = await db.select(db.businesses).get();
+    if (!context.mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text(
+                'Your businesses',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            for (final item in businesses)
+              ListTile(
+                leading: const Icon(Icons.business_outlined),
+                title: Text(item.name),
+                subtitle: Text(item.businessCategory ?? 'Business'),
+                selected: item.id == kCurrentBusinessId,
+                onTap: () async {
+                  if (item.id != kCurrentBusinessId) {
+                    await db.transaction(() async {
+                      await (db.update(db.businesses)).write(
+                        const BusinessesCompanion(isCurrent: Value(false)),
+                      );
+                      await (db.update(db.businesses)
+                            ..where((business) => business.id.equals(item.id)))
+                          .write(
+                            const BusinessesCompanion(isCurrent: Value(true)),
+                          );
+                    });
+                    kCurrentBusinessId = item.id;
+                    ref.read(ledgerVersionProvider.notifier).state++;
+                  }
+                  if (!sheetContext.mounted) return;
+                  Navigator.pop(sheetContext);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addBusiness(
+    BuildContext context,
+    WidgetRef ref,
+    BusinessesData currentBusiness,
+  ) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const _BusinessNameDialog(),
+    );
+
+    if (name == null || !context.mounted) return;
+
+    try {
+      final db = ref.read(databaseProvider);
+      final businessId = const Uuid().v4();
+
+      await db.transaction(() async {
+        await (db.update(
+          db.businesses,
+        )).write(const BusinessesCompanion(isCurrent: Value(false)));
+        await db
+            .into(db.businesses)
+            .insert(
+              BusinessesCompanion.insert(
+                id: businessId,
+                name: name,
+                ownerUserId: currentBusiness.ownerUserId,
+                isCurrent: const Value(true),
+              ),
+            );
+        await db.seedDefaultsForBusiness(businessId);
+      });
+
+      kCurrentBusinessId = businessId;
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (!context.mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => _BusinessProfileEditor(
+            title: 'Set up $name',
+            subtitle:
+                'Complete the business details. Owner name is optional here.',
+            showSkip: true,
+            showOwnerName: false,
+            onFinished: () => Navigator.pop(context),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Unable to add business: $error')));
+    }
+  }
+}
+
+class _BusinessNameDialog extends StatefulWidget {
+  const _BusinessNameDialog();
+
+  @override
+  State<_BusinessNameDialog> createState() => _BusinessNameDialogState();
+}
+
+class _BusinessNameDialogState extends State<_BusinessNameDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add another business'),
+      content: TextField(
+        controller: _controller,
+        textCapitalization: TextCapitalization.words,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'Business name',
+          prefixIcon: Icon(Icons.business_outlined),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = _controller.text.trim();
+            if (value.isNotEmpty) Navigator.pop(context, value);
+          },
+          child: const Text('Continue'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PsgcPlace {
+  final String code;
+  final String name;
+
+  const _PsgcPlace({required this.code, required this.name});
+
+  factory _PsgcPlace.fromJson(Map<String, dynamic> json) {
+    return _PsgcPlace(
+      code: json['code'] as String,
+      name: json['name'] as String,
+    );
+  }
+}
+
+class _BusinessProfileEditor extends ConsumerStatefulWidget {
+  final String title;
+  final String subtitle;
+  final bool showSkip;
+  final bool showOwnerName;
+  final VoidCallback onFinished;
+
+  const _BusinessProfileEditor({
+    required this.title,
+    required this.subtitle,
+    this.showSkip = false,
+    this.showOwnerName = true,
+    required this.onFinished,
+  });
+
+  @override
+  ConsumerState<_BusinessProfileEditor> createState() =>
+      _BusinessProfileEditorState();
+}
+
+class _BusinessProfileEditorState
+    extends ConsumerState<_BusinessProfileEditor> {
+  final _ownerController = TextEditingController();
+  final _managerController = TextEditingController();
+  final _businessController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _provinceController = TextEditingController();
+  final _zipController = TextEditingController();
+  final _capitalController = TextEditingController();
+  String? _category;
+  String? _country;
+  String? _province;
+  String? _city;
+  String? _barangay;
+  String? _capitalAccountId;
+  BusinessesData? _business;
+  bool _loading = true;
+  String? _loadError;
+  bool _saving = false;
+
+  static const _categories = [
+    'Retail',
+    'Food and beverage',
+    'Services',
+    'Manufacturing',
+    'Agriculture',
+    'Construction',
+    'Online business',
+    'Other',
+  ];
+
+  static const _countries = [
+    'Philippines',
+    'United States',
+    'Canada',
+    'United Kingdom',
+    'Australia',
+    'Other',
+  ];
+
+  List<_PsgcPlace> _provinces = [];
+  List<_PsgcPlace> _cities = [];
+  List<_PsgcPlace> _barangays = [];
+  bool _locationsLoading = false;
+  String? _locationsError;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final db = ref.read(databaseProvider);
+      final business = await (db.select(
+        db.businesses,
+      )..where((item) => item.id.equals(kCurrentBusinessId))).getSingle();
+
+      if (!mounted) return;
+      _ownerController.text = business.ownerName ?? '';
+      _managerController.text = business.managerName ?? '';
+      _business = business;
+      _businessController.text = business.name == 'My Business'
+          ? ''
+          : business.name;
+      _category = business.businessCategory?.isEmpty == true
+          ? null
+          : business.businessCategory;
+      _country = business.addressCountry;
+      _province = business.addressProvince;
+      _city = business.addressCity;
+      _barangay = business.addressBarangay;
+      _provinceController.text = business.addressProvince ?? '';
+      _cityController.text = business.addressCity ?? '';
+      _zipController.text = business.addressZipCode ?? '';
+      _capitalController.text = business.startingCapital == 0
+          ? ''
+          : (business.startingCapital / 100).toStringAsFixed(2);
+      _capitalAccountId = business.startingCapitalAccountId;
+      if (_country == 'Philippines') {
+        await _loadProvinces();
+      }
+      setState(() => _loading = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = 'Unable to load your profile. Please try again.';
+      });
+    }
+  }
+
+  Future<List<_PsgcPlace>> _fetchPlaces(String path) async {
+    final response = await http.get(
+      Uri.parse('https://psgc.gitlab.io/api/$path'),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('Location service returned ${response.statusCode}.');
+    }
+    final values = jsonDecode(response.body) as List<dynamic>;
+    return values
+        .map((value) => _PsgcPlace.fromJson(value as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> _loadProvinces() async {
+    setState(() {
+      _locationsLoading = true;
+      _locationsError = null;
+    });
+    try {
+      final provinces = await _fetchPlaces('provinces');
+      if (!mounted) return;
+      setState(() {
+        _provinces = provinces;
+        _locationsLoading = false;
+      });
+      final selected = provinces
+          .where((item) => item.name == _province)
+          .firstOrNull;
+      if (selected != null) await _loadCities(selected);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _locationsLoading = false;
+        _locationsError = 'Unable to load Philippine locations.';
+      });
+    }
+  }
+
+  Future<void> _loadCities(_PsgcPlace province) async {
+    final cities = await _fetchPlaces(
+      'provinces/${province.code}/cities-municipalities',
+    );
+    if (!mounted) return;
+    setState(() {
+      _cities = cities;
+      _barangays = [];
+    });
+    final selected = cities.where((item) => item.name == _city).firstOrNull;
+    if (selected != null) await _loadBarangays(selected);
+  }
+
+  Future<void> _loadBarangays(_PsgcPlace city) async {
+    final barangays = await _fetchPlaces(
+      'cities-municipalities/${city.code}/barangays',
+    );
+    if (!mounted) return;
+    setState(() => _barangays = barangays);
+  }
+
+  @override
+  void dispose() {
+    _ownerController.dispose();
+    _managerController.dispose();
+    _businessController.dispose();
+    _cityController.dispose();
+    _provinceController.dispose();
+    _zipController.dispose();
+    _capitalController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save({required bool skip}) async {
+    final capitalText = _capitalController.text.replaceAll(',', '').trim();
+    final capital = capitalText.isEmpty ? null : double.tryParse(capitalText);
+    if (!skip && capitalText.isNotEmpty && (capital == null || capital < 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid starting capital amount.')),
+      );
+      return;
+    }
+
+    if (!skip && capital != null && capital > 0 && _capitalAccountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select the account holding the starting capital.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    final db = ref.read(databaseProvider);
+    final business = _business;
+    final capitalCents = capital == null || capital <= 0
+        ? 0
+        : (capital * 100).round();
+    final province = _country == 'Philippines'
+        ? _province
+        : (_provinceController.text.trim().isEmpty
+              ? null
+              : _provinceController.text.trim());
+    final city = _country == 'Philippines'
+        ? _city
+        : (_cityController.text.trim().isEmpty
+              ? null
+              : _cityController.text.trim());
+
+    if (!skip &&
+        capitalCents > 0 &&
+        business != null &&
+        business.startingCapital == 0) {
+      final categories =
+          await (db.select(db.categories)..where(
+                (category) =>
+                    category.businessId.equals(kCurrentBusinessId) &
+                    category.name.equals('Additional Capital') &
+                    category.txnType.equals('income'),
+              ))
+              .get();
+      if (categories.isNotEmpty) {
+        await ref
+            .read(transactionServiceProvider)
+            .saveIncome(
+              date: DateTime.now(),
+              categoryId: categories.first.id,
+              amount: capitalCents,
+              paymentAccountId: _capitalAccountId,
+              description: 'Starting capital',
+              markAsPending: false,
+            );
+      }
+    }
+
+    await (db.update(
+      db.businesses,
+    )..where((business) => business.id.equals(kCurrentBusinessId))).write(
+      BusinessesCompanion(
+        name: Value(
+          skip || _businessController.text.trim().isEmpty
+              ? 'My Business'
+              : _businessController.text.trim(),
+        ),
+        ownerName: Value(
+          skip || _ownerController.text.trim().isEmpty
+              ? ''
+              : _ownerController.text.trim(),
+        ),
+        managerName: Value(
+          skip || _managerController.text.trim().isEmpty
+              ? null
+              : _managerController.text.trim(),
+        ),
+        businessCategory: Value(skip ? '' : _category ?? ''),
+        addressCountry: Value(skip ? '' : _country ?? ''),
+        addressProvince: Value(skip ? '' : province ?? ''),
+        addressCity: Value(skip ? '' : city ?? ''),
+        addressBarangay: Value(skip ? '' : _barangay ?? ''),
+        addressZipCode: Value(
+          skip || _zipController.text.trim().isEmpty
+              ? null
+              : _zipController.text.trim(),
+        ),
+        startingCapital: Value(skip ? 0 : capitalCents),
+        startingCapitalAccountId: Value(skip ? null : _capitalAccountId),
+      ),
+    );
+
+    if (!mounted) return;
+    widget.onFinished();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_loadError != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.title)),
+        body: Center(
+          child: FilledButton.icon(
+            onPressed: () {
+              setState(() {
+                _loading = true;
+                _loadError = null;
+              });
+              _load();
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Retry'),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+        children: [
+          Text(
+            widget.subtitle,
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 24),
+          if (widget.showOwnerName) ...[
+            TextField(
+              controller: _ownerController,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Your name',
+                prefixIcon: Icon(Icons.person_outline_rounded),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          TextField(
+            controller: _managerController,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Manager name (optional)',
+              prefixIcon: Icon(Icons.manage_accounts_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _businessController,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Business name',
+              prefixIcon: Icon(Icons.business_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          DropdownButtonFormField<String>(
+            initialValue: _category,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Business category',
+              prefixIcon: Icon(Icons.category_outlined),
+            ),
+            items: _categories
+                .map(
+                  (category) =>
+                      DropdownMenuItem(value: category, child: Text(category)),
+                )
+                .toList(),
+            onChanged: _saving
+                ? null
+                : (value) => setState(() => _category = value),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Business address',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _country,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Country',
+              prefixIcon: Icon(Icons.public_outlined),
+            ),
+            items: _countries
+                .map(
+                  (country) =>
+                      DropdownMenuItem(value: country, child: Text(country)),
+                )
+                .toList(),
+            onChanged: _saving
+                ? null
+                : (value) async {
+                    setState(() {
+                      _country = value;
+                      _province = null;
+                      _city = null;
+                      _barangay = null;
+                      _provinces = [];
+                      _cities = [];
+                      _barangays = [];
+                      _provinceController.clear();
+                      _cityController.clear();
+                    });
+                    if (value == 'Philippines') await _loadProvinces();
+                  },
+          ),
+          const SizedBox(height: 12),
+          if (_country == 'Philippines') ...[
+            if (_locationsLoading) const LinearProgressIndicator(),
+            if (_locationsError != null)
+              Text(_locationsError!, style: TextStyle(color: scheme.error)),
+            DropdownButtonFormField<String>(
+              initialValue: _provinces.any((item) => item.name == _province)
+                  ? _province
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Province',
+                prefixIcon: Icon(Icons.map_outlined),
+              ),
+              items: _provinces
+                  .map(
+                    (province) => DropdownMenuItem<String>(
+                      value: province.name,
+                      child: Text(province.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _saving
+                  ? null
+                  : (value) async {
+                      final place = _provinces
+                          .where((item) => item.name == value)
+                          .firstOrNull;
+                      setState(() {
+                        _province = value;
+                        _city = null;
+                        _barangay = null;
+                      });
+                      if (place != null) await _loadCities(place);
+                    },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _cities.any((item) => item.name == _city)
+                  ? _city
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'City',
+                prefixIcon: Icon(Icons.location_city_outlined),
+              ),
+              items: _cities
+                  .map(
+                    (city) => DropdownMenuItem<String>(
+                      value: city.name,
+                      child: Text(city.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _saving
+                  ? null
+                  : (value) async {
+                      final place = _cities
+                          .where((item) => item.name == value)
+                          .firstOrNull;
+                      setState(() {
+                        _city = value;
+                        _barangay = null;
+                      });
+                      if (place != null) await _loadBarangays(place);
+                    },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _barangays.any((item) => item.name == _barangay)
+                  ? _barangay
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Barangay',
+                prefixIcon: Icon(Icons.holiday_village_outlined),
+              ),
+              items: _barangays
+                  .map(
+                    (barangay) => DropdownMenuItem<String>(
+                      value: barangay.name,
+                      child: Text(barangay.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() => _barangay = value),
+            ),
+          ] else ...[
+            TextField(
+              controller: _provinceController,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Province / state',
+                prefixIcon: Icon(Icons.map_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _cityController,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'City',
+                prefixIcon: Icon(Icons.location_city_outlined),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: _zipController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'ZIP / postal code (optional)',
+              prefixIcon: Icon(Icons.markunread_mailbox_outlined),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Starting capital',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _capitalController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Starting capital (optional)',
+              prefixText: '₱ ',
+              prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+            ),
+          ),
+          const SizedBox(height: 12),
+          accountsAsync.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (error, stack) => Text(
+              'Unable to load accounts.',
+              style: TextStyle(color: scheme.error),
+            ),
+            data: (accounts) => DropdownButtonFormField<String>(
+              initialValue:
+                  accounts.any((account) => account.id == _capitalAccountId)
+                  ? _capitalAccountId
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Capital account',
+                hintText: 'Cash, bank, or e-wallet',
+                prefixIcon: Icon(Icons.account_balance_outlined),
+              ),
+              items: accounts
+                  .map(
+                    (account) => DropdownMenuItem(
+                      value: account.id,
+                      child: Text(account.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() => _capitalAccountId = value),
+            ),
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _saving ? null : () => _save(skip: false),
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('Save profile'),
+          ),
+          if (widget.showSkip)
+            TextButton(
+              onPressed: _saving ? null : () => _save(skip: true),
+              child: const Text('Skip for now'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsScreen extends StatelessWidget {
+  const _SettingsScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.manage_accounts_outlined),
+            title: const Text('Profile & businesses'),
+            subtitle: const Text('Manage your profile and switch businesses'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const _ProfileScreen()),
+              );
+            },
+          ),
+          const ListTile(
+            leading: Icon(Icons.palette_outlined),
+            title: Text('Appearance'),
+            subtitle: Text('Theme preferences'),
+            trailing: Icon(Icons.chevron_right_rounded),
+          ),
+          ListTile(
+            leading: Icon(Icons.currency_exchange_rounded),
+            title: Text('Currency'),
+            subtitle: Text('Philippine Peso (PHP)'),
+          ),
+          ListTile(
+            leading: Icon(Icons.info_outline_rounded),
+            title: Text('About BOS'),
+            subtitle: Text('Business Operating System'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NavigationFooter extends ConsumerWidget {
+  final bool extended;
+  final VoidCallback onProfile;
+  final VoidCallback onSettings;
+
+  const _NavigationFooter({
+    required this.extended,
+    required this.onProfile,
+    required this.onSettings,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
 
     if (!extended) {
       return IconButton(
         tooltip: 'Settings',
-        onPressed: () {},
-        icon: const Icon(Icons.settings_outlined),
+        onPressed: onSettings,
+        color: AppColors.primary,
+        icon: const Icon(Icons.settings_rounded),
       );
     }
 
@@ -894,129 +1834,33 @@ class _NavigationFooter extends StatelessWidget {
         ),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 17,
-            backgroundColor: theme.colorScheme.primaryContainer,
-            child: Icon(
-              Icons.person_rounded,
-              size: 19,
-              color: theme.colorScheme.primary,
+      child: InkWell(
+        onTap: onSettings,
+        borderRadius: BorderRadius.circular(14),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Profile',
+              onPressed: onProfile,
+              color: AppColors.primary,
+              icon: const Icon(Icons.person_rounded),
             ),
-          ),
 
-          const SizedBox(width: 10),
-
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Owner',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                ),
-                Text(
-                  'My Business',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11),
-                ),
-              ],
+            const Expanded(
+              child: Text(
+                'Profile',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+              ),
             ),
-          ),
 
-          IconButton(
-            tooltip: 'Settings',
-            visualDensity: VisualDensity.compact,
-            onPressed: () {},
-            icon: const Icon(Icons.settings_outlined, size: 20),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ============================================================
-// PLACEHOLDER
-// ============================================================
-
-class _PlaceholderScreen extends StatelessWidget {
-  final String title;
-
-  const _PlaceholderScreen({required this.title});
-
-  IconData get _icon {
-    switch (title) {
-      case 'Customers':
-        return Icons.people_rounded;
-      case 'Suppliers':
-        return Icons.local_shipping_rounded;
-      default:
-        return Icons.construction_rounded;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Icon(
-                    _icon,
-                    size: 40,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                Text(
-                  title,
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  'This module is coming soon.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                FilledButton.tonalIcon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.info_outline_rounded),
-                  label: const Text('Module information'),
-                ),
-              ],
+            IconButton(
+              tooltip: 'Open settings',
+              visualDensity: VisualDensity.compact,
+              onPressed: onSettings,
+              color: AppColors.primary,
+              icon: const Icon(Icons.settings_rounded, size: 20),
             ),
-          ),
+          ],
         ),
       ),
     );

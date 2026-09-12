@@ -20,6 +20,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:intl/intl.dart';
 import 'package:drift/drift.dart' hide Column, Table;
@@ -28,6 +29,7 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 
 import 'transaction_page.dart';
+import '../providers/transaction_date_filter.dart';
 
 // ============================================================
 // MODEL
@@ -64,66 +66,83 @@ class JournalEntryRow {
 // PROVIDER
 // ============================================================
 
-final journalEntriesProvider = FutureProvider<List<JournalEntryRow>>((
-  ref,
-) async {
-  ref.watch(ledgerVersionProvider);
+final selectedJournalDateFilterProvider = StateProvider<TransactionDateFilter>(
+  (ref) => const TransactionDateFilter.month(),
+);
 
-  final db = ref.watch(databaseProvider);
+final journalEntriesProvider =
+    FutureProvider.family<List<JournalEntryRow>, TransactionDateFilter>((
+      ref,
+      filter,
+    ) async {
+      ref.watch(ledgerVersionProvider);
 
-  final expenseRows =
-      await (db.select(db.expenses)
-            ..where((e) => e.businessId.equals(kCurrentBusinessId))
-            ..orderBy([(e) => OrderingTerm.desc(e.expenseDate)]))
-          .get();
+      final db = ref.watch(databaseProvider);
+      final range = filter.range;
 
-  final incomeRows =
-      await (db.select(db.incomeTransactions)
-            ..where((i) => i.businessId.equals(kCurrentBusinessId))
-            ..orderBy([(i) => OrderingTerm.desc(i.txnDate)]))
-          .get();
+      final expenseRows =
+          await (db.select(db.expenses)
+                ..where(
+                  (e) =>
+                      e.businessId.equals(kCurrentBusinessId) &
+                      e.expenseDate.isBiggerOrEqualValue(range.start) &
+                      e.expenseDate.isSmallerThanValue(range.end),
+                )
+                ..orderBy([(e) => OrderingTerm.desc(e.expenseDate)]))
+              .get();
 
-  final categories = await db.select(db.categories).get();
+      final incomeRows =
+          await (db.select(db.incomeTransactions)
+                ..where(
+                  (i) =>
+                      i.businessId.equals(kCurrentBusinessId) &
+                      i.txnDate.isBiggerOrEqualValue(range.start) &
+                      i.txnDate.isSmallerThanValue(range.end),
+                )
+                ..orderBy([(i) => OrderingTerm.desc(i.txnDate)]))
+              .get();
 
-  final categoryMap = <String, String>{
-    for (final category in categories) category.id: category.name,
-  };
+      final categories = await db.select(db.categories).get();
 
-  String categoryName(String id) {
-    return categoryMap[id] ?? 'Uncategorized';
-  }
+      final categoryMap = <String, String>{
+        for (final category in categories) category.id: category.name,
+      };
 
-  final merged = <JournalEntryRow>[
-    ...expenseRows.map(
-      (e) => JournalEntryRow(
-        id: e.id,
-        type: JournalEntryType.expense,
-        date: e.expenseDate,
-        description: e.description,
-        categoryName: categoryName(e.categoryId),
-        amount: e.amount,
-        status: e.status,
-        sourceExpense: e,
-      ),
-    ),
-    ...incomeRows.map(
-      (i) => JournalEntryRow(
-        id: i.id,
-        type: JournalEntryType.income,
-        date: i.txnDate,
-        description: i.description,
-        categoryName: categoryName(i.categoryId),
-        amount: i.amount,
-        status: i.status,
-        sourceIncome: i,
-      ),
-    ),
-  ];
+      String categoryName(String id) {
+        return categoryMap[id] ?? 'Uncategorized';
+      }
 
-  merged.sort((a, b) => b.date.compareTo(a.date));
+      final merged = <JournalEntryRow>[
+        ...expenseRows.map(
+          (e) => JournalEntryRow(
+            id: e.id,
+            type: JournalEntryType.expense,
+            date: e.expenseDate,
+            description: e.description,
+            categoryName: categoryName(e.categoryId),
+            amount: e.amount,
+            status: e.status,
+            sourceExpense: e,
+          ),
+        ),
+        ...incomeRows.map(
+          (i) => JournalEntryRow(
+            id: i.id,
+            type: JournalEntryType.income,
+            date: i.txnDate,
+            description: i.description,
+            categoryName: categoryName(i.categoryId),
+            amount: i.amount,
+            status: i.status,
+            sourceIncome: i,
+          ),
+        ),
+      ];
 
-  return merged;
-});
+      merged.sort((a, b) => b.date.compareTo(a.date));
+
+      return merged;
+    });
 
 // ============================================================
 // JOURNAL ENTRY PAGE
@@ -134,17 +153,18 @@ class JournalEntryPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final entriesAsync = ref.watch(journalEntriesProvider);
+    final filter = ref.watch(selectedJournalDateFilterProvider);
+    final entriesAsync = ref.watch(journalEntriesProvider(filter));
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: _buildAppBar(context),
+      appBar: _buildAppBar(context, filter, ref),
       body: entriesAsync.when(
         loading: () => const _JournalLoadingState(),
         error: (error, stack) => _JournalErrorState(
           error: error,
           onRetry: () {
-            ref.invalidate(journalEntriesProvider);
+            ref.invalidate(journalEntriesProvider(filter));
           },
         ),
         data: (entries) {
@@ -156,9 +176,9 @@ class JournalEntryPage extends ConsumerWidget {
 
           return RefreshIndicator(
             onRefresh: () async {
-              ref.invalidate(journalEntriesProvider);
+              ref.invalidate(journalEntriesProvider(filter));
 
-              await ref.read(journalEntriesProvider.future);
+              await ref.read(journalEntriesProvider(filter).future);
             },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(
@@ -187,7 +207,11 @@ class JournalEntryPage extends ConsumerWidget {
     );
   }
 
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
+  PreferredSizeWidget _buildAppBar(
+    BuildContext context,
+    TransactionDateFilter filter,
+    WidgetRef ref,
+  ) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
 
@@ -208,13 +232,22 @@ class JournalEntryPage extends ConsumerWidget {
             ),
           ),
           Text(
-            'Your complete transaction history',
+            ref
+                .watch(businessProfileProvider)
+                .maybeWhen(
+                  data: (value) => value.name,
+                  orElse: () => 'Your complete transaction history',
+                ),
             style: theme.textTheme.bodySmall?.copyWith(
               color: colors.onSurfaceVariant,
             ),
           ),
         ],
       ),
+      actions: [
+        _JournalDateFilterButton(filter: filter, ref: ref),
+        const SizedBox(width: 8),
+      ],
     );
   }
 
@@ -262,6 +295,56 @@ class JournalEntryPage extends ConsumerWidget {
     return groups.entries
         .map((entry) => _DayGroup(label: entry.key, entries: entry.value))
         .toList();
+  }
+}
+
+class _JournalDateFilterButton extends StatelessWidget {
+  final TransactionDateFilter filter;
+  final WidgetRef ref;
+
+  const _JournalDateFilterButton({required this.filter, required this.ref});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<TransactionDatePreset>(
+      initialValue: filter.preset,
+      tooltip: 'Filter entries by date',
+      onSelected: (preset) async {
+        if (preset == TransactionDatePreset.custom) {
+          final selectedRange = await showDateRangePicker(
+            context: context,
+            firstDate: DateTime(2000),
+            lastDate: DateTime(2100),
+            currentDate: DateTime.now(),
+            initialDateRange: filter.preset == TransactionDatePreset.custom
+                ? filter.range
+                : null,
+          );
+          if (selectedRange == null) return;
+          ref.read(selectedJournalDateFilterProvider.notifier).state =
+              TransactionDateFilter.custom(selectedRange);
+          return;
+        }
+
+        ref.read(selectedJournalDateFilterProvider.notifier).state =
+            TransactionDateFilter(preset: preset);
+      },
+      itemBuilder: (context) => TransactionDatePreset.values.map((preset) {
+        final selected = preset == filter.preset;
+        return PopupMenuItem<TransactionDatePreset>(
+          value: preset,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(TransactionDateFilter(preset: preset).label),
+              ),
+              if (selected) const Icon(Icons.check_rounded, size: 18),
+            ],
+          ),
+        );
+      }).toList(),
+      icon: const Icon(Icons.date_range_rounded),
+    );
   }
 }
 

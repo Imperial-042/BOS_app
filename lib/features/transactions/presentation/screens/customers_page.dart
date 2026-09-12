@@ -1,18 +1,17 @@
-// lib/features/suppliers/presentation/screens/suppliers_page.dart
+// lib/features/customers/presentation/screens/customers_page.dart
 //
-// Supplier directory + Accounts Payable tracking. Mirrors the
-// Customers/Receivables pattern (not yet built) so the two stay
-// symmetric when Customers is built next.
+// Customer directory + Accounts Receivable tracking. Mirrors the
+// Suppliers/Payables page exactly, reversed in direction:
 //
-// Ledger behavior:
-//   - A credit purchase: Debit Inventory/Stock Expense, Credit
-//     Accounts Payable. Increases what you owe.
-//   - A paid-in-full purchase: Debit Inventory/Stock Expense,
-//     Credit the payment account directly (no payable involved).
-//   - A payment against a supplier's balance: Debit Accounts
-//     Payable, Credit the payment account. Decreases what you owe.
-// All of this happens invisibly — the owner only ever taps
-// "Record Purchase" or "Record Payment" and fills in an amount.
+//   - A credit sale: Debit Accounts Receivable, Credit Sales Income.
+//     Increases what a customer owes you.
+//   - A paid-in-full sale: Debit the payment account, Credit Sales
+//     Income directly (no receivable involved).
+//   - A payment a customer makes against their balance: Debit the
+//     payment account, Credit Accounts Receivable. Decreases what
+//     they owe.
+// Same invisible-ledger principle as everywhere else: the owner
+// just taps "Record Sale" or "Record Payment" and enters an amount.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,62 +31,62 @@ String _peso(int cents) => '₱${NumberFormat('#,##0.00').format(cents / 100)}';
 // PROVIDERS
 // ============================================================
 
-final suppliersProvider = StreamProvider<List<Supplier>>((ref) {
+final customersProvider = StreamProvider<List<Customer>>((ref) {
   ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
-  return (db.select(db.suppliers)
+  return (db.select(db.customers)
         ..where(
-          (s) =>
-              s.businessId.equals(kCurrentBusinessId) & s.isActive.equals(true),
+          (c) =>
+              c.businessId.equals(kCurrentBusinessId) & c.isActive.equals(true),
         )
-        ..orderBy([(s) => OrderingTerm.asc(s.name)]))
+        ..orderBy([(c) => OrderingTerm.asc(c.name)]))
       .watch();
 });
 
-/// What you currently owe this supplier: sum of credit purchases
-/// minus sum of payments made against them.
-final supplierBalanceProvider = FutureProvider.family<int, String>((
+/// What a customer currently owes you: sum of credit sales minus
+/// sum of payments they've made against them.
+final customerBalanceProvider = FutureProvider.family<int, String>((
   ref,
-  supplierId,
+  customerId,
 ) async {
   ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
 
-  final purchasesRow = await db
+  final salesRow = await db
       .customSelect(
         '''
-    SELECT COALESCE(SUM(amount), 0) AS total FROM supplier_purchases
-    WHERE supplier_id = ? AND is_on_credit = 1
+    SELECT COALESCE(SUM(amount), 0) AS total FROM income_transactions
+    WHERE customer_id = ? AND payment_account_id IS NULL
     ''',
-        variables: [Variable.withString(supplierId)],
+        variables: [Variable.withString(customerId)],
       )
       .getSingle();
 
   final paymentsRow = await db
       .customSelect(
         '''
-    SELECT COALESCE(SUM(amount), 0) AS total FROM payable_payments
-    WHERE supplier_id = ?
+    SELECT COALESCE(SUM(amount), 0) AS total FROM receivable_payments
+    WHERE customer_id = ?
     ''',
-        variables: [Variable.withString(supplierId)],
+        variables: [Variable.withString(customerId)],
       )
       .getSingle();
 
-  return purchasesRow.read<int>('total') - paymentsRow.read<int>('total');
+  return salesRow.read<int>('total') - paymentsRow.read<int>('total');
 });
 
-/// Total payable across every supplier — for the overview hero.
-final totalPayableProvider = FutureProvider<int>((ref) async {
+/// Total receivable across every customer — for the overview hero.
+final totalReceivableProvider = FutureProvider<int>((ref) async {
   ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
 
-  final purchasesRow = await db
+  final salesRow = await db
       .customSelect(
         '''
-    SELECT COALESCE(SUM(sp.amount), 0) AS total
-    FROM supplier_purchases sp
-    JOIN suppliers s ON s.id = sp.supplier_id
-    WHERE s.business_id = ? AND sp.is_on_credit = 1
+    SELECT COALESCE(SUM(it.amount), 0) AS total
+    FROM income_transactions it
+    JOIN customers c ON c.id = it.customer_id
+    WHERE c.business_id = ? AND it.payment_account_id IS NULL AND it.customer_id IS NOT NULL
     ''',
         variables: [Variable.withString(kCurrentBusinessId)],
       )
@@ -96,48 +95,48 @@ final totalPayableProvider = FutureProvider<int>((ref) async {
   final paymentsRow = await db
       .customSelect(
         '''
-    SELECT COALESCE(SUM(pp.amount), 0) AS total
-    FROM payable_payments pp
-    JOIN suppliers s ON s.id = pp.supplier_id
-    WHERE s.business_id = ?
+    SELECT COALESCE(SUM(rp.amount), 0) AS total
+    FROM receivable_payments rp
+    JOIN customers c ON c.id = rp.customer_id
+    WHERE c.business_id = ?
     ''',
         variables: [Variable.withString(kCurrentBusinessId)],
       )
       .getSingle();
 
-  return purchasesRow.read<int>('total') - paymentsRow.read<int>('total');
+  return salesRow.read<int>('total') - paymentsRow.read<int>('total');
 });
 
-final supplierActivityProvider =
-    FutureProvider.family<List<_ActivityItem>, String>((ref, supplierId) async {
+final customerActivityProvider =
+    FutureProvider.family<List<_ActivityItem>, String>((ref, customerId) async {
       ref.watch(ledgerVersionProvider);
       final db = ref.watch(databaseProvider);
 
-      final purchases =
-          await (db.select(db.supplierPurchases)
-                ..where((p) => p.supplierId.equals(supplierId))
-                ..orderBy([(p) => OrderingTerm.desc(p.purchaseDate)]))
+      final sales =
+          await (db.select(db.incomeTransactions)
+                ..where((i) => i.customerId.equals(customerId))
+                ..orderBy([(i) => OrderingTerm.desc(i.txnDate)]))
               .get();
 
       final payments =
-          await (db.select(db.payablePayments)
-                ..where((p) => p.supplierId.equals(supplierId))
+          await (db.select(db.receivablePayments)
+                ..where((p) => p.customerId.equals(customerId))
                 ..orderBy([(p) => OrderingTerm.desc(p.paymentDate)]))
               .get();
 
       final items = <_ActivityItem>[
-        ...purchases.map(
-          (p) => _ActivityItem(
-            isPurchase: true,
-            amount: p.amount,
-            date: p.purchaseDate,
-            isOnCredit: p.isOnCredit,
-            notes: p.notes,
+        ...sales.map(
+          (s) => _ActivityItem(
+            isSale: true,
+            amount: s.amount,
+            date: s.txnDate,
+            isOnCredit: s.paymentAccountId == null,
+            notes: s.notes,
           ),
         ),
         ...payments.map(
           (p) => _ActivityItem(
-            isPurchase: false,
+            isSale: false,
             amount: p.amount,
             date: p.paymentDate,
             isOnCredit: false,
@@ -150,13 +149,13 @@ final supplierActivityProvider =
     });
 
 class _ActivityItem {
-  final bool isPurchase; // false = a payment
+  final bool isSale; // false = a payment received
   final int amount;
   final DateTime date;
   final bool isOnCredit;
   final String? notes;
   _ActivityItem({
-    required this.isPurchase,
+    required this.isSale,
     required this.amount,
     required this.date,
     required this.isOnCredit,
@@ -165,65 +164,60 @@ class _ActivityItem {
 }
 
 // ============================================================
-// SERVICE — writes the supplier record AND the matching ledger
-// entry together, so Cashflow/Dashboard stay correct automatically.
+// SERVICE
 // ============================================================
 
-class SupplierService {
+class CustomerService {
   final AppDatabase db;
-  SupplierService(this.db);
+  CustomerService(this.db);
 
-  Future<void> addSupplier({
+  Future<void> addCustomer({
     required String name,
     String? phone,
-    String? address,
     String? notes,
   }) async {
     await db
-        .into(db.suppliers)
+        .into(db.customers)
         .insert(
-          SuppliersCompanion.insert(
+          CustomersCompanion.insert(
             id: const Uuid().v4(),
             businessId: kCurrentBusinessId,
             name: name,
             phone: Value(phone),
-            address: Value(address),
             notes: Value(notes),
           ),
         );
   }
 
-  Future<void> updateSupplier(
-    Supplier supplier, {
+  Future<void> updateCustomer(
+    Customer customer, {
     required String name,
     String? phone,
-    String? address,
     String? notes,
   }) async {
     await (db.update(
-      db.suppliers,
-    )..where((s) => s.id.equals(supplier.id))).write(
-      SuppliersCompanion(
+      db.customers,
+    )..where((c) => c.id.equals(customer.id))).write(
+      CustomersCompanion(
         name: Value(name),
         phone: Value(phone),
-        address: Value(address),
         notes: Value(notes),
       ),
     );
   }
 
-  Future<void> deleteSupplier(String supplierId) async {
+  Future<void> deleteCustomer(String customerId) async {
     await (db.delete(
-      db.payablePayments,
-    )..where((p) => p.supplierId.equals(supplierId))).go();
-    await (db.delete(
-      db.supplierPurchases,
-    )..where((p) => p.supplierId.equals(supplierId))).go();
-    await (db.delete(db.suppliers)..where((s) => s.id.equals(supplierId))).go();
+      db.receivablePayments,
+    )..where((p) => p.customerId.equals(customerId))).go();
+    await (db.update(db.incomeTransactions)
+          ..where((i) => i.customerId.equals(customerId)))
+        .write(const IncomeTransactionsCompanion(customerId: Value(null)));
+    await (db.delete(db.customers)..where((c) => c.id.equals(customerId))).go();
   }
 
-  Future<void> recordPurchase({
-    required String supplierId,
+  Future<void> recordSale({
+    required String customerId,
     required int amount,
     required DateTime date,
     required bool isOnCredit,
@@ -232,9 +226,9 @@ class SupplierService {
   }) async {
     await db.transaction(() async {
       final entryId = const Uuid().v4();
-      final creditAccountId = isOnCredit
-          ? 'acc_ap_$kCurrentBusinessId'
-          : (paymentAccountId ?? 'acc_ap_$kCurrentBusinessId');
+      final debitAccountId = isOnCredit
+          ? 'acc_ar_$kCurrentBusinessId'
+          : (paymentAccountId ?? 'acc_ar_$kCurrentBusinessId');
 
       await db
           .into(db.journalEntries)
@@ -243,7 +237,7 @@ class SupplierService {
               id: entryId,
               businessId: kCurrentBusinessId,
               entryDate: date,
-              sourceType: 'supplier_purchase',
+              sourceType: 'income',
               description: Value(notes),
             ),
           );
@@ -253,7 +247,7 @@ class SupplierService {
             LedgerLinesCompanion.insert(
               id: const Uuid().v4(),
               journalEntryId: entryId,
-              accountId: 'acc_inv_exp_$kCurrentBusinessId',
+              accountId: debitAccountId,
               debit: Value(amount),
             ),
           );
@@ -263,21 +257,21 @@ class SupplierService {
             LedgerLinesCompanion.insert(
               id: const Uuid().v4(),
               journalEntryId: entryId,
-              accountId: creditAccountId,
+              accountId: 'acc_sales_$kCurrentBusinessId',
               credit: Value(amount),
             ),
           );
 
       await db
-          .into(db.supplierPurchases)
+          .into(db.incomeTransactions)
           .insert(
-            SupplierPurchasesCompanion.insert(
+            IncomeTransactionsCompanion.insert(
               id: const Uuid().v4(),
               businessId: kCurrentBusinessId,
-              supplierId: supplierId,
-              purchaseDate: date,
+              txnDate: date,
+              categoryId: 'sale_$kCurrentBusinessId',
               amount: amount,
-              isOnCredit: Value(isOnCredit),
+              customerId: Value(customerId),
               paymentAccountId: Value(isOnCredit ? null : paymentAccountId),
               notes: Value(notes),
               status: const Value('completed'),
@@ -287,7 +281,7 @@ class SupplierService {
   }
 
   Future<void> recordPayment({
-    required String supplierId,
+    required String customerId,
     required int amount,
     required String paymentAccountId,
     required DateTime date,
@@ -303,7 +297,7 @@ class SupplierService {
               id: entryId,
               businessId: kCurrentBusinessId,
               entryDate: date,
-              sourceType: 'payable_payment',
+              sourceType: 'receivable_payment',
               description: Value(notes),
             ),
           );
@@ -313,7 +307,7 @@ class SupplierService {
             LedgerLinesCompanion.insert(
               id: const Uuid().v4(),
               journalEntryId: entryId,
-              accountId: 'acc_ap_$kCurrentBusinessId',
+              accountId: paymentAccountId,
               debit: Value(amount),
             ),
           );
@@ -323,18 +317,18 @@ class SupplierService {
             LedgerLinesCompanion.insert(
               id: const Uuid().v4(),
               journalEntryId: entryId,
-              accountId: paymentAccountId,
+              accountId: 'acc_ar_$kCurrentBusinessId',
               credit: Value(amount),
             ),
           );
 
       await db
-          .into(db.payablePayments)
+          .into(db.receivablePayments)
           .insert(
-            PayablePaymentsCompanion.insert(
+            ReceivablePaymentsCompanion.insert(
               id: const Uuid().v4(),
               businessId: kCurrentBusinessId,
-              supplierId: supplierId,
+              customerId: customerId,
               amount: amount,
               paymentAccountId: paymentAccountId,
               paymentDate: date,
@@ -345,22 +339,34 @@ class SupplierService {
   }
 }
 
-final supplierServiceProvider = Provider<SupplierService>((ref) {
-  return SupplierService(ref.watch(databaseProvider));
+final customerServiceProvider = Provider<CustomerService>((ref) {
+  return CustomerService(ref.watch(databaseProvider));
+});
+
+final _paymentAccountsProvider = FutureProvider<List<Account>>((ref) {
+  ref.watch(ledgerVersionProvider);
+  final db = ref.watch(databaseProvider);
+  return (db.select(db.accounts)..where(
+        (a) =>
+            a.businessId.equals(kCurrentBusinessId) &
+            a.isPaymentAccount.equals(true) &
+            a.isActive.equals(true),
+      ))
+      .get();
 });
 
 // ============================================================
-// PAGE — Suppliers list
+// PAGE — Customers list
 // ============================================================
 
-class SuppliersPage extends ConsumerStatefulWidget {
-  const SuppliersPage({super.key});
+class CustomersPage extends ConsumerStatefulWidget {
+  const CustomersPage({super.key});
 
   @override
-  ConsumerState<SuppliersPage> createState() => _SuppliersPageState();
+  ConsumerState<CustomersPage> createState() => _CustomersPageState();
 }
 
-class _SuppliersPageState extends ConsumerState<SuppliersPage> {
+class _CustomersPageState extends ConsumerState<CustomersPage> {
   final _searchController = TextEditingController();
   String _query = '';
 
@@ -370,17 +376,17 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     super.dispose();
   }
 
-  List<Supplier> _filter(List<Supplier> suppliers) {
+  List<Customer> _filter(List<Customer> customers) {
     final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return suppliers;
-    return suppliers.where((s) => s.name.toLowerCase().contains(q)).toList();
+    if (q.isEmpty) return customers;
+    return customers.where((c) => c.name.toLowerCase().contains(q)).toList();
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final suppliersAsync = ref.watch(suppliersProvider);
-    final totalPayableAsync = ref.watch(totalPayableProvider);
+    final customersAsync = ref.watch(customersProvider);
+    final totalReceivableAsync = ref.watch(totalReceivableProvider);
 
     return Scaffold(
       backgroundColor: scheme.surface,
@@ -393,7 +399,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Suppliers',
+              'Customers',
               style: TextStyle(
                 fontSize: 21,
                 fontWeight: FontWeight.w800,
@@ -402,36 +408,36 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
             ),
             SizedBox(height: 2),
             Text(
-              'Purchases & payables',
+              'Sales & receivables',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
             ),
           ],
         ),
       ),
-      body: suppliersAsync.when(
+      body: customersAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorState(
-          message: 'Unable to load suppliers.',
-          onRetry: () => ref.invalidate(suppliersProvider),
+          message: 'Unable to load customers.',
+          onRetry: () => ref.invalidate(customersProvider),
         ),
-        data: (suppliers) {
-          final filtered = _filter(suppliers);
+        data: (customers) {
+          final filtered = _filter(customers);
           return CustomScrollView(
             slivers: [
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate([
-                    if (suppliers.isEmpty)
+                    if (customers.isEmpty)
                       SizedBox(
                         height: MediaQuery.sizeOf(context).height * 0.6,
-                        child: _EmptyState(onAdd: _openAddSupplierSheet),
+                        child: _EmptyState(onAdd: _openAddCustomerSheet),
                       )
                     else ...[
-                      totalPayableAsync.when(
-                        data: (total) => _PayableOverviewCard(
-                          totalPayable: total,
-                          supplierCount: suppliers.length,
+                      totalReceivableAsync.when(
+                        data: (total) => _ReceivableOverviewCard(
+                          totalReceivable: total,
+                          customerCount: customers.length,
                         ),
                         loading: () => const _HeroSkeleton(),
                         error: (_, __) => const SizedBox.shrink(),
@@ -451,7 +457,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
                           Expanded(
                             child: Text(
                               _query.trim().isEmpty
-                                  ? 'All Suppliers'
+                                  ? 'All Customers'
                                   : 'Search results',
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w800),
@@ -482,16 +488,16 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
                           padding: const EdgeInsets.symmetric(vertical: 32),
                           child: Center(
                             child: Text(
-                              'No suppliers match "$_query".',
+                              'No customers match "$_query".',
                               style: TextStyle(color: scheme.onSurfaceVariant),
                             ),
                           ),
                         )
                       else
                         ...filtered.map(
-                          (s) => Padding(
+                          (c) => Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: _SupplierCard(supplier: s),
+                            child: _CustomerCard(customer: c),
                           ),
                         ),
                     ],
@@ -504,20 +510,20 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
       ),
       floatingActionButton: FloatingActionButton(
         heroTag: null,
-        onPressed: _openAddSupplierSheet,
+        onPressed: _openAddCustomerSheet,
         backgroundColor: AppColors.primary,
         child: const Icon(Icons.add_rounded, color: Colors.white),
       ),
     );
   }
 
-  void _openAddSupplierSheet() {
+  void _openAddCustomerSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const _SupplierForm(),
+      builder: (_) => const _CustomerForm(),
     );
   }
 }
@@ -526,12 +532,12 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
 // OVERVIEW HERO — brand gradient, adaptive via LayoutBuilder
 // ============================================================
 
-class _PayableOverviewCard extends StatelessWidget {
-  final int totalPayable;
-  final int supplierCount;
-  const _PayableOverviewCard({
-    required this.totalPayable,
-    required this.supplierCount,
+class _ReceivableOverviewCard extends StatelessWidget {
+  final int totalReceivable;
+  final int customerCount;
+  const _ReceivableOverviewCard({
+    required this.totalReceivable,
+    required this.customerCount,
   });
 
   @override
@@ -542,7 +548,7 @@ class _PayableOverviewCard extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [AppColors.primary, AppColors.primaryLight],
+          colors: [AppColors.primary, AppColors.accent],
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
@@ -573,7 +579,7 @@ class _PayableOverviewCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
-                        Icons.local_shipping_outlined,
+                        Icons.people_outline_rounded,
                         color: Colors.white,
                         size: 18,
                       ),
@@ -581,7 +587,7 @@ class _PayableOverviewCard extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Total Payable',
+                        'Total Receivable',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.85),
                           fontSize: 13,
@@ -594,7 +600,7 @@ class _PayableOverviewCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  totalPayable > 0 ? _peso(totalPayable) : '₱0.00',
+                  totalReceivable > 0 ? _peso(totalReceivable) : '₱0.00',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: compact ? 26 : 32,
@@ -604,9 +610,9 @@ class _PayableOverviewCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  totalPayable > 0
-                      ? 'Across $supplierCount supplier${supplierCount == 1 ? '' : 's'}'
-                      : 'All settled up',
+                  totalReceivable > 0
+                      ? 'Owed by $customerCount customer${customerCount == 1 ? '' : 's'}'
+                      : 'Nothing outstanding',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.75),
                     fontSize: 12,
@@ -657,7 +663,7 @@ class _SearchField extends StatelessWidget {
       controller: controller,
       onChanged: onChanged,
       decoration: InputDecoration(
-        hintText: 'Search suppliers...',
+        hintText: 'Search customers...',
         prefixIcon: const Icon(Icons.search_rounded),
         suffixIcon: controller.text.isNotEmpty
             ? IconButton(
@@ -677,18 +683,17 @@ class _SearchField extends StatelessWidget {
 }
 
 // ============================================================
-// SUPPLIER CARD — fully adaptive: text areas use Expanded/Flexible
-// with ellipsis so nothing can overflow at any width.
+// CUSTOMER CARD — adaptive: Expanded/Flexible + ellipsis throughout
 // ============================================================
 
-class _SupplierCard extends ConsumerWidget {
-  final Supplier supplier;
-  const _SupplierCard({required this.supplier});
+class _CustomerCard extends ConsumerWidget {
+  final Customer customer;
+  const _CustomerCard({required this.customer});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final balanceAsync = ref.watch(supplierBalanceProvider(supplier.id));
+    final balanceAsync = ref.watch(customerBalanceProvider(customer.id));
 
     return Material(
       color: scheme.surfaceContainerLow,
@@ -698,7 +703,7 @@ class _SupplierCard extends ConsumerWidget {
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => SupplierDetailPage(supplier: supplier),
+            builder: (_) => CustomerDetailPage(customer: customer),
           ),
         ),
         child: Padding(
@@ -709,14 +714,14 @@ class _SupplierCard extends ConsumerWidget {
                 width: 50,
                 height: 50,
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.10),
+                  color: AppColors.accent.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(15),
                 ),
                 alignment: Alignment.center,
                 child: Text(
-                  supplier.name.trim().isEmpty
+                  customer.name.trim().isEmpty
                       ? '?'
-                      : supplier.name.trim()[0].toUpperCase(),
+                      : customer.name.trim()[0].toUpperCase(),
                   style: const TextStyle(
                     color: AppColors.primary,
                     fontWeight: FontWeight.w800,
@@ -730,7 +735,7 @@ class _SupplierCard extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      supplier.name,
+                      customer.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -738,19 +743,19 @@ class _SupplierCard extends ConsumerWidget {
                         fontSize: 15,
                       ),
                     ),
-                    if (supplier.phone != null || supplier.address != null) ...[
+                    if (customer.phone != null) ...[
                       const SizedBox(height: 3),
                       Row(
                         children: [
                           Icon(
-                            Icons.location_on_outlined,
+                            Icons.call_outlined,
                             size: 12,
                             color: scheme.onSurfaceVariant,
                           ),
                           const SizedBox(width: 3),
                           Flexible(
                             child: Text(
-                              supplier.phone ?? supplier.address ?? '',
+                              customer.phone!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -786,22 +791,22 @@ class _BalanceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final owed = balance > 0;
+    final owes = balance > 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          owed ? _peso(balance) : 'Settled',
+          owes ? _peso(balance) : 'Settled',
           style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 13,
-            color: owed ? Colors.redAccent : Colors.green,
+            color: owes ? AppColors.accent : Colors.green,
           ),
         ),
-        if (owed)
+        if (owes)
           Text(
-            'owed',
+            'owes you',
             style: TextStyle(
               fontSize: 10,
               color: Theme.of(context).colorScheme.outline,
@@ -833,25 +838,25 @@ class _EmptyState extends StatelessWidget {
               width: 76,
               height: 76,
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.10),
+                color: AppColors.accent.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
-                Icons.local_shipping_outlined,
+                Icons.people_outline_rounded,
                 size: 34,
                 color: AppColors.primary,
               ),
             ),
             const SizedBox(height: 18),
             Text(
-              'No suppliers yet',
+              'No customers yet',
               style: Theme.of(
                 context,
               ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 7),
             Text(
-              'Add your suppliers to track purchases and what you owe.',
+              'Add your customers to track sales and what they owe you.',
               textAlign: TextAlign.center,
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
@@ -860,7 +865,7 @@ class _EmptyState extends StatelessWidget {
               onPressed: onAdd,
               style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
               icon: const Icon(Icons.add_rounded),
-              label: const Text('Add supplier'),
+              label: const Text('Add customer'),
             ),
           ],
         ),
@@ -902,27 +907,24 @@ class _ErrorState extends StatelessWidget {
 }
 
 // ============================================================
-// ADD / EDIT SUPPLIER FORM
+// ADD / EDIT CUSTOMER FORM
 // ============================================================
 
-class _SupplierForm extends ConsumerStatefulWidget {
-  final Supplier? existing;
-  const _SupplierForm({this.existing});
+class _CustomerForm extends ConsumerStatefulWidget {
+  final Customer? existing;
+  const _CustomerForm({this.existing});
 
   @override
-  ConsumerState<_SupplierForm> createState() => _SupplierFormState();
+  ConsumerState<_CustomerForm> createState() => _CustomerFormState();
 }
 
-class _SupplierFormState extends ConsumerState<_SupplierForm> {
+class _CustomerFormState extends ConsumerState<_CustomerForm> {
   final _formKey = GlobalKey<FormState>();
   late final _nameController = TextEditingController(
     text: widget.existing?.name ?? '',
   );
   late final _phoneController = TextEditingController(
     text: widget.existing?.phone ?? '',
-  );
-  late final _addressController = TextEditingController(
-    text: widget.existing?.address ?? '',
   );
   late final _notesController = TextEditingController(
     text: widget.existing?.notes ?? '',
@@ -933,7 +935,6 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
-    _addressController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -941,38 +942,32 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
-    final service = ref.read(supplierServiceProvider);
+    final service = ref.read(customerServiceProvider);
 
     try {
       if (widget.existing == null) {
-        await service.addSupplier(
+        await service.addCustomer(
           name: _nameController.text.trim(),
           phone: _phoneController.text.trim().isEmpty
               ? null
               : _phoneController.text.trim(),
-          address: _addressController.text.trim().isEmpty
-              ? null
-              : _addressController.text.trim(),
           notes: _notesController.text.trim().isEmpty
               ? null
               : _notesController.text.trim(),
         );
       } else {
-        await service.updateSupplier(
+        await service.updateCustomer(
           widget.existing!,
           name: _nameController.text.trim(),
           phone: _phoneController.text.trim().isEmpty
               ? null
               : _phoneController.text.trim(),
-          address: _addressController.text.trim().isEmpty
-              ? null
-              : _addressController.text.trim(),
           notes: _notesController.text.trim().isEmpty
               ? null
               : _notesController.text.trim(),
         );
       }
-      ref.invalidate(suppliersProvider);
+      ref.invalidate(customersProvider);
       if (mounted) Navigator.pop(context);
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -1024,11 +1019,11 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                           width: 46,
                           height: 46,
                           decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.10),
+                            color: AppColors.accent.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: const Icon(
-                            Icons.local_shipping_outlined,
+                            Icons.person_add_alt_rounded,
                             color: AppColors.primary,
                           ),
                         ),
@@ -1036,8 +1031,8 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                         Expanded(
                           child: Text(
                             widget.existing == null
-                                ? 'Add Supplier'
-                                : 'Edit Supplier',
+                                ? 'Add Customer'
+                                : 'Edit Customer',
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
@@ -1052,11 +1047,11 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                       controller: _nameController,
                       textCapitalization: TextCapitalization.words,
                       decoration: const InputDecoration(
-                        labelText: 'Supplier name',
-                        prefixIcon: Icon(Icons.storefront_outlined),
+                        labelText: 'Customer name',
+                        prefixIcon: Icon(Icons.person_outline_rounded),
                       ),
                       validator: (v) => (v == null || v.trim().isEmpty)
-                          ? 'Enter a supplier name'
+                          ? 'Enter a customer name'
                           : null,
                     ),
                     const SizedBox(height: 12),
@@ -1066,15 +1061,6 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                       decoration: const InputDecoration(
                         labelText: 'Phone (optional)',
                         prefixIcon: Icon(Icons.call_outlined),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _addressController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(
-                        labelText: 'Address (optional)',
-                        prefixIcon: Icon(Icons.location_on_outlined),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -1106,8 +1092,8 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                               )
                             : Text(
                                 widget.existing == null
-                                    ? 'Save Supplier'
-                                    : 'Update Supplier',
+                                    ? 'Save Customer'
+                                    : 'Update Customer',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -1126,23 +1112,23 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
 }
 
 // ============================================================
-// SUPPLIER DETAIL PAGE
+// CUSTOMER DETAIL PAGE
 // ============================================================
 
-class SupplierDetailPage extends ConsumerWidget {
-  final Supplier supplier;
-  const SupplierDetailPage({super.key, required this.supplier});
+class CustomerDetailPage extends ConsumerWidget {
+  final Customer customer;
+  const CustomerDetailPage({super.key, required this.customer});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final balanceAsync = ref.watch(supplierBalanceProvider(supplier.id));
-    final activityAsync = ref.watch(supplierActivityProvider(supplier.id));
+    final balanceAsync = ref.watch(customerBalanceProvider(customer.id));
+    final activityAsync = ref.watch(customerActivityProvider(customer.id));
 
     return Scaffold(
       backgroundColor: scheme.surface,
       appBar: AppBar(
-        title: Text(supplier.name, overflow: TextOverflow.ellipsis),
+        title: Text(customer.name, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),
@@ -1152,7 +1138,7 @@ class SupplierDetailPage extends ConsumerWidget {
               isScrollControlled: true,
               useSafeArea: true,
               backgroundColor: Colors.transparent,
-              builder: (_) => _SupplierForm(existing: supplier),
+              builder: (_) => _CustomerForm(existing: customer),
             ),
           ),
           PopupMenuButton<String>(
@@ -1166,7 +1152,7 @@ class SupplierDetailPage extends ConsumerWidget {
                   children: [
                     Icon(Icons.delete_outline),
                     SizedBox(width: 10),
-                    Text('Delete supplier'),
+                    Text('Delete customer'),
                   ],
                 ),
               ),
@@ -1179,7 +1165,7 @@ class SupplierDetailPage extends ConsumerWidget {
         children: [
           balanceAsync.when(
             data: (balance) =>
-                _SupplierBalanceHero(supplier: supplier, balance: balance),
+                _CustomerBalanceHero(customer: customer, balance: balance),
             loading: () => const _HeroSkeleton(),
             error: (_, __) => const SizedBox.shrink(),
           ),
@@ -1187,57 +1173,40 @@ class SupplierDetailPage extends ConsumerWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final stacked = constraints.maxWidth < 340;
-
-              final purchaseButton = OutlinedButton.icon(
-                onPressed: () => _openPurchaseSheet(context, ref),
-                icon: const Icon(Icons.add_shopping_cart_outlined, size: 18),
-                label: const Text(
-                  'Record Purchase',
-                  overflow: TextOverflow.ellipsis,
+              final buttons = [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openSaleSheet(context, ref),
+                    icon: const Icon(Icons.point_of_sale_outlined, size: 18),
+                    label: const Text('Record Sale'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                      side: const BorderSide(color: AppColors.primary),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
                 ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.primary,
-                  side: const BorderSide(color: AppColors.primary),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                SizedBox(width: stacked ? 0 : 12, height: stacked ? 10 : 0),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _openPaymentSheet(context, ref),
+                    icon: const Icon(Icons.payments_outlined, size: 18),
+                    label: const Text('Record Payment'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
                 ),
-              );
-
-              final paymentButton = FilledButton.icon(
-                onPressed: () => _openPaymentSheet(context, ref),
-                icon: const Icon(Icons.payments_outlined, size: 18),
-                label: const Text(
-                  'Record Payment',
-                  overflow: TextOverflow.ellipsis,
-                ),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-              );
-
-              if (stacked) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    purchaseButton,
-                    const SizedBox(height: 10),
-                    paymentButton,
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  Expanded(child: purchaseButton),
-                  const SizedBox(width: 12),
-                  Expanded(child: paymentButton),
-                ],
-              );
+              ];
+              return stacked
+                  ? Column(children: [buttons[0], buttons[1], buttons[2]])
+                  : Row(children: buttons);
             },
           ),
           const SizedBox(height: 24),
-          if (supplier.phone != null || supplier.address != null) ...[
-            _InfoCard(supplier: supplier),
+          if (customer.phone != null) ...[
+            _InfoCard(customer: customer),
             const SizedBox(height: 24),
           ],
           Text(
@@ -1254,7 +1223,7 @@ class SupplierDetailPage extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Center(
                     child: Text(
-                      'No purchases or payments recorded yet.',
+                      'No sales or payments recorded yet.',
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ),
@@ -1279,13 +1248,13 @@ class SupplierDetailPage extends ConsumerWidget {
     );
   }
 
-  void _openPurchaseSheet(BuildContext context, WidgetRef ref) {
+  void _openSaleSheet(BuildContext context, WidgetRef ref) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _RecordPurchaseSheet(supplier: supplier),
+      builder: (_) => _RecordSaleSheet(customer: customer),
     );
   }
 
@@ -1295,7 +1264,7 @@ class SupplierDetailPage extends ConsumerWidget {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _RecordPaymentSheet(supplier: supplier),
+      builder: (_) => _RecordPaymentSheet(customer: customer),
     );
   }
 
@@ -1304,9 +1273,9 @@ class SupplierDetailPage extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Delete this supplier?'),
+        title: const Text('Delete this customer?'),
         content: Text(
-          'This removes "${supplier.name}" and all its purchase/payment history.',
+          'This removes "${customer.name}" and their payment history. Past sales stay in Journal Entry, unlinked from any customer.',
         ),
         actions: [
           TextButton(
@@ -1322,27 +1291,27 @@ class SupplierDetailPage extends ConsumerWidget {
       ),
     );
     if (confirmed != true) return;
-    await ref.read(supplierServiceProvider).deleteSupplier(supplier.id);
-    ref.invalidate(suppliersProvider);
+    await ref.read(customerServiceProvider).deleteCustomer(customer.id);
+    ref.invalidate(customersProvider);
     if (context.mounted) Navigator.pop(context);
   }
 }
 
-class _SupplierBalanceHero extends StatelessWidget {
-  final Supplier supplier;
+class _CustomerBalanceHero extends StatelessWidget {
+  final Customer customer;
   final int balance;
-  const _SupplierBalanceHero({required this.supplier, required this.balance});
+  const _CustomerBalanceHero({required this.customer, required this.balance});
 
   @override
   Widget build(BuildContext context) {
-    final owed = balance > 0;
+    final owes = balance > 0;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: owed
-              ? [AppColors.primary, AppColors.primaryLight]
+          colors: owes
+              ? [AppColors.primary, AppColors.accent]
               : [Colors.green.shade600, Colors.green.shade400],
         ),
         borderRadius: BorderRadius.circular(24),
@@ -1351,7 +1320,7 @@ class _SupplierBalanceHero extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You Owe',
+            'Owes You',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.85),
               fontSize: 13,
@@ -1359,7 +1328,7 @@ class _SupplierBalanceHero extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            owed ? _peso(balance) : '₱0.00',
+            owes ? _peso(balance) : '₱0.00',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 30,
@@ -1369,9 +1338,9 @@ class _SupplierBalanceHero extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            owed
-                ? 'to ${supplier.name}'
-                : 'All settled up with ${supplier.name}',
+            owes
+                ? 'from ${customer.name}'
+                : 'All settled up with ${customer.name}',
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.8),
@@ -1385,8 +1354,8 @@ class _SupplierBalanceHero extends StatelessWidget {
 }
 
 class _InfoCard extends StatelessWidget {
-  final Supplier supplier;
-  const _InfoCard({required this.supplier});
+  final Customer customer;
+  const _InfoCard({required this.customer});
 
   @override
   Widget build(BuildContext context) {
@@ -1397,38 +1366,13 @@ class _InfoCard extends StatelessWidget {
         color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(18),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          if (supplier.phone != null)
-            Row(
-              children: [
-                Icon(
-                  Icons.call_outlined,
-                  size: 16,
-                  color: scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(supplier.phone!, overflow: TextOverflow.ellipsis),
-                ),
-              ],
-            ),
-          if (supplier.phone != null && supplier.address != null)
-            const SizedBox(height: 8),
-          if (supplier.address != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.location_on_outlined,
-                  size: 16,
-                  color: scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 8),
-                Expanded(child: Text(supplier.address!)),
-              ],
-            ),
+          Icon(Icons.call_outlined, size: 16, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(customer.phone ?? '', overflow: TextOverflow.ellipsis),
+          ),
         ],
       ),
     );
@@ -1442,13 +1386,13 @@ class _ActivityTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = item.isPurchase ? Colors.redAccent : Colors.green;
-    final icon = item.isPurchase
-        ? Icons.add_shopping_cart_outlined
+    final color = item.isSale ? AppColors.accent : Colors.green;
+    final icon = item.isSale
+        ? Icons.point_of_sale_outlined
         : Icons.payments_outlined;
-    final label = item.isPurchase
-        ? (item.isOnCredit ? 'Purchase (credit)' : 'Purchase (paid)')
-        : 'Payment';
+    final label = item.isSale
+        ? (item.isOnCredit ? 'Sale (credit)' : 'Sale (paid)')
+        : 'Payment received';
 
     return Container(
       padding: const EdgeInsets.all(13),
@@ -1462,7 +1406,7 @@ class _ActivityTile extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
+              color: color.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, size: 17, color: color),
@@ -1490,10 +1434,10 @@ class _ActivityTile extends StatelessWidget {
             ),
           ),
           Text(
-            '${item.isPurchase ? '+' : '-'}${_peso(item.amount)}',
+            '${item.isSale ? '+' : '-'}${_peso(item.amount)}',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: item.isPurchase ? Colors.redAccent : Colors.green,
+              color: item.isSale ? AppColors.accent : Colors.green,
               fontSize: 13,
             ),
           ),
@@ -1504,19 +1448,18 @@ class _ActivityTile extends StatelessWidget {
 }
 
 // ============================================================
-// RECORD PURCHASE SHEET
+// RECORD SALE SHEET
 // ============================================================
 
-class _RecordPurchaseSheet extends ConsumerStatefulWidget {
-  final Supplier supplier;
-  const _RecordPurchaseSheet({required this.supplier});
+class _RecordSaleSheet extends ConsumerStatefulWidget {
+  final Customer customer;
+  const _RecordSaleSheet({required this.customer});
 
   @override
-  ConsumerState<_RecordPurchaseSheet> createState() =>
-      _RecordPurchaseSheetState();
+  ConsumerState<_RecordSaleSheet> createState() => _RecordSaleSheetState();
 }
 
-class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
+class _RecordSaleSheetState extends ConsumerState<_RecordSaleSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
   bool _isOnCredit = true;
@@ -1559,15 +1502,12 @@ class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                'Record Purchase',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
+              const Text(
+                'Record Sale',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
               Text(
-                'from ${widget.supplier.name}',
+                'to ${widget.customer.name}',
                 style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
               ),
               const SizedBox(height: 20),
@@ -1583,15 +1523,15 @@ class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              Material(
-                child: SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('On credit'),
-                  subtitle: const Text('Not paid yet — adds to what you owe'),
-                  value: _isOnCredit,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: (v) => setState(() => _isOnCredit = v),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('On credit'),
+                subtitle: const Text(
+                  'Customer hasn\'t paid yet — adds to what they owe',
                 ),
+                value: _isOnCredit,
+                activeThumbColor: AppColors.primary,
+                onChanged: (v) => setState(() => _isOnCredit = v),
               ),
               if (!_isOnCredit) ...[
                 const SizedBox(height: 8),
@@ -1653,7 +1593,7 @@ class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
                           ),
                         )
                       : const Text(
-                          'Save Purchase',
+                          'Save Sale',
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                 ),
@@ -1671,10 +1611,10 @@ class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
     if (!_isOnCredit && _paymentAccountId == null) return;
 
     setState(() => _saving = true);
-    final service = ref.read(supplierServiceProvider);
+    final service = ref.read(customerServiceProvider);
     try {
-      await service.recordPurchase(
-        supplierId: widget.supplier.id,
+      await service.recordSale(
+        customerId: widget.customer.id,
         amount: (amount * 100).round(),
         date: DateTime.now(),
         isOnCredit: _isOnCredit,
@@ -1696,8 +1636,8 @@ class _RecordPurchaseSheetState extends ConsumerState<_RecordPurchaseSheet> {
 // ============================================================
 
 class _RecordPaymentSheet extends ConsumerStatefulWidget {
-  final Supplier supplier;
-  const _RecordPaymentSheet({required this.supplier});
+  final Customer customer;
+  const _RecordPaymentSheet({required this.customer});
 
   @override
   ConsumerState<_RecordPaymentSheet> createState() =>
@@ -1721,7 +1661,7 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final accountsAsync = ref.watch(_paymentAccountsProvider);
-    final balanceAsync = ref.watch(supplierBalanceProvider(widget.supplier.id));
+    final balanceAsync = ref.watch(customerBalanceProvider(widget.customer.id));
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -1747,18 +1687,15 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
+              const Text(
                 'Record Payment',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
               balanceAsync.when(
                 data: (balance) => Text(
                   balance > 0
-                      ? 'You owe ${_peso(balance)} to ${widget.supplier.name}'
-                      : 'to ${widget.supplier.name}',
+                      ? '${widget.customer.name} owes ${_peso(balance)}'
+                      : 'from ${widget.customer.name}',
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 13,
@@ -1781,7 +1718,7 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Paid via',
+                'Received via',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
                   color: scheme.onSurfaceVariant,
@@ -1854,10 +1791,10 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
     if (amount == null || amount <= 0 || _paymentAccountId == null) return;
 
     setState(() => _saving = true);
-    final service = ref.read(supplierServiceProvider);
+    final service = ref.read(customerServiceProvider);
     try {
       await service.recordPayment(
-        supplierId: widget.supplier.id,
+        customerId: widget.customer.id,
         amount: (amount * 100).round(),
         paymentAccountId: _paymentAccountId!,
         date: DateTime.now(),
@@ -1872,15 +1809,3 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
     }
   }
 }
-
-final _paymentAccountsProvider = FutureProvider<List<Account>>((ref) {
-  ref.watch(ledgerVersionProvider);
-  final db = ref.watch(databaseProvider);
-  return (db.select(db.accounts)..where(
-        (a) =>
-            a.businessId.equals(kCurrentBusinessId) &
-            a.isPaymentAccount.equals(true) &
-            a.isActive.equals(true),
-      ))
-      .get();
-});

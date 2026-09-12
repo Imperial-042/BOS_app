@@ -31,6 +31,17 @@ part 'app_database.g.dart';
 class Businesses extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
+  TextColumn get ownerName => text().nullable()();
+  TextColumn get managerName => text().nullable()();
+  TextColumn get businessCategory => text().nullable()();
+  TextColumn get addressCountry => text().nullable()();
+  TextColumn get addressProvince => text().nullable()();
+  TextColumn get addressCity => text().nullable()();
+  TextColumn get addressBarangay => text().nullable()();
+  TextColumn get addressZipCode => text().nullable()();
+  IntColumn get startingCapital => integer().withDefault(const Constant(0))();
+  TextColumn get startingCapitalAccountId => text().nullable()();
+  BoolColumn get isCurrent => boolean().withDefault(const Constant(false))();
   TextColumn get currency => text().withDefault(const Constant('PHP'))();
   TextColumn get ownerUserId => text()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
@@ -244,7 +255,11 @@ class Supplies extends Table {
   TextColumn get id => text()();
   TextColumn get businessId => text().references(Businesses, #id)();
   TextColumn get name => text()();
+  TextColumn get brand => text().nullable()();
+  RealColumn get unitQuantity => real().nullable()();
   TextColumn get unit => text().nullable()();
+  TextColumn get lastStoreName => text().nullable()();
+  TextColumn get lastStoreAddress => text().nullable()();
   IntColumn get currentPrice => integer()();
   TextColumn get notes => text().nullable()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
@@ -291,6 +306,9 @@ class ShoppingCartItems extends Table {
       text().references(ShoppingCarts, #id, onDelete: KeyAction.cascade)();
   TextColumn get supplyId => text().nullable().references(Supplies, #id)();
   TextColumn get itemName => text()();
+  TextColumn get brand => text().nullable()();
+  RealColumn get unitQuantity => real().nullable()();
+  TextColumn get unit => text().nullable()();
   IntColumn get unitPrice => integer()();
   IntColumn get quantity => integer().withDefault(const Constant(1))();
   IntColumn get lineTotal => integer()();
@@ -349,16 +367,45 @@ class AppDatabase extends _$AppDatabase {
   // AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (Migrator m) async {
       await m.createAll();
     },
-    // When schemaVersion increases later (e.g. adding Employees/Attendance
-    // for Phase 1.5), add an onUpgrade block here with StepByStep migrations
-    // rather than dropping/recreating tables.
+    onUpgrade: (Migrator m, int from, int to) async {
+      if (from < 2) {
+        await m.addColumn(supplies, supplies.brand);
+        await m.addColumn(supplies, supplies.unitQuantity);
+        await m.addColumn(supplies, supplies.lastStoreName);
+        await m.addColumn(supplies, supplies.lastStoreAddress);
+        await m.addColumn(shoppingCartItems, shoppingCartItems.brand);
+        await m.addColumn(shoppingCartItems, shoppingCartItems.unitQuantity);
+        await m.addColumn(shoppingCartItems, shoppingCartItems.unit);
+      }
+      if (from < 3) {
+        await m.addColumn(businesses, businesses.ownerName);
+        await m.addColumn(businesses, businesses.businessCategory);
+      }
+      if (from < 4) {
+        await m.addColumn(businesses, businesses.addressCountry);
+        await m.addColumn(businesses, businesses.addressProvince);
+        await m.addColumn(businesses, businesses.addressCity);
+        await m.addColumn(businesses, businesses.addressZipCode);
+        await m.addColumn(businesses, businesses.startingCapital);
+        await m.addColumn(businesses, businesses.startingCapitalAccountId);
+      }
+      if (from < 5) {
+        await m.addColumn(businesses, businesses.isCurrent);
+      }
+      if (from < 6) {
+        await m.addColumn(businesses, businesses.managerName);
+      }
+      if (from < 7) {
+        await m.addColumn(businesses, businesses.addressBarangay);
+      }
+    },
   );
 
   /// Seeds the default chart of accounts + starter categories for a newly

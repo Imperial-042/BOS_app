@@ -9,7 +9,11 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 
 import '../../../transactions/presentation/screens/transaction_page.dart'
-    show ledgerVersionProvider, kCurrentBusinessId, transactionServiceProvider;
+    show
+        ledgerVersionProvider,
+        kCurrentBusinessId,
+        paymentAccountsProvider,
+        transactionServiceProvider;
 
 // ============================================================================
 // HELPERS
@@ -37,6 +41,7 @@ String _capitalize(String value) {
 // ============================================================================
 
 final suppliesProvider = StreamProvider<List<Supply>>((ref) {
+  ref.watch(ledgerVersionProvider);
   final db = ref.watch(databaseProvider);
 
   return (db.select(db.supplies)
@@ -48,11 +53,65 @@ final suppliesProvider = StreamProvider<List<Supply>>((ref) {
       .watch();
 });
 
+class PurchaseHistoryCheckout {
+  final ShoppingCart cart;
+  final List<ShoppingCartItem> items;
+
+  const PurchaseHistoryCheckout({required this.cart, required this.items});
+}
+
+final purchaseHistoryProvider = StreamProvider<List<PurchaseHistoryCheckout>>((
+  ref,
+) {
+  ref.watch(ledgerVersionProvider);
+  final db = ref.watch(databaseProvider);
+  final query =
+      db.select(db.shoppingCarts).join([
+          innerJoin(
+            db.shoppingCartItems,
+            db.shoppingCartItems.cartId.equalsExp(db.shoppingCarts.id),
+          ),
+        ])
+        ..where(db.shoppingCarts.businessId.equals(kCurrentBusinessId))
+        ..orderBy([
+          OrderingTerm(
+            expression: db.shoppingCarts.cartDate,
+            mode: OrderingMode.desc,
+          ),
+          OrderingTerm(
+            expression: db.shoppingCarts.createdAt,
+            mode: OrderingMode.desc,
+          ),
+        ]);
+
+  return query.watch().map((rows) {
+    final grouped = <String, PurchaseHistoryCheckout>{};
+
+    for (final row in rows) {
+      final cart = row.readTable(db.shoppingCarts);
+      final item = row.readTable(db.shoppingCartItems);
+      final checkout = grouped[cart.id];
+
+      if (checkout == null) {
+        grouped[cart.id] = PurchaseHistoryCheckout(cart: cart, items: [item]);
+      } else {
+        grouped[cart.id] = PurchaseHistoryCheckout(
+          cart: checkout.cart,
+          items: [...checkout.items, item],
+        );
+      }
+    }
+
+    return grouped.values.toList();
+  });
+});
+
 final priceHistoryProvider =
     StreamProvider.family<List<SupplyPriceHistoryData>, String>((
       ref,
       supplyId,
     ) {
+      ref.watch(ledgerVersionProvider);
       final db = ref.watch(databaseProvider);
 
       return (db.select(db.supplyPriceHistory)
@@ -74,17 +133,23 @@ class CartItem {
   final String id;
   final String? supplyId;
   final String name;
+  final String? brand;
+  final double? unitQuantity;
   final String? unit;
   final int unitPrice;
   final int quantity;
+  final bool checked;
 
   const CartItem({
     required this.id,
     this.supplyId,
     required this.name,
+    this.brand,
+    this.unitQuantity,
     this.unit,
     required this.unitPrice,
     required this.quantity,
+    this.checked = false,
   });
 
   int get lineTotal => unitPrice * quantity;
@@ -93,17 +158,23 @@ class CartItem {
     String? id,
     String? supplyId,
     String? name,
+    String? brand,
+    double? unitQuantity,
     String? unit,
     int? unitPrice,
     int? quantity,
+    bool? checked,
   }) {
     return CartItem(
       id: id ?? this.id,
       supplyId: supplyId ?? this.supplyId,
       name: name ?? this.name,
+      brand: brand ?? this.brand,
+      unitQuantity: unitQuantity ?? this.unitQuantity,
       unit: unit ?? this.unit,
       unitPrice: unitPrice ?? this.unitPrice,
       quantity: quantity ?? this.quantity,
+      checked: checked ?? this.checked,
     );
   }
 }
@@ -113,7 +184,8 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
 
   void addOrIncrement(Supply supply) {
     final existingIndex = state.indexWhere(
-      (item) => item.supplyId == supply.id,
+      (item) =>
+          item.supplyId == supply.id && item.unitPrice == supply.currentPrice,
     );
 
     if (existingIndex >= 0) {
@@ -136,6 +208,8 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
         id: const Uuid().v4(),
         supplyId: supply.id,
         name: supply.name,
+        brand: supply.brand,
+        unitQuantity: supply.unitQuantity,
         unit: supply.unit,
         unitPrice: supply.currentPrice,
         quantity: 1,
@@ -146,6 +220,8 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
   void addCustomItem({
     required String name,
     required int unitPrice,
+    String? brand,
+    double? unitQuantity,
     String? unit,
   }) {
     state = [
@@ -153,6 +229,8 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
       CartItem(
         id: const Uuid().v4(),
         name: name,
+        brand: brand,
+        unitQuantity: unitQuantity,
         unit: unit,
         unitPrice: unitPrice,
         quantity: 1,
@@ -183,6 +261,13 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
     state = [
       for (final item in state)
         if (item.id == id) item.copyWith(name: name) else item,
+    ];
+  }
+
+  void toggleChecked(String id) {
+    state = [
+      for (final item in state)
+        if (item.id == id) item.copyWith(checked: !item.checked) else item,
     ];
   }
 
@@ -255,9 +340,18 @@ class _SuppliesPriceListPageState extends ConsumerState<SuppliesPriceListPage> {
 
     return supplies.where((supply) {
       final name = supply.name.toLowerCase();
+      final brand = (supply.brand ?? '').toLowerCase();
+      final store = (supply.lastStoreName ?? '').toLowerCase();
+      final address = (supply.lastStoreAddress ?? '').toLowerCase();
       final unit = (supply.unit ?? '').toLowerCase();
+      final unitQuantity = '${supply.unitQuantity ?? ''}'.toLowerCase();
 
-      return name.contains(query) || unit.contains(query);
+      return name.contains(query) ||
+          brand.contains(query) ||
+          store.contains(query) ||
+          address.contains(query) ||
+          unit.contains(query) ||
+          unitQuantity.contains(query);
     }).toList();
   }
 
@@ -312,6 +406,16 @@ class _SuppliesPriceListPageState extends ConsumerState<SuppliesPriceListPage> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Purchase history',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PurchaseHistoryPage()),
+              );
+            },
+            icon: const Icon(Icons.history_rounded),
+          ),
           _CartHeaderButton(
             itemCount: cart.length,
             onPressed: () {
@@ -432,6 +536,431 @@ class _SuppliesPriceListPageState extends ConsumerState<SuppliesPriceListPage> {
       floatingActionButton: FloatingActionButton(
         onPressed: _openAddSupplySheet,
         child: const Icon(Icons.add_rounded),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// PURCHASE HISTORY
+// ============================================================================
+
+class PurchaseHistoryPage extends ConsumerStatefulWidget {
+  const PurchaseHistoryPage({super.key});
+
+  @override
+  ConsumerState<PurchaseHistoryPage> createState() =>
+      _PurchaseHistoryPageState();
+}
+
+class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
+  final _searchController = TextEditingController();
+  String _query = '';
+  DateTime? _selectedDate;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+
+    if (selected != null && mounted) {
+      setState(() => _selectedDate = selected);
+    }
+  }
+
+  List<PurchaseHistoryCheckout> _filter(List<PurchaseHistoryCheckout> records) {
+    final query = _query.trim().toLowerCase();
+    return records.where((record) {
+      final date = record.cart.cartDate;
+      final matchesDate =
+          _selectedDate == null ||
+          (date.year == _selectedDate!.year &&
+              date.month == _selectedDate!.month &&
+              date.day == _selectedDate!.day);
+      if (!matchesDate) return false;
+
+      if (query.isEmpty) return true;
+
+      final searchable = [
+        for (final item in record.items) ...[
+          item.itemName,
+          item.brand ?? '',
+          item.unit ?? '',
+          '${item.unitQuantity ?? ''}',
+        ],
+        record.cart.storeName ?? '',
+        record.cart.storeAddress ?? '',
+        _formatDate(record.cart.cartDate),
+      ].join(' ').toLowerCase();
+
+      return searchable.contains(query);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final historyAsync = ref.watch(purchaseHistoryProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Purchase history',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            Text('Review items bought by date', style: TextStyle(fontSize: 11)),
+          ],
+        ),
+      ),
+      body: historyAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stack) => _ErrorState(
+          message: 'Unable to load purchase history.',
+          onRetry: () => ref.invalidate(purchaseHistoryProvider),
+        ),
+        data: (records) {
+          final filtered = _filter(records);
+
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            children: [
+              _SearchField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _query = value),
+                onClear: () {
+                  _searchController.clear();
+                  setState(() => _query = '');
+                },
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _pickDate,
+                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                    label: Text(
+                      _selectedDate == null
+                          ? 'All dates'
+                          : _formatDate(_selectedDate!),
+                    ),
+                  ),
+                  if (_selectedDate != null) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Clear date filter',
+                      onPressed: () => setState(() => _selectedDate = null),
+                      icon: const Icon(Icons.clear_rounded),
+                    ),
+                  ],
+                  const Spacer(),
+                  Text(
+                    '${filtered.length} checkout${filtered.length == 1 ? '' : 's'}',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (filtered.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(28),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.history_rounded,
+                        size: 42,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        records.isEmpty
+                            ? 'No purchases recorded yet.'
+                            : 'No purchases match these filters.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                ...filtered.map(
+                  (record) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _PurchaseHistoryCard(
+                      checkout: record,
+                      onDelete: () => _deleteCheckout(record),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _deleteCheckout(PurchaseHistoryCheckout checkout) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete checkout?'),
+        content: const Text(
+          'This removes the checkout and its linked transaction from purchase history and the ledger.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete checkout'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final db = ref.read(databaseProvider);
+      final expenseId = checkout.cart.expenseId;
+
+      if (expenseId != null) {
+        await ref.read(transactionServiceProvider).deleteExpense(expenseId);
+      }
+
+      await (db.delete(
+        db.shoppingCarts,
+      )..where((cart) => cart.id.equals(checkout.cart.id))).go();
+
+      if (!mounted) return;
+
+      ref.read(ledgerVersionProvider.notifier).state++;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Checkout deleted.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to delete checkout: $error')),
+      );
+    }
+  }
+}
+
+class _PurchaseHistoryCard extends StatelessWidget {
+  final PurchaseHistoryCheckout checkout;
+  final VoidCallback onDelete;
+
+  const _PurchaseHistoryCard({required this.checkout, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cart = checkout.cart;
+    final store = cart.storeName?.trim();
+    return Material(
+      color: scheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PurchaseCheckoutDetailPage(checkout: checkout),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(15),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.receipt_long_outlined, color: scheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Checkout ${cart.id.substring(0, 8).toUpperCase()}',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${checkout.items.length} item${checkout.items.length == 1 ? '' : 's'} · ${_peso(cart.totalAmount)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      [
+                        _formatDate(cart.cartDate),
+                        if (store != null && store.isNotEmpty) store,
+                      ].join(' · '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              PopupMenuButton<String>(
+                tooltip: 'Checkout actions',
+                onSelected: (value) {
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text('Delete checkout'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PurchaseCheckoutDetailPage extends StatelessWidget {
+  final PurchaseHistoryCheckout checkout;
+
+  const PurchaseCheckoutDetailPage({super.key, required this.checkout});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cart = checkout.cart;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          'Checkout ${cart.id.substring(0, 8).toUpperCase()}',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        children: [
+          Text(
+            [
+              _formatDate(cart.cartDate),
+              if (cart.storeName != null) cart.storeName!,
+            ].join(' · '),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...checkout.items.map(
+            (item) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _PurchaseHistoryItemCard(item: item),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              'Total ${_peso(cart.totalAmount)}',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PurchaseHistoryItemCard extends StatelessWidget {
+  final ShoppingCartItem item;
+
+  const _PurchaseHistoryItemCard({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final unitLabel = [
+      if (item.unitQuantity != null) '${item.unitQuantity}',
+      if (item.unit != null && item.unit!.trim().isNotEmpty) item.unit!,
+    ].join(' ');
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.itemName,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (item.brand != null && item.brand!.trim().isNotEmpty)
+                  Text(item.brand!, style: theme.textTheme.bodySmall),
+                Text(
+                  '${item.quantity} × ${_peso(item.unitPrice)}${unitLabel.isEmpty ? '' : ' · $unitLabel'}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _peso(item.lineTotal),
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ],
       ),
     );
   }
@@ -805,7 +1334,7 @@ class _SearchField extends StatelessWidget {
       onChanged: onChanged,
       textInputAction: TextInputAction.search,
       decoration: InputDecoration(
-        hintText: 'Search supplies...',
+        hintText: 'Search name, brand, store, unit...',
         prefixIcon: const Icon(Icons.search_rounded, size: 22),
         suffixIcon: controller.text.isNotEmpty
             ? IconButton(
@@ -894,6 +1423,19 @@ class _SupplyCard extends ConsumerWidget {
                         letterSpacing: -0.1,
                       ),
                     ),
+                    if (supply.brand != null &&
+                        supply.brand!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        supply.brand!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -907,7 +1449,7 @@ class _SupplyCard extends ConsumerWidget {
                           const SizedBox(width: 4),
                           Flexible(
                             child: Text(
-                              'per ${supply.unit}',
+                              'per ${supply.unitQuantity != null ? '${supply.unitQuantity} ' : ''}${supply.unit}',
                               overflow: TextOverflow.ellipsis,
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: scheme.onSurfaceVariant,
@@ -1269,6 +1811,8 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
   final _formKey = GlobalKey<FormState>();
 
   final _nameController = TextEditingController();
+  final _brandController = TextEditingController();
+  final _unitQuantityController = TextEditingController();
   final _priceController = TextEditingController();
   final _storeController = TextEditingController();
   final _addressController = TextEditingController();
@@ -1284,11 +1828,21 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
     'liter',
     'piece',
     'roll',
+    'bottle',
+    'can',
+    'tray',
+    'dozen',
+    'meter',
+    'gram',
+    'milliliter',
+    'set',
   ];
 
   @override
   void dispose() {
     _nameController.dispose();
+    _brandController.dispose();
+    _unitQuantityController.dispose();
     _priceController.dispose();
     _storeController.dispose();
     _addressController.dispose();
@@ -1304,7 +1858,16 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
 
     final price = double.tryParse(normalizedPrice);
 
-    if (price == null || price < 0) {
+    final normalizedUnitQuantity = _unitQuantityController.text
+        .replaceAll(',', '')
+        .trim();
+    final unitQuantity = normalizedUnitQuantity.isEmpty
+        ? null
+        : double.tryParse(normalizedUnitQuantity);
+
+    if (price == null ||
+        price < 0 ||
+        (unitQuantity != null && unitQuantity <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please enter a valid price.'),
@@ -1332,7 +1895,23 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
               id: supplyId,
               businessId: kCurrentBusinessId,
               name: _nameController.text.trim(),
+              brand: Value(
+                _brandController.text.trim().isEmpty
+                    ? null
+                    : _brandController.text.trim(),
+              ),
+              unitQuantity: Value(unitQuantity),
               unit: Value(_selectedUnit),
+              lastStoreName: Value(
+                _storeController.text.trim().isEmpty
+                    ? null
+                    : _storeController.text.trim(),
+              ),
+              lastStoreAddress: Value(
+                _addressController.text.trim().isEmpty
+                    ? null
+                    : _addressController.text.trim(),
+              ),
               currentPrice: priceCents,
               updatedAt: Value(now),
               isActive: const Value(true),
@@ -1516,6 +2095,32 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
 
                         return null;
                       },
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    TextFormField(
+                      controller: _brandController,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Product brand',
+                        hintText: 'e.g. NutriGrow',
+                        prefixIcon: Icon(Icons.branding_watermark_outlined),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    TextFormField(
+                      controller: _unitQuantityController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Quantity per unit',
+                        hintText: 'e.g. 25',
+                        prefixIcon: Icon(Icons.numbers_outlined),
+                      ),
                     ),
 
                     const SizedBox(height: 12),
@@ -1754,135 +2359,16 @@ class SupplyDetailPage extends ConsumerWidget {
   const SupplyDetailPage({super.key, required this.supply});
 
   Future<void> _addPriceEntry(BuildContext context, WidgetRef ref) async {
-    final priceController = TextEditingController();
-    final storeController = TextEditingController();
-    final addressController = TextEditingController();
-
-    await showDialog<void>(
+    final updated = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        final scheme = Theme.of(dialogContext).colorScheme;
-
-        return AlertDialog(
-          title: const Text('Record new price'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  supply.name,
-                  style: Theme.of(dialogContext).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: priceController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Price',
-                    prefixText: '₱ ',
-                    prefixIcon: Icon(Icons.payments_outlined),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: storeController,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Store / supplier',
-                    prefixIcon: Icon(Icons.storefront_outlined),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: addressController,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Address',
-                    prefixIcon: Icon(Icons.location_on_outlined),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final normalized = priceController.text
-                    .replaceAll(',', '')
-                    .trim();
-
-                final price = double.tryParse(normalized);
-
-                if (price == null || price < 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Please enter a valid price.'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                final db = ref.read(databaseProvider);
-                final now = DateTime.now();
-                final cents = (price * 100).round();
-
-                await db
-                    .into(db.supplyPriceHistory)
-                    .insert(
-                      SupplyPriceHistoryCompanion.insert(
-                        id: const Uuid().v4(),
-                        supplyId: supply.id,
-                        price: cents,
-                        storeName: storeController.text.trim().isEmpty
-                            ? 'Unknown store'
-                            : storeController.text.trim(),
-                        storeAddress: Value(
-                          addressController.text.trim().isEmpty
-                              ? null
-                              : addressController.text.trim(),
-                        ),
-                        recordedDate: now,
-                      ),
-                    );
-
-                await (db.update(
-                  db.supplies,
-                )..where((s) => s.id.equals(supply.id))).write(
-                  SuppliesCompanion(
-                    currentPrice: Value(cents),
-                    updatedAt: Value(now),
-                  ),
-                );
-
-                ref.invalidate(priceHistoryProvider(supply.id));
-                ref.invalidate(suppliesProvider);
-
-                if (dialogContext.mounted) {
-                  Navigator.pop(dialogContext);
-                }
-              },
-              child: const Text('Save price'),
-            ),
-          ],
-        );
-      },
+      builder: (_) =>
+          _PriceRecordDialog(supply: supply, db: ref.read(databaseProvider)),
     );
 
-    priceController.dispose();
-    storeController.dispose();
-    addressController.dispose();
+    if (updated == true) {
+      ref.invalidate(priceHistoryProvider(supply.id));
+      ref.invalidate(suppliesProvider);
+    }
   }
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
@@ -1939,6 +2425,15 @@ class SupplyDetailPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final liveSupply = ref
+        .watch(suppliesProvider)
+        .maybeWhen(
+          data: (supplies) => supplies.firstWhere(
+            (item) => item.id == supply.id,
+            orElse: () => supply,
+          ),
+          orElse: () => supply,
+        );
 
     final historyAsync = ref.watch(priceHistoryProvider(supply.id));
 
@@ -2013,7 +2508,7 @@ class SupplyDetailPage extends ConsumerWidget {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
             children: [
-              _CurrentPriceCard(supply: supply, history: history),
+              _CurrentPriceCard(supply: liveSupply, history: history),
               if (cheapest != null) ...[
                 const SizedBox(height: 12),
                 _CheapestPriceCard(
@@ -2067,6 +2562,192 @@ class SupplyDetailPage extends ConsumerWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _PriceRecordDialog extends StatefulWidget {
+  final Supply supply;
+  final AppDatabase db;
+
+  const _PriceRecordDialog({required this.supply, required this.db});
+
+  @override
+  State<_PriceRecordDialog> createState() => _PriceRecordDialogState();
+}
+
+class _PriceRecordDialogState extends State<_PriceRecordDialog> {
+  final _priceController = TextEditingController();
+  final _storeController = TextEditingController();
+  final _addressController = TextEditingController();
+
+  bool _saving = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _storeController.dispose();
+    _addressController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final normalized = _priceController.text.replaceAll(',', '').trim();
+    final price = double.tryParse(normalized);
+
+    if (price == null || price < 0) {
+      setState(() {
+        _errorMessage = 'Please enter a valid price.';
+      });
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+
+    final now = DateTime.now();
+    final cents = (price * 100).round();
+
+    try {
+      await widget.db.transaction(() async {
+        final currentSupply = await (widget.db.select(
+          widget.db.supplies,
+        )..where((s) => s.id.equals(widget.supply.id))).getSingleOrNull();
+
+        if (currentSupply == null) {
+          throw StateError('This supply no longer exists.');
+        }
+
+        if (currentSupply.currentPrice != cents) {
+          await widget.db
+              .into(widget.db.supplyPriceHistory)
+              .insert(
+                SupplyPriceHistoryCompanion.insert(
+                  id: const Uuid().v4(),
+                  supplyId: widget.supply.id,
+                  price: cents,
+                  storeName: _storeController.text.trim().isEmpty
+                      ? 'Unknown store'
+                      : _storeController.text.trim(),
+                  storeAddress: Value(
+                    _addressController.text.trim().isEmpty
+                        ? null
+                        : _addressController.text.trim(),
+                  ),
+                  recordedDate: now,
+                ),
+              );
+        }
+
+        await (widget.db.update(
+          widget.db.supplies,
+        )..where((s) => s.id.equals(widget.supply.id))).write(
+          SuppliesCompanion(
+            currentPrice: Value(cents),
+            lastStoreName: Value(
+              _storeController.text.trim().isEmpty
+                  ? null
+                  : _storeController.text.trim(),
+            ),
+            lastStoreAddress: Value(
+              _addressController.text.trim().isEmpty
+                  ? null
+                  : _addressController.text.trim(),
+            ),
+            updatedAt: Value(now),
+          ),
+        );
+      });
+
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _errorMessage = 'Unable to update price: $error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return AlertDialog(
+      title: const Text('Record new price'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.supply.name,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _priceController,
+              enabled: !_saving,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Price',
+                prefixText: '₱ ',
+                prefixIcon: Icon(Icons.payments_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _storeController,
+              enabled: !_saving,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Store / supplier',
+                prefixIcon: Icon(Icons.storefront_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addressController,
+              enabled: !_saving,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Address',
+                prefixIcon: Icon(Icons.location_on_outlined),
+              ),
+            ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _errorMessage!,
+                style: TextStyle(color: scheme.error, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save price'),
+        ),
+      ],
     );
   }
 }
@@ -2307,6 +2988,118 @@ class _PriceHistoryCard extends StatelessWidget {
 // CART PAGE
 // ============================================================================
 
+class _CheckoutSelectionDialog extends ConsumerStatefulWidget {
+  const _CheckoutSelectionDialog();
+
+  @override
+  ConsumerState<_CheckoutSelectionDialog> createState() =>
+      _CheckoutSelectionDialogState();
+}
+
+class _CheckoutSelectionDialogState
+    extends ConsumerState<_CheckoutSelectionDialog> {
+  String? _paymentAccountId;
+  DateTime _purchaseDate = DateTime.now();
+
+  Future<void> _pickDate() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _purchaseDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+
+    if (selected != null && mounted) {
+      setState(() => _purchaseDate = selected);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    return AlertDialog(
+      title: const Text('Checkout purchase'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Choose how and when this purchase was paid.',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Payment account',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            accountsAsync.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (_, __) => Text(
+                'Unable to load payment accounts.',
+                style: TextStyle(color: scheme.error),
+              ),
+              data: (accounts) {
+                if (accounts.isEmpty) {
+                  return Text(
+                    'Add a Cash, Bank, or E-Wallet account before checkout.',
+                    style: TextStyle(color: scheme.error),
+                  );
+                }
+
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: accounts.map((account) {
+                    return ChoiceChip(
+                      label: Text(account.name),
+                      selected: _paymentAccountId == account.id,
+                      onSelected: (selected) {
+                        if (selected) {
+                          setState(() => _paymentAccountId = account.id);
+                        }
+                      },
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Checkout date',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _pickDate,
+              icon: const Icon(Icons.calendar_today_outlined),
+              label: Text(DateFormat('MMMM d, yyyy').format(_purchaseDate)),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _paymentAccountId == null
+              ? null
+              : () => Navigator.pop(context, (
+                  paymentAccountId: _paymentAccountId!,
+                  date: _purchaseDate,
+                )),
+          child: const Text('Checkout'),
+        ),
+      ],
+    );
+  }
+}
+
 class CartPage extends ConsumerStatefulWidget {
   const CartPage({super.key});
 
@@ -2429,6 +3222,16 @@ class _CartPageState extends ConsumerState<CartPage> {
       return;
     }
 
+    final checkout =
+        await showDialog<({String paymentAccountId, DateTime date})>(
+          context: context,
+          builder: (_) => const _CheckoutSelectionDialog(),
+        );
+
+    if (checkout == null || !mounted) {
+      return;
+    }
+
     setState(() {
       _saving = true;
     });
@@ -2470,20 +3273,19 @@ class _CartPageState extends ConsumerState<CartPage> {
       // the first active payment account.
       // ----------------------------------------------------------------------
 
-      final paymentAccounts =
+      final paymentAccount =
           await (db.select(db.accounts)..where(
                 (a) =>
+                    a.id.equals(checkout.paymentAccountId) &
                     a.businessId.equals(kCurrentBusinessId) &
                     a.isPaymentAccount.equals(true) &
                     a.isActive.equals(true),
               ))
-              .get();
+              .getSingleOrNull();
 
-      if (paymentAccounts.isEmpty) {
-        throw Exception('No active payment account is configured.');
+      if (paymentAccount == null) {
+        throw Exception('The selected payment account is no longer available.');
       }
-
-      final paymentAccount = paymentAccounts.first;
 
       final total = cart.fold<int>(0, (sum, item) => sum + item.lineTotal);
 
@@ -2494,9 +3296,9 @@ class _CartPageState extends ConsumerState<CartPage> {
 
       final transactionService = ref.read(transactionServiceProvider);
 
-      final purchaseDate = DateTime.now();
+      final purchaseDate = checkout.date;
 
-      await transactionService.saveExpense(
+      final expenseId = await transactionService.saveExpense(
         date: purchaseDate,
         categoryId: suppliesCategory.id,
         amount: total,
@@ -2525,6 +3327,7 @@ class _CartPageState extends ConsumerState<CartPage> {
               storeName: Value(storeName),
               storeAddress: const Value(null),
               totalAmount: total,
+              expenseId: Value(expenseId),
             ),
           );
 
@@ -2541,6 +3344,9 @@ class _CartPageState extends ConsumerState<CartPage> {
                 cartId: cartId,
                 supplyId: Value(item.supplyId),
                 itemName: item.name,
+                brand: Value(item.brand),
+                unitQuantity: Value(item.unitQuantity),
+                unit: Value(item.unit),
                 unitPrice: item.unitPrice,
                 quantity: Value(item.quantity),
                 lineTotal: item.lineTotal,
@@ -2587,7 +3393,6 @@ class _CartPageState extends ConsumerState<CartPage> {
     final scheme = theme.colorScheme;
 
     final cart = ref.watch(cartProvider);
-
     final total = cart.fold<int>(0, (sum, item) => sum + item.lineTotal);
 
     final totalQuantity = cart.fold<int>(0, (sum, item) => sum + item.quantity);
@@ -2826,117 +3631,58 @@ class _CartItemTile extends ConsumerWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
+          color: item.checked
+              ? scheme.secondaryContainer.withValues(alpha: 0.72)
+              : scheme.surfaceContainerLow,
           borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: item.checked
+                ? scheme.secondary.withValues(alpha: 0.55)
+                : Colors.transparent,
+          ),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: scheme.primaryContainer,
-                borderRadius: BorderRadius.circular(13),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                item.name.trim().isEmpty
-                    ? '?'
-                    : item.name.trim()[0].toUpperCase(),
-                style: TextStyle(
-                  color: scheme.onPrimaryContainer,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 17,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 380;
+            final identity = Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Checkbox(
+                  value: item.checked,
+                  onChanged: (_) {
+                    ref.read(cartProvider.notifier).toggleChecked(item.id);
+                  },
                 ),
-              ),
-            ),
-            const SizedBox(width: 11),
-            // THE FIX: wrap the whole text column in Expanded so it can
-            // never claim more width than what's left after the avatar
-            // and quantity control take theirs.
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          item.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Edit name',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => _editName(context, ref),
-                        icon: const Icon(Icons.edit_outlined, size: 17),
-                      ),
-                    ],
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(13),
                   ),
-                  if (item.unit != null) ...[
-                    Text(
-                      'per ${item.unit}',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    item.name.trim().isEmpty
+                        ? '?'
+                        : item.name.trim()[0].toUpperCase(),
+                    style: TextStyle(
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 17,
                     ),
-                  ],
-                  const SizedBox(height: 7),
-                  // THE FIX: every piece of text in this row is now
-                  // Flexible + ellipsis, so the row shrinks instead of
-                  // overflowing, however narrow its available space is.
-                  Row(
-                    children: [
-                      Flexible(
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: () => _editPrice(context, ref),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 4,
-                              horizontal: 2,
-                            ),
-                            child: Text(
-                              '${_peso(item.unitPrice)} each',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: scheme.primary,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '·',
-                        style: TextStyle(color: scheme.onSurfaceVariant),
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          _peso(item.lineTotal),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 6),
-            _QuantityControl(
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: _CartItemDetails(
+                    item: item,
+                    onEditName: () => _editName(context, ref),
+                    onEditPrice: () => _editPrice(context, ref),
+                  ),
+                ),
+              ],
+            );
+            final quantityControl = _QuantityControl(
               quantity: item.quantity,
               onDecrease: () {
                 ref
@@ -2949,8 +3695,31 @@ class _CartItemTile extends ConsumerWidget {
                     .updateQuantity(item.id, item.quantity + 1);
               },
               onTapQuantity: () => _editQuantity(context, ref),
-            ),
-          ],
+            );
+
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  identity,
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: quantityControl,
+                  ),
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: identity),
+                const SizedBox(width: 6),
+                quantityControl,
+              ],
+            );
+          },
         ),
       ),
     );
@@ -3094,6 +3863,86 @@ class _CartItemTile extends ConsumerWidget {
     if (result != null) {
       ref.read(cartProvider.notifier).updateQuantity(item.id, result);
     }
+  }
+}
+
+class _CartItemDetails extends StatelessWidget {
+  final CartItem item;
+  final VoidCallback onEditName;
+  final VoidCallback onEditPrice;
+
+  const _CartItemDetails({
+    required this.item,
+    required this.onEditName,
+    required this.onEditPrice,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Edit name',
+              visualDensity: VisualDensity.compact,
+              onPressed: onEditName,
+              icon: const Icon(Icons.edit_outlined, size: 17),
+            ),
+          ],
+        ),
+        if (item.unit != null) ...[
+          Text(
+            'per ${item.unit}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+        const SizedBox(height: 7),
+        Wrap(
+          spacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: onEditPrice,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                child: Text(
+                  '${_peso(item.unitPrice)} each',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+            ),
+            Text('·', style: TextStyle(color: scheme.onSurfaceVariant)),
+            Text(
+              _peso(item.lineTotal),
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 
