@@ -265,6 +265,19 @@ class Supplies extends Table {
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+  RealColumn get currentStock =>
+      real().withDefault(const Constant(0))(); // in stockUnit
+  TextColumn get stockUnit =>
+      text().withDefault(const Constant('piece'))(); // g, kg, ml, L, piece...
+  TextColumn get purchaseUnit => text().nullable()(); // "pack", "sack",
+  // "case", "bottle"
+  RealColumn get unitsPerPurchase => real().withDefault(
+    const Constant(1),
+  )(); // e.g. 1 pack =      // 100 (grams)
+  RealColumn get costPerBaseUnit =>
+      real().withDefault(const Constant(0))(); // weighted-average
+  // cost, in CENTS,
+  // per stockUnit
 
   @override
   Set<Column> get primaryKey => {id};
@@ -281,6 +294,11 @@ class SupplyPriceHistory extends Table {
   DateTimeColumn get recordedDate => dateTime()();
   TextColumn get notes => text().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  RealColumn get purchaseQuantity => // how many purchase
+      real().withDefault(const Constant(1))(); // units bought
+  // (e.g. 10 packs)
+  RealColumn get unitsPerPurchaseAtTime => // snapshot of the
+      real().withDefault(const Constant(1))(); // conversion used
 
   @override
   Set<Column> get primaryKey => {id};
@@ -335,6 +353,93 @@ class AccountTransfers extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class Products extends Table {
+  TextColumn get id => text()();
+  TextColumn get businessId => text().references(Businesses, #id)();
+  TextColumn get name => text()();
+
+  /// The unit this product is produced/sold in — "cup", "serving",
+  /// "piece", "bottle", etc. This is what recipe yields and sale
+  /// quantities are expressed in.
+  TextColumn get unit => text()();
+  IntColumn get sellPrice => integer().nullable()(); // cents, optional
+  /// False for intermediate-only components (e.g. "Espresso Base")
+  /// that exist purely to be used inside other recipes and are never
+  /// sold directly to a customer.
+  BoolColumn get isSellable => boolean().withDefault(const Constant(true))();
+  BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Recipes extends Table {
+  TextColumn get id => text()();
+
+  /// The product this recipe produces. One product has at most one
+  /// active recipe in this design — if you need recipe versioning
+  /// later, add a `version`/`isActive` pair here.
+  TextColumn get productId =>
+      text().references(Products, #id, onDelete: KeyAction.cascade)();
+
+  /// How many units of `productId` ONE batch of this recipe yields.
+  /// E.g. a batch that makes 4 cups of syrup at once = 4.
+  RealColumn get yieldQuantity => real().withDefault(const Constant(1))();
+  TextColumn get notes => text().nullable()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class RecipeComponents extends Table {
+  TextColumn get id => text()();
+  TextColumn get recipeId =>
+      text().references(Recipes, #id, onDelete: KeyAction.cascade)();
+
+  /// 'supply' | 'product' — a leaf raw material, or a nested
+  /// sub-recipe (e.g. Espresso Base used inside Spanish Latte).
+  TextColumn get componentType => text()();
+  TextColumn get supplyId => text().nullable().references(Supplies, #id)();
+  TextColumn get componentProductId =>
+      text().nullable().references(Products, #id)();
+
+  /// Quantity of this component needed per `yieldQuantity` of the
+  /// recipe's output (NOT per single output unit — divide by
+  /// yieldQuantity to get the per-unit requirement).
+  RealColumn get quantityRequired => real()();
+
+  /// The unit quantityRequired is expressed in — can differ from the
+  /// supply's stockUnit (e.g. recipe says "18 g", stock is tracked
+  /// in "kg") as long as they're the same dimension (mass/volume/count).
+  TextColumn get unit => text()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class InventoryMovements extends Table {
+  TextColumn get id => text()();
+  TextColumn get supplyId => text().references(Supplies, #id)();
+
+  /// 'production_consumption' | 'manual_adjustment' | 'restock'
+  TextColumn get movementType => text()();
+  TextColumn get unit => text()();
+
+  /// Negative = consumed, positive = added. Stored in the supply's
+  /// stockUnit at the time of the movement.
+  RealColumn get quantity => real()();
+  TextColumn get referenceType => text().nullable()(); // e.g. 'product_sale'
+  TextColumn get referenceId => text().nullable()();
+  DateTimeColumn get movementDate =>
+      dateTime().withDefault(currentDateAndTime)();
+  TextColumn get notes => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ============================================================
 // DATABASE CLASS
 // ============================================================
@@ -358,6 +463,10 @@ class AccountTransfers extends Table {
     ShoppingCarts,
     ShoppingCartItems,
     AccountTransfers,
+    Products,
+    Recipes,
+    RecipeComponents,
+    InventoryMovements,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -367,7 +476,7 @@ class AppDatabase extends _$AppDatabase {
   // AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -404,6 +513,37 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 7) {
         await m.addColumn(businesses, businesses.addressBarangay);
+      }
+      if (from < 8) {
+        await m.addColumn(supplies, supplies.currentStock);
+        await m.addColumn(supplies, supplies.stockUnit);
+
+        await m.createTable(products);
+        await m.createTable(recipes);
+        await m.createTable(recipeComponents);
+        await m.createTable(inventoryMovements);
+      }
+      if (from < 9) {
+        await m.addColumn(inventoryMovements, inventoryMovements.unit);
+      }
+      if (from < 10) {
+        // currentStock changes type (Int -> Real) — safest path is a
+        // rename + recreate rather than an in-place type change:
+        await m.addColumn(supplies, supplies.costPerBaseUnit);
+        await m.addColumn(supplies, supplies.purchaseUnit);
+        await m.addColumn(supplies, supplies.unitsPerPurchase);
+        await m.addColumn(
+          supplyPriceHistory,
+          supplyPriceHistory.purchaseQuantity,
+        );
+        await m.addColumn(
+          supplyPriceHistory,
+          supplyPriceHistory.unitsPerPurchaseAtTime,
+        );
+        // currentStock's Int->Real change: if you're early in development
+        // (no real user data to preserve), simplest is to bump schemaVersion
+        // and let onCreate rebuild fresh. If you have real data, write an
+        // explicit column-copy migration instead — ask if you need that.
       }
     },
   );

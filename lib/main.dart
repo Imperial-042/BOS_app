@@ -13,28 +13,22 @@
 
 import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart';
+import 'package:bos_application/features/transactions/presentation/screens/products_page.dart';
+import 'package:bos_application/features/transactions/presentation/screens/profile_page.dart';
+import 'package:bos_application/features/transactions/presentation/screens/settings_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/suppliers_page.dart';
 import 'package:drift/drift.dart' hide Column, Table;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'package:uuid/uuid.dart';
 
 import 'core/database/app_database.dart';
 import 'core/database/database_provider.dart';
-
 import 'features/transactions/presentation/screens/cashflow_page.dart';
 import 'features/transactions/presentation/screens/dashboard_page.dart';
 import 'features/transactions/presentation/screens/journal_entry_page.dart';
 import 'features/transactions/presentation/screens/supplies_price_list_page.dart';
 import 'features/transactions/presentation/screens/transaction_page.dart'
-    show
-        businessProfileProvider,
-        kCurrentBusinessId,
-        ledgerVersionProvider,
-        paymentAccountsProvider,
-        transactionServiceProvider;
+    show businessProfileProvider, kCurrentBusinessId;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -207,7 +201,7 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
             business.ownerName == null || business.businessCategory == null;
 
         if (profileIncomplete) {
-          return _OnboardingScreen(
+          return OnboardingScreen(
             onFinished: () {
               setState(() {
                 _initFuture = _ensureBusinessExists();
@@ -459,14 +453,14 @@ const List<NavDestinationInfo> _destinations = [
     label: 'Profile',
     icon: Icons.person_outline_rounded,
     selectedIcon: Icons.person_rounded,
-    screen: _ProfileScreen(),
+    screen: ProfileScreen(),
   ),
 
   NavDestinationInfo(
     label: 'Settings',
     icon: Icons.settings_outlined,
     selectedIcon: Icons.settings_rounded,
-    screen: _SettingsScreen(),
+    screen: SettingsScreen(),
   ),
 
   NavDestinationInfo(
@@ -488,6 +482,12 @@ const List<NavDestinationInfo> _destinations = [
     icon: Icons.shopping_cart_outlined,
     selectedIcon: Icons.shopping_cart_rounded,
     screen: SuppliesPriceListPage(),
+  ),
+  NavDestinationInfo(
+    label: 'Inventory',
+    icon: Icons.inventory,
+    selectedIcon: Icons.shopping_cart_rounded,
+    screen: ProductsPage(),
   ),
 ];
 
@@ -642,6 +642,10 @@ class _WideLayout extends StatelessWidget {
 // BOS NAVIGATION RAIL
 // ============================================================
 
+// ============================================================
+// BOS NAVIGATION RAIL
+// ============================================================
+
 class _BosNavigationRail extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelect;
@@ -656,13 +660,37 @@ class _BosNavigationRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const railIndexes = [0, 1, 2, 4, 5, 6, 7];
+    final scheme = theme.colorScheme;
+
+    const railIndexes = [
+      0, // Dashboard
+      1, // Journal
+      2, // Cashflow
+      4, // Settings
+      5, // Customers
+      6, // Suppliers
+      7, // Supplies
+      8, // Inventory
+    ];
+
+    // Tablet: 13px
+    // Desktop: 14px
+    final fontSize = extended ? 14.0 : 13.0;
+
+    final navigationRailTheme = theme.navigationRailTheme.copyWith(
+      backgroundColor: scheme.surface,
+      indicatorColor: scheme.primaryContainer,
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      groupAlignment: -0.72,
+    );
 
     return Material(
-      color: theme.colorScheme.surface,
+      color: scheme.surface,
       child: SafeArea(
         child: SizedBox(
-          width: extended ? 240 : 88,
+          width: extended ? 240 : 150,
           child: Column(
             children: [
               _BosBrand(extended: extended),
@@ -670,21 +698,57 @@ class _BosNavigationRail extends StatelessWidget {
               const SizedBox(height: 12),
 
               Expanded(
-                child: NavigationRail(
-                  selectedIndex: railIndexes.indexOf(selectedIndex),
-                  onDestinationSelected: (index) =>
-                      onSelect(railIndexes[index]),
-                  extended: extended,
-                  labelType: NavigationRailLabelType.none,
-                  leading: null,
-                  destinations: [
-                    for (final index in railIndexes)
-                      NavigationRailDestination(
-                        icon: Icon(_destinations[index].icon),
-                        selectedIcon: Icon(_destinations[index].selectedIcon),
-                        label: Text(_destinations[index].label),
+                child: Theme(
+                  data: theme.copyWith(
+                    navigationRailTheme: navigationRailTheme,
+                    textTheme: theme.textTheme.copyWith(
+                      labelMedium: theme.textTheme.labelMedium?.copyWith(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
                       ),
-                  ],
+                    ),
+                  ),
+                  child: NavigationRail(
+                    selectedIndex: railIndexes.indexOf(selectedIndex),
+
+                    onDestinationSelected: (index) {
+                      if (index >= 0 && index < railIndexes.length) {
+                        onSelect(railIndexes[index]);
+                      }
+                    },
+
+                    extended: extended,
+
+                    // Tablet: labels visible.
+                    // Desktop: labels beside icons.
+                    labelType: extended
+                        ? NavigationRailLabelType.none
+                        : NavigationRailLabelType.all,
+
+                    destinations: [
+                      for (final index in railIndexes)
+                        NavigationRailDestination(
+                          icon: Icon(
+                            _destinations[index].icon,
+                            size: extended ? 24 : 23,
+                          ),
+                          selectedIcon: Icon(
+                            _destinations[index].selectedIcon,
+                            size: extended ? 25 : 24,
+                          ),
+                          label: Text(
+                            _destinations[index].label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: fontSize,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -703,7 +767,6 @@ class _BosNavigationRail extends StatelessWidget {
     );
   }
 }
-
 // ============================================================
 // BOS BRAND — real logo, not a stand-in icon
 // ============================================================
@@ -863,941 +926,6 @@ class _ShellAppBar extends ConsumerWidget implements PreferredSizeWidget {
               const SizedBox(width: 8),
             ]
           : null,
-    );
-  }
-}
-
-class _OnboardingScreen extends StatelessWidget {
-  final VoidCallback onFinished;
-
-  const _OnboardingScreen({required this.onFinished});
-
-  @override
-  Widget build(BuildContext context) {
-    return _BusinessProfileEditor(
-      title: 'Set up your profile',
-      subtitle: 'Add your details now or skip and update them later.',
-      showSkip: true,
-      showOwnerName: true,
-      onFinished: onFinished,
-    );
-  }
-}
-
-class _ProfileScreen extends ConsumerWidget {
-  const _ProfileScreen();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final profile = ref.watch(businessProfileProvider);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Profile')),
-      body: profile.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) =>
-            const Center(child: Text('Unable to load profile.')),
-        data: (business) => ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            CircleAvatar(
-              radius: 42,
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: Icon(
-                Icons.person_rounded,
-                size: 44,
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              business.ownerName?.isNotEmpty == true
-                  ? business.ownerName!
-                  : 'Your name',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              business.name,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium,
-            ),
-            if (business.businessCategory?.isNotEmpty == true) ...[
-              const SizedBox(height: 4),
-              Text(
-                business.businessCategory!,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            if (business.managerName?.isNotEmpty == true) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Manager: ${business.managerName}',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            if (business.addressCity?.isNotEmpty == true ||
-                business.addressProvince?.isNotEmpty == true ||
-                business.addressCountry?.isNotEmpty == true) ...[
-              const SizedBox(height: 4),
-              Text(
-                [
-                      business.addressCity,
-                      business.addressBarangay,
-                      business.addressProvince,
-                      business.addressCountry,
-                      business.addressZipCode,
-                    ]
-                    .whereType<String>()
-                    .where((value) => value.isNotEmpty)
-                    .join(', '),
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            const SizedBox(height: 28),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => _BusinessProfileEditor(
-                      title: 'Edit profile',
-                      subtitle: 'Update your name and business details.',
-                      onFinished: () => Navigator.pop(context),
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.edit_outlined),
-              label: const Text('Edit profile'),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () => _openBusinessSwitcher(context, ref),
-              icon: const Icon(Icons.swap_horiz_rounded),
-              label: const Text('Switch business'),
-            ),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: () => _addBusiness(context, ref, business),
-              icon: const Icon(Icons.add_business_outlined),
-              label: const Text('Add another business'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _openBusinessSwitcher(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
-    final db = ref.read(databaseProvider);
-    final businesses = await db.select(db.businesses).get();
-    if (!context.mounted) return;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text(
-                'Your businesses',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ),
-            for (final item in businesses)
-              ListTile(
-                leading: const Icon(Icons.business_outlined),
-                title: Text(item.name),
-                subtitle: Text(item.businessCategory ?? 'Business'),
-                selected: item.id == kCurrentBusinessId,
-                onTap: () async {
-                  if (item.id != kCurrentBusinessId) {
-                    await db.transaction(() async {
-                      await (db.update(db.businesses)).write(
-                        const BusinessesCompanion(isCurrent: Value(false)),
-                      );
-                      await (db.update(db.businesses)
-                            ..where((business) => business.id.equals(item.id)))
-                          .write(
-                            const BusinessesCompanion(isCurrent: Value(true)),
-                          );
-                    });
-                    kCurrentBusinessId = item.id;
-                    ref.read(ledgerVersionProvider.notifier).state++;
-                  }
-                  if (!sheetContext.mounted) return;
-                  Navigator.pop(sheetContext);
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _addBusiness(
-    BuildContext context,
-    WidgetRef ref,
-    BusinessesData currentBusiness,
-  ) async {
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => const _BusinessNameDialog(),
-    );
-
-    if (name == null || !context.mounted) return;
-
-    try {
-      final db = ref.read(databaseProvider);
-      final businessId = const Uuid().v4();
-
-      await db.transaction(() async {
-        await (db.update(
-          db.businesses,
-        )).write(const BusinessesCompanion(isCurrent: Value(false)));
-        await db
-            .into(db.businesses)
-            .insert(
-              BusinessesCompanion.insert(
-                id: businessId,
-                name: name,
-                ownerUserId: currentBusiness.ownerUserId,
-                isCurrent: const Value(true),
-              ),
-            );
-        await db.seedDefaultsForBusiness(businessId);
-      });
-
-      kCurrentBusinessId = businessId;
-      ref.read(ledgerVersionProvider.notifier).state++;
-
-      if (!context.mounted) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => _BusinessProfileEditor(
-            title: 'Set up $name',
-            subtitle:
-                'Complete the business details. Owner name is optional here.',
-            showSkip: true,
-            showOwnerName: false,
-            onFinished: () => Navigator.pop(context),
-          ),
-        ),
-      );
-    } catch (error) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Unable to add business: $error')));
-    }
-  }
-}
-
-class _BusinessNameDialog extends StatefulWidget {
-  const _BusinessNameDialog();
-
-  @override
-  State<_BusinessNameDialog> createState() => _BusinessNameDialogState();
-}
-
-class _BusinessNameDialogState extends State<_BusinessNameDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add another business'),
-      content: TextField(
-        controller: _controller,
-        textCapitalization: TextCapitalization.words,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'Business name',
-          prefixIcon: Icon(Icons.business_outlined),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final value = _controller.text.trim();
-            if (value.isNotEmpty) Navigator.pop(context, value);
-          },
-          child: const Text('Continue'),
-        ),
-      ],
-    );
-  }
-}
-
-class _PsgcPlace {
-  final String code;
-  final String name;
-
-  const _PsgcPlace({required this.code, required this.name});
-
-  factory _PsgcPlace.fromJson(Map<String, dynamic> json) {
-    return _PsgcPlace(
-      code: json['code'] as String,
-      name: json['name'] as String,
-    );
-  }
-}
-
-class _BusinessProfileEditor extends ConsumerStatefulWidget {
-  final String title;
-  final String subtitle;
-  final bool showSkip;
-  final bool showOwnerName;
-  final VoidCallback onFinished;
-
-  const _BusinessProfileEditor({
-    required this.title,
-    required this.subtitle,
-    this.showSkip = false,
-    this.showOwnerName = true,
-    required this.onFinished,
-  });
-
-  @override
-  ConsumerState<_BusinessProfileEditor> createState() =>
-      _BusinessProfileEditorState();
-}
-
-class _BusinessProfileEditorState
-    extends ConsumerState<_BusinessProfileEditor> {
-  final _ownerController = TextEditingController();
-  final _managerController = TextEditingController();
-  final _businessController = TextEditingController();
-  final _cityController = TextEditingController();
-  final _provinceController = TextEditingController();
-  final _zipController = TextEditingController();
-  final _capitalController = TextEditingController();
-  String? _category;
-  String? _country;
-  String? _province;
-  String? _city;
-  String? _barangay;
-  String? _capitalAccountId;
-  BusinessesData? _business;
-  bool _loading = true;
-  String? _loadError;
-  bool _saving = false;
-
-  static const _categories = [
-    'Retail',
-    'Food and beverage',
-    'Services',
-    'Manufacturing',
-    'Agriculture',
-    'Construction',
-    'Online business',
-    'Other',
-  ];
-
-  static const _countries = [
-    'Philippines',
-    'United States',
-    'Canada',
-    'United Kingdom',
-    'Australia',
-    'Other',
-  ];
-
-  List<_PsgcPlace> _provinces = [];
-  List<_PsgcPlace> _cities = [];
-  List<_PsgcPlace> _barangays = [];
-  bool _locationsLoading = false;
-  String? _locationsError;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final db = ref.read(databaseProvider);
-      final business = await (db.select(
-        db.businesses,
-      )..where((item) => item.id.equals(kCurrentBusinessId))).getSingle();
-
-      if (!mounted) return;
-      _ownerController.text = business.ownerName ?? '';
-      _managerController.text = business.managerName ?? '';
-      _business = business;
-      _businessController.text = business.name == 'My Business'
-          ? ''
-          : business.name;
-      _category = business.businessCategory?.isEmpty == true
-          ? null
-          : business.businessCategory;
-      _country = business.addressCountry;
-      _province = business.addressProvince;
-      _city = business.addressCity;
-      _barangay = business.addressBarangay;
-      _provinceController.text = business.addressProvince ?? '';
-      _cityController.text = business.addressCity ?? '';
-      _zipController.text = business.addressZipCode ?? '';
-      _capitalController.text = business.startingCapital == 0
-          ? ''
-          : (business.startingCapital / 100).toStringAsFixed(2);
-      _capitalAccountId = business.startingCapitalAccountId;
-      if (_country == 'Philippines') {
-        await _loadProvinces();
-      }
-      setState(() => _loading = false);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _loadError = 'Unable to load your profile. Please try again.';
-      });
-    }
-  }
-
-  Future<List<_PsgcPlace>> _fetchPlaces(String path) async {
-    final response = await http.get(
-      Uri.parse('https://psgc.gitlab.io/api/$path'),
-    );
-    if (response.statusCode != 200) {
-      throw StateError('Location service returned ${response.statusCode}.');
-    }
-    final values = jsonDecode(response.body) as List<dynamic>;
-    return values
-        .map((value) => _PsgcPlace.fromJson(value as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> _loadProvinces() async {
-    setState(() {
-      _locationsLoading = true;
-      _locationsError = null;
-    });
-    try {
-      final provinces = await _fetchPlaces('provinces');
-      if (!mounted) return;
-      setState(() {
-        _provinces = provinces;
-        _locationsLoading = false;
-      });
-      final selected = provinces
-          .where((item) => item.name == _province)
-          .firstOrNull;
-      if (selected != null) await _loadCities(selected);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _locationsLoading = false;
-        _locationsError = 'Unable to load Philippine locations.';
-      });
-    }
-  }
-
-  Future<void> _loadCities(_PsgcPlace province) async {
-    final cities = await _fetchPlaces(
-      'provinces/${province.code}/cities-municipalities',
-    );
-    if (!mounted) return;
-    setState(() {
-      _cities = cities;
-      _barangays = [];
-    });
-    final selected = cities.where((item) => item.name == _city).firstOrNull;
-    if (selected != null) await _loadBarangays(selected);
-  }
-
-  Future<void> _loadBarangays(_PsgcPlace city) async {
-    final barangays = await _fetchPlaces(
-      'cities-municipalities/${city.code}/barangays',
-    );
-    if (!mounted) return;
-    setState(() => _barangays = barangays);
-  }
-
-  @override
-  void dispose() {
-    _ownerController.dispose();
-    _managerController.dispose();
-    _businessController.dispose();
-    _cityController.dispose();
-    _provinceController.dispose();
-    _zipController.dispose();
-    _capitalController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save({required bool skip}) async {
-    final capitalText = _capitalController.text.replaceAll(',', '').trim();
-    final capital = capitalText.isEmpty ? null : double.tryParse(capitalText);
-    if (!skip && capitalText.isNotEmpty && (capital == null || capital < 0)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid starting capital amount.')),
-      );
-      return;
-    }
-
-    if (!skip && capital != null && capital > 0 && _capitalAccountId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Select the account holding the starting capital.'),
-        ),
-      );
-      return;
-    }
-
-    setState(() => _saving = true);
-    final db = ref.read(databaseProvider);
-    final business = _business;
-    final capitalCents = capital == null || capital <= 0
-        ? 0
-        : (capital * 100).round();
-    final province = _country == 'Philippines'
-        ? _province
-        : (_provinceController.text.trim().isEmpty
-              ? null
-              : _provinceController.text.trim());
-    final city = _country == 'Philippines'
-        ? _city
-        : (_cityController.text.trim().isEmpty
-              ? null
-              : _cityController.text.trim());
-
-    if (!skip &&
-        capitalCents > 0 &&
-        business != null &&
-        business.startingCapital == 0) {
-      final categories =
-          await (db.select(db.categories)..where(
-                (category) =>
-                    category.businessId.equals(kCurrentBusinessId) &
-                    category.name.equals('Additional Capital') &
-                    category.txnType.equals('income'),
-              ))
-              .get();
-      if (categories.isNotEmpty) {
-        await ref
-            .read(transactionServiceProvider)
-            .saveIncome(
-              date: DateTime.now(),
-              categoryId: categories.first.id,
-              amount: capitalCents,
-              paymentAccountId: _capitalAccountId,
-              description: 'Starting capital',
-              markAsPending: false,
-            );
-      }
-    }
-
-    await (db.update(
-      db.businesses,
-    )..where((business) => business.id.equals(kCurrentBusinessId))).write(
-      BusinessesCompanion(
-        name: Value(
-          skip || _businessController.text.trim().isEmpty
-              ? 'My Business'
-              : _businessController.text.trim(),
-        ),
-        ownerName: Value(
-          skip || _ownerController.text.trim().isEmpty
-              ? ''
-              : _ownerController.text.trim(),
-        ),
-        managerName: Value(
-          skip || _managerController.text.trim().isEmpty
-              ? null
-              : _managerController.text.trim(),
-        ),
-        businessCategory: Value(skip ? '' : _category ?? ''),
-        addressCountry: Value(skip ? '' : _country ?? ''),
-        addressProvince: Value(skip ? '' : province ?? ''),
-        addressCity: Value(skip ? '' : city ?? ''),
-        addressBarangay: Value(skip ? '' : _barangay ?? ''),
-        addressZipCode: Value(
-          skip || _zipController.text.trim().isEmpty
-              ? null
-              : _zipController.text.trim(),
-        ),
-        startingCapital: Value(skip ? 0 : capitalCents),
-        startingCapitalAccountId: Value(skip ? null : _capitalAccountId),
-      ),
-    );
-
-    if (!mounted) return;
-    widget.onFinished();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final accountsAsync = ref.watch(paymentAccountsProvider);
-
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    if (_loadError != null) {
-      return Scaffold(
-        appBar: AppBar(title: Text(widget.title)),
-        body: Center(
-          child: FilledButton.icon(
-            onPressed: () {
-              setState(() {
-                _loading = true;
-                _loadError = null;
-              });
-              _load();
-            },
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Retry'),
-          ),
-        ),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-        children: [
-          Text(
-            widget.subtitle,
-            style: TextStyle(color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 24),
-          if (widget.showOwnerName) ...[
-            TextField(
-              controller: _ownerController,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Your name',
-                prefixIcon: Icon(Icons.person_outline_rounded),
-              ),
-            ),
-            const SizedBox(height: 14),
-          ],
-          TextField(
-            controller: _managerController,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Manager name (optional)',
-              prefixIcon: Icon(Icons.manage_accounts_outlined),
-            ),
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _businessController,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Business name',
-              prefixIcon: Icon(Icons.business_outlined),
-            ),
-          ),
-          const SizedBox(height: 14),
-          DropdownButtonFormField<String>(
-            initialValue: _category,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Business category',
-              prefixIcon: Icon(Icons.category_outlined),
-            ),
-            items: _categories
-                .map(
-                  (category) =>
-                      DropdownMenuItem(value: category, child: Text(category)),
-                )
-                .toList(),
-            onChanged: _saving
-                ? null
-                : (value) => setState(() => _category = value),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Business address',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: _country,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Country',
-              prefixIcon: Icon(Icons.public_outlined),
-            ),
-            items: _countries
-                .map(
-                  (country) =>
-                      DropdownMenuItem(value: country, child: Text(country)),
-                )
-                .toList(),
-            onChanged: _saving
-                ? null
-                : (value) async {
-                    setState(() {
-                      _country = value;
-                      _province = null;
-                      _city = null;
-                      _barangay = null;
-                      _provinces = [];
-                      _cities = [];
-                      _barangays = [];
-                      _provinceController.clear();
-                      _cityController.clear();
-                    });
-                    if (value == 'Philippines') await _loadProvinces();
-                  },
-          ),
-          const SizedBox(height: 12),
-          if (_country == 'Philippines') ...[
-            if (_locationsLoading) const LinearProgressIndicator(),
-            if (_locationsError != null)
-              Text(_locationsError!, style: TextStyle(color: scheme.error)),
-            DropdownButtonFormField<String>(
-              initialValue: _provinces.any((item) => item.name == _province)
-                  ? _province
-                  : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Province',
-                prefixIcon: Icon(Icons.map_outlined),
-              ),
-              items: _provinces
-                  .map(
-                    (province) => DropdownMenuItem<String>(
-                      value: province.name,
-                      child: Text(province.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _saving
-                  ? null
-                  : (value) async {
-                      final place = _provinces
-                          .where((item) => item.name == value)
-                          .firstOrNull;
-                      setState(() {
-                        _province = value;
-                        _city = null;
-                        _barangay = null;
-                      });
-                      if (place != null) await _loadCities(place);
-                    },
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: _cities.any((item) => item.name == _city)
-                  ? _city
-                  : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'City',
-                prefixIcon: Icon(Icons.location_city_outlined),
-              ),
-              items: _cities
-                  .map(
-                    (city) => DropdownMenuItem<String>(
-                      value: city.name,
-                      child: Text(city.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _saving
-                  ? null
-                  : (value) async {
-                      final place = _cities
-                          .where((item) => item.name == value)
-                          .firstOrNull;
-                      setState(() {
-                        _city = value;
-                        _barangay = null;
-                      });
-                      if (place != null) await _loadBarangays(place);
-                    },
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: _barangays.any((item) => item.name == _barangay)
-                  ? _barangay
-                  : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Barangay',
-                prefixIcon: Icon(Icons.holiday_village_outlined),
-              ),
-              items: _barangays
-                  .map(
-                    (barangay) => DropdownMenuItem<String>(
-                      value: barangay.name,
-                      child: Text(barangay.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _saving
-                  ? null
-                  : (value) => setState(() => _barangay = value),
-            ),
-          ] else ...[
-            TextField(
-              controller: _provinceController,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Province / state',
-                prefixIcon: Icon(Icons.map_outlined),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _cityController,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'City',
-                prefixIcon: Icon(Icons.location_city_outlined),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          TextField(
-            controller: _zipController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'ZIP / postal code (optional)',
-              prefixIcon: Icon(Icons.markunread_mailbox_outlined),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Starting capital',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _capitalController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Starting capital (optional)',
-              prefixText: '₱ ',
-              prefixIcon: Icon(Icons.account_balance_wallet_outlined),
-            ),
-          ),
-          const SizedBox(height: 12),
-          accountsAsync.when(
-            loading: () => const LinearProgressIndicator(),
-            error: (error, stack) => Text(
-              'Unable to load accounts.',
-              style: TextStyle(color: scheme.error),
-            ),
-            data: (accounts) => DropdownButtonFormField<String>(
-              initialValue:
-                  accounts.any((account) => account.id == _capitalAccountId)
-                  ? _capitalAccountId
-                  : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Capital account',
-                hintText: 'Cash, bank, or e-wallet',
-                prefixIcon: Icon(Icons.account_balance_outlined),
-              ),
-              items: accounts
-                  .map(
-                    (account) => DropdownMenuItem(
-                      value: account.id,
-                      child: Text(account.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _saving
-                  ? null
-                  : (value) => setState(() => _capitalAccountId = value),
-            ),
-          ),
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : () => _save(skip: false),
-            icon: const Icon(Icons.check_rounded),
-            label: const Text('Save profile'),
-          ),
-          if (widget.showSkip)
-            TextButton(
-              onPressed: _saving ? null : () => _save(skip: true),
-              child: const Text('Skip for now'),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SettingsScreen extends StatelessWidget {
-  const _SettingsScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        children: [
-          ListTile(
-            leading: const Icon(Icons.manage_accounts_outlined),
-            title: const Text('Profile & businesses'),
-            subtitle: const Text('Manage your profile and switch businesses'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const _ProfileScreen()),
-              );
-            },
-          ),
-          const ListTile(
-            leading: Icon(Icons.palette_outlined),
-            title: Text('Appearance'),
-            subtitle: Text('Theme preferences'),
-            trailing: Icon(Icons.chevron_right_rounded),
-          ),
-          ListTile(
-            leading: Icon(Icons.currency_exchange_rounded),
-            title: Text('Currency'),
-            subtitle: Text('Philippine Peso (PHP)'),
-          ),
-          ListTile(
-            leading: Icon(Icons.info_outline_rounded),
-            title: Text('About BOS'),
-            subtitle: Text('Business Operating System'),
-          ),
-        ],
-      ),
     );
   }
 }

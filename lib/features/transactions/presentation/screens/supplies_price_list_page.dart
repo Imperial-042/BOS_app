@@ -1,3 +1,4 @@
+import 'package:bos_application/features/transactions/presentation/screens/purchase_entry_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -2065,6 +2066,17 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
                             ],
                           ),
                         ),
+                        // THE FIX: an explicit, always-visible way to back
+                        // out without saving — the decorative handle above
+                        // isn't wired to a drag gesture, so this is the
+                        // only deterministic close affordance otherwise.
+                        IconButton(
+                          tooltip: 'Cancel',
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
                       ],
                     ),
 
@@ -2285,27 +2297,50 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
                     const SizedBox(height: 26),
 
                     // ----------------------------------------------------------
-                    // SAVE BUTTON
+                    // CANCEL + SAVE
                     // ----------------------------------------------------------
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        onPressed: _saving ? null : _save,
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 19,
-                                height: 19,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.check_rounded),
-                        label: Text(
-                          _saving ? 'Saving...' : 'Save supply',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 52,
+                            child: OutlinedButton(
+                              onPressed: _saving
+                                  ? null
+                                  : () => Navigator.of(context).pop(),
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: SizedBox(
+                            height: 52,
+                            child: FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 19,
+                                      height: 19,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.check_rounded),
+                              label: Text(
+                                _saving ? 'Saving...' : 'Save supply',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -2357,19 +2392,6 @@ class SupplyDetailPage extends ConsumerWidget {
   final Supply supply;
 
   const SupplyDetailPage({super.key, required this.supply});
-
-  Future<void> _addPriceEntry(BuildContext context, WidgetRef ref) async {
-    final updated = await showDialog<bool>(
-      context: context,
-      builder: (_) =>
-          _PriceRecordDialog(supply: supply, db: ref.read(databaseProvider)),
-    );
-
-    if (updated == true) {
-      ref.invalidate(priceHistoryProvider(supply.id));
-      ref.invalidate(suppliesProvider);
-    }
-  }
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
@@ -2466,8 +2488,8 @@ class SupplyDetailPage extends ConsumerWidget {
         ),
         actions: [
           IconButton(
-            tooltip: 'Add price',
-            onPressed: () => _addPriceEntry(context, ref),
+            tooltip: 'Record purchase',
+            onPressed: () => showPurchaseEntrySheet(context, supply: supply),
             icon: const Icon(Icons.add_chart_rounded),
           ),
           PopupMenuButton<String>(

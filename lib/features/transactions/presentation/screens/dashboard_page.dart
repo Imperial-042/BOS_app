@@ -1280,7 +1280,7 @@ class _SummaryHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final net = income - expense;
+    final net = cashPosition;
     final scheme = Theme.of(context).colorScheme;
 
     return Container(

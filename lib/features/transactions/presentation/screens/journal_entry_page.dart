@@ -728,7 +728,6 @@ class _JournalEntryTile extends ConsumerWidget {
     final colors = theme.colorScheme;
 
     final isIncome = entry.type == JournalEntryType.income;
-
     final isPending = entry.status.toLowerCase() == 'pending';
 
     final accentColor = isIncome ? Colors.green.shade700 : colors.error;
@@ -777,14 +776,16 @@ class _JournalEntryTile extends ConsumerWidget {
 
       child: InkWell(
         onTap: () => _openEdit(context),
+
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-          child: Row(
-            children: [
-              // ------------------------------------------------
-              // ICON
-              // ------------------------------------------------
 
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ============================================================
+              // ICON
+              // ============================================================
               Container(
                 width: 46,
                 height: 46,
@@ -801,13 +802,14 @@ class _JournalEntryTile extends ConsumerWidget {
                 ),
               ),
 
-              const SizedBox(width: 13),
+              const SizedBox(width: 12),
 
-              // ------------------------------------------------
-              // DESCRIPTION
-              // ------------------------------------------------
+              // ============================================================
+              // DESCRIPTION + META
+              // ============================================================
               Expanded(
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -823,16 +825,14 @@ class _JournalEntryTile extends ConsumerWidget {
                     const SizedBox(height: 5),
 
                     Wrap(
-                      spacing: 6,
+                      spacing: 5,
                       runSpacing: 4,
                       children: [
                         _MiniPill(
                           icon: Icons.category_outlined,
                           text: entry.categoryName,
                         ),
-
                         _MiniPill(icon: Icons.schedule_rounded, text: time),
-
                         _StatusPill(pending: isPending),
                       ],
                     ),
@@ -840,30 +840,39 @@ class _JournalEntryTile extends ConsumerWidget {
                 ),
               ),
 
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
 
-              // ------------------------------------------------
+              // ============================================================
               // AMOUNT
-              // ------------------------------------------------
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '${isIncome ? '+' : '-'}$amount',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: accentColor,
+              // ============================================================
+              SizedBox(
+                width: 82,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        '${isIncome ? '+' : '-'}$amount',
+                        maxLines: 1,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: accentColor,
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 5),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: colors.outline,
-                  ),
-                ],
+
+                    const SizedBox(height: 4),
+
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: colors.outline,
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -872,6 +881,9 @@ class _JournalEntryTile extends ConsumerWidget {
     );
   }
 
+  // ============================================================
+  // EDIT
+  // ============================================================
   void _openEdit(BuildContext context) {
     Navigator.push(
       context,
@@ -884,6 +896,9 @@ class _JournalEntryTile extends ConsumerWidget {
     );
   }
 
+  // ============================================================
+  // DELETE CONFIRMATION
+  // ============================================================
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
     final colors = Theme.of(context).colorScheme;
 
@@ -902,12 +917,16 @@ class _JournalEntryTile extends ConsumerWidget {
               color: colors.onErrorContainer,
             ),
           ),
+
           title: const Text('Delete transaction?', textAlign: TextAlign.center),
+
           content: const Text(
             'This transaction will be permanently removed from your records and your balances will be updated.',
             textAlign: TextAlign.center,
           ),
+
           actionsAlignment: MainAxisAlignment.center,
+
           actions: [
             TextButton(
               onPressed: () {
@@ -915,15 +934,19 @@ class _JournalEntryTile extends ConsumerWidget {
               },
               child: const Text('Cancel'),
             ),
+
             FilledButton.icon(
               style: FilledButton.styleFrom(
                 backgroundColor: colors.error,
                 foregroundColor: colors.onError,
               ),
+
               onPressed: () {
                 Navigator.pop(ctx, true);
               },
+
               icon: const Icon(Icons.delete_outline_rounded),
+
               label: const Text('Delete'),
             ),
           ],
@@ -931,7 +954,9 @@ class _JournalEntryTile extends ConsumerWidget {
       },
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true) {
+      return;
+    }
 
     final service = ref.read(transactionServiceProvider);
 
@@ -944,17 +969,20 @@ class _JournalEntryTile extends ConsumerWidget {
 
       ref.read(ledgerVersionProvider.notifier).state++;
 
-      if (!context.mounted) return;
+      if (!context.mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           behavior: SnackBarBehavior.floating,
-          content: const Text('Transaction deleted'),
-          action: SnackBarAction(label: 'OK', onPressed: () {}),
+          content: Text('Transaction deleted'),
         ),
       );
     } catch (error) {
-      if (!context.mounted) return;
+      if (!context.mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -966,7 +994,6 @@ class _JournalEntryTile extends ConsumerWidget {
     }
   }
 }
-
 // ============================================================
 // MINI PILL
 // ============================================================

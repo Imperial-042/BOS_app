@@ -326,7 +326,7 @@ class CashflowPage extends ConsumerWidget {
                               Text(
                                 businessName == null || businessName.isEmpty
                                     ? 'Cashflow'
-                                    : '$businessName cashflow',
+                                    : '$businessName Cashflow',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: theme.textTheme.headlineMedium?.copyWith(
