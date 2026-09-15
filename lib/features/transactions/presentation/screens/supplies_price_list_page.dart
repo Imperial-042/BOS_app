@@ -1,4 +1,10 @@
-import 'package:bos_application/features/transactions/presentation/screens/purchase_entry_sheet.dart';
+import 'package:bos_application/core/branding/branding.dart';
+import 'package:bos_application/features/transactions/domain/costing_service.dart';
+import 'package:bos_application/features/transactions/domain/unit_options.dart';
+import 'package:bos_application/features/transactions/presentation/screens/products_page.dart'
+    hide costingServiceProvider;
+import 'package:bos_application/features/transactions/presentation/screens/purchase_entry_sheet.dart'
+    hide costingServiceProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -8,6 +14,7 @@ import 'package:drift/drift.dart' hide Column, Table;
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../../transactions/presentation/screens/transaction_page.dart'
     show
@@ -32,14 +39,13 @@ String _formatDateShort(DateTime date) {
   return DateFormat('MMM d').format(date);
 }
 
-String _capitalize(String value) {
-  if (value.isEmpty) return value;
-  return value[0].toUpperCase() + value.substring(1);
-}
-
 // ============================================================================
 // SUPPLIES PROVIDERS
 // ============================================================================
+
+final costingServiceProvider = Provider<CostingService>((ref) {
+  return CostingService(ref.watch(databaseProvider));
+});
 
 final suppliesProvider = StreamProvider<List<Supply>>((ref) {
   ref.watch(ledgerVersionProvider);
@@ -1394,138 +1400,179 @@ class _SupplyCard extends ConsumerWidget {
       (sum, item) => sum + item.quantity,
     );
 
-    return Material(
-      color: scheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(20),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => SupplyDetailPage(supply: supply)),
-          );
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(15),
-          child: Row(
-            children: [
-              _SupplyAvatar(name: supply.name),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      supply.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.1,
-                      ),
-                    ),
-                    if (supply.brand != null &&
-                        supply.brand!.trim().isNotEmpty) ...[
-                      const SizedBox(height: 2),
+    return Slidable(
+      key: ValueKey(supply.id),
+      endActionPane: ActionPane(
+        motion: const DrawerMotion(),
+        extentRatio: 0.3,
+        children: [
+          SlidableAction(
+            onPressed: (_) => _openStockAdjustmentSheet(context, ref),
+            backgroundColor: Colors.orange,
+            foregroundColor: Colors.white,
+            icon: Icons.remove_shopping_cart_outlined,
+            label: 'Adjust\nStock',
+            borderRadius: BorderRadius.circular(20),
+          ),
+        ],
+      ),
+      child: Material(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SupplyDetailPage(supply: supply),
+              ),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(15),
+            child: Row(
+              children: [
+                _SupplyAvatar(name: supply.name),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        supply.brand!,
+                        supply.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                      if (supply.brand != null &&
+                          supply.brand!.trim().isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          supply.brand!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          if (supply.unit != null &&
+                              supply.unit!.trim().isNotEmpty) ...[
+                            Icon(
+                              Icons.straighten_outlined,
+                              size: 13,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                'per ${supply.unitQuantity != null ? '${supply.unitQuantity} ' : ''}${supply.unit}',
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                          historyAsync.when(
+                            data: (history) {
+                              final trend = _trendFor(history);
+
+                              if (trend == _Trend.none) {
+                                return const SizedBox.shrink();
+                              }
+
+                              return Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: _TrendBadge(trend: trend),
+                              );
+                            },
+                            loading: () => const SizedBox.shrink(),
+                            error: (_, __) => const SizedBox.shrink(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Text(
+                            _peso(supply.currentPrice),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              color: scheme.primary,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _StockBadge(
+                            stock: supply.currentStock,
+                            unit: supply.stockUnit,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filled(
+                      tooltip: 'Add to cart',
+                      onPressed: () {
+                        ref.read(cartProvider.notifier).addOrIncrement(supply);
+
+                        ScaffoldMessenger.of(context)
+                          ..hideCurrentSnackBar()
+                          ..showSnackBar(
+                            SnackBar(
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(milliseconds: 1100),
+                              content: Text('${supply.name} added to cart'),
+                            ),
+                          );
+                      },
+                      icon: const Icon(
+                        Icons.add_shopping_cart_rounded,
+                        size: 20,
+                      ),
+                    ),
+                    if (quantityInCart > 0) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '$quantityInCart in cart',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        if (supply.unit != null &&
-                            supply.unit!.trim().isNotEmpty) ...[
-                          Icon(
-                            Icons.straighten_outlined,
-                            size: 13,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              'per ${supply.unitQuantity != null ? '${supply.unitQuantity} ' : ''}${supply.unit}',
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                        historyAsync.when(
-                          data: (history) {
-                            final trend = _trendFor(history);
-
-                            if (trend == _Trend.none) {
-                              return const SizedBox.shrink();
-                            }
-
-                            return Padding(
-                              padding: const EdgeInsets.only(left: 8),
-                              child: _TrendBadge(trend: trend),
-                            );
-                          },
-                          loading: () => const SizedBox.shrink(),
-                          error: (_, __) => const SizedBox.shrink(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _peso(supply.currentPrice),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: scheme.primary,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton.filled(
-                    tooltip: 'Add to cart',
-                    onPressed: () {
-                      ref.read(cartProvider.notifier).addOrIncrement(supply);
-
-                      ScaffoldMessenger.of(context)
-                        ..hideCurrentSnackBar()
-                        ..showSnackBar(
-                          SnackBar(
-                            behavior: SnackBarBehavior.floating,
-                            duration: const Duration(milliseconds: 1100),
-                            content: Text('${supply.name} added to cart'),
-                          ),
-                        );
-                    },
-                    icon: const Icon(Icons.add_shopping_cart_rounded, size: 20),
-                  ),
-                  if (quantityInCart > 0) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      '$quantityInCart in cart',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  void _openStockAdjustmentSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => StockAdjustmentSheet(supply: supply),
     );
   }
 }
@@ -1568,6 +1615,52 @@ class _SupplyAvatar extends StatelessWidget {
 // ============================================================================
 // TREND BADGE
 // ============================================================================
+
+// ============================================================
+// STOCK BADGE — shows how much is currently on hand, at a glance.
+// ============================================================
+
+class _StockBadge extends StatelessWidget {
+  final double stock;
+  final String unit;
+  const _StockBadge({required this.stock, required this.unit});
+
+  String _trim(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+  @override
+  Widget build(BuildContext context) {
+    final isOut = stock <= 0;
+    final color = isOut
+        ? Colors.redAccent
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: isOut
+            ? Colors.redAccent.withValues(alpha: 0.12)
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.inventory_2_outlined, size: 11, color: color),
+          const SizedBox(width: 4),
+          Text(
+            isOut ? 'Out of stock' : '${_trim(stock)} $unit',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _TrendBadge extends StatelessWidget {
   final _Trend trend;
@@ -1814,39 +1907,15 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
   final _nameController = TextEditingController();
   final _brandController = TextEditingController();
   final _unitQuantityController = TextEditingController();
-  final _priceController = TextEditingController();
-  final _storeController = TextEditingController();
-  final _addressController = TextEditingController();
 
   String? _selectedUnit;
   bool _saving = false;
-
-  static const List<String> _units = [
-    'sack',
-    'kg',
-    'box',
-    'pack',
-    'liter',
-    'piece',
-    'roll',
-    'bottle',
-    'can',
-    'tray',
-    'dozen',
-    'meter',
-    'gram',
-    'milliliter',
-    'set',
-  ];
 
   @override
   void dispose() {
     _nameController.dispose();
     _brandController.dispose();
     _unitQuantityController.dispose();
-    _priceController.dispose();
-    _storeController.dispose();
-    _addressController.dispose();
     super.dispose();
   }
 
@@ -1855,10 +1924,6 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
       return;
     }
 
-    final normalizedPrice = _priceController.text.replaceAll(',', '').trim();
-
-    final price = double.tryParse(normalizedPrice);
-
     final normalizedUnitQuantity = _unitQuantityController.text
         .replaceAll(',', '')
         .trim();
@@ -1866,12 +1931,11 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
         ? null
         : double.tryParse(normalizedUnitQuantity);
 
-    if (price == null ||
-        price < 0 ||
-        (unitQuantity != null && unitQuantity <= 0)) {
+    if (unitQuantity != null && unitQuantity <= 0) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter a valid price.'),
+          content: Text('Please enter a valid quantity.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -1887,7 +1951,6 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
 
       final supplyId = const Uuid().v4();
       final now = DateTime.now();
-      final priceCents = (price * 100).round();
 
       await db
           .into(db.supplies)
@@ -1903,53 +1966,45 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
               ),
               unitQuantity: Value(unitQuantity),
               unit: Value(_selectedUnit),
-              lastStoreName: Value(
-                _storeController.text.trim().isEmpty
-                    ? null
-                    : _storeController.text.trim(),
-              ),
-              lastStoreAddress: Value(
-                _addressController.text.trim().isEmpty
-                    ? null
-                    : _addressController.text.trim(),
-              ),
-              currentPrice: priceCents,
+              // THE FIX: this form no longer captures price/store — that
+              // now happens in one place, the Purchase Entry sheet, which
+              // this creation flow chains directly into below. currentPrice
+              // starts at 0 and gets set for real the moment a purchase
+              // is recorded.
+              currentPrice: 0,
+              stockUnit: Value(_selectedUnit ?? 'piece'),
+              currentStock: const Value(0),
+              costPerBaseUnit: const Value(0),
               updatedAt: Value(now),
               isActive: const Value(true),
             ),
           );
 
-      await db
-          .into(db.supplyPriceHistory)
-          .insert(
-            SupplyPriceHistoryCompanion.insert(
-              id: const Uuid().v4(),
-              supplyId: supplyId,
-              price: priceCents,
-              storeName: _storeController.text.trim(),
-              storeAddress: Value(
-                _addressController.text.trim().isEmpty
-                    ? null
-                    : _addressController.text.trim(),
-              ),
-              recordedDate: now,
-            ),
-          );
-
       ref.invalidate(suppliesProvider);
-      ref.invalidate(priceHistoryProvider(supplyId));
 
-      if (mounted) {
-        final savedName = _nameController.text.trim();
+      if (!mounted) return;
 
-        Navigator.pop(context);
+      final createdSupply = await (db.select(
+        db.supplies,
+      )..where((s) => s.id.equals(supplyId))).getSingle();
+      final savedName = _nameController.text.trim();
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            content: Text('$savedName added to your catalog'),
-          ),
-        );
+      if (!mounted) return;
+      Navigator.pop(context);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('$savedName added — now record your first purchase'),
+        ),
+      );
+
+      // Chain straight into the purchase sheet — one path for entering
+      // stock and cost, no separate "just set a price" shortcut that
+      // could leave things out of sync.
+      if (context.mounted) {
+        await showPurchaseEntrySheet(context, supply: createdSupply);
       }
     } catch (e) {
       if (!mounted) return;
@@ -1989,9 +2044,6 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
           builder: (context, constraints) {
             // Responsive horizontal padding.
             final horizontalPadding = constraints.maxWidth < 360 ? 14.0 : 20.0;
-
-            // Below 390px, stack Price + Unit vertically.
-            final isNarrow = constraints.maxWidth < 390;
 
             return SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
@@ -2138,163 +2190,68 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
                     const SizedBox(height: 12),
 
                     // ----------------------------------------------------------
-                    // RESPONSIVE PRICE + UNIT
+                    // BASE UNIT — a dropdown, not free text, so every
+                    // downstream recipe/costing calculation can trust it.
                     // ----------------------------------------------------------
-                    if (isNarrow) ...[
-                      // SMALL PHONE
-                      TextFormField(
-                        controller: _priceController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: const InputDecoration(
-                          labelText: 'Current price',
-                          prefixText: '₱ ',
-                          prefixIcon: Icon(Icons.payments_outlined),
-                        ),
-                        validator: (value) {
-                          final normalized = value?.replaceAll(',', '').trim();
-
-                          final parsed = double.tryParse(normalized ?? '');
-
-                          if (parsed == null || parsed < 0) {
-                            return 'Enter a valid price';
-                          }
-
-                          return null;
-                        },
+                    DropdownButtonFormField<String>(
+                      initialValue: _selectedUnit,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Tracked in',
+                        helperText:
+                            'The unit BOS uses to track this item\'s stock',
+                        prefixIcon: Icon(Icons.straighten_outlined),
                       ),
-
-                      const SizedBox(height: 12),
-
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedUnit,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Unit',
-                          prefixIcon: Icon(Icons.straighten_outlined),
-                        ),
-                        items: _units
-                            .map(
-                              (unit) => DropdownMenuItem<String>(
-                                value: unit,
-                                child: Text(
-                                  _capitalize(unit),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                      items: kStockUnitOptions
+                          .map(
+                            (unit) => DropdownMenuItem<String>(
+                              value: unit,
+                              child: Text(
+                                kStockUnitLabels[unit] ?? unit,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedUnit = value;
-                          });
-                        },
-                      ),
-                    ] else ...[
-                      // NORMAL / LARGE PHONE / TABLET
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            flex: 3,
-                            child: TextFormField(
-                              controller: _priceController,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                              decoration: const InputDecoration(
-                                labelText: 'Current price',
-                                prefixText: '₱ ',
-                                prefixIcon: Icon(Icons.payments_outlined),
-                              ),
-                              validator: (value) {
-                                final normalized = value
-                                    ?.replaceAll(',', '')
-                                    .trim();
-
-                                final parsed = double.tryParse(
-                                  normalized ?? '',
-                                );
-
-                                if (parsed == null || parsed < 0) {
-                                  return 'Enter a valid price';
-                                }
-
-                                return null;
-                              },
                             ),
+                          )
+                          .toList(),
+                      validator: (value) =>
+                          value == null ? 'Choose a unit' : null,
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedUnit = value;
+                        });
+                      },
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline_rounded,
+                            size: 16,
+                            color: scheme.onSurfaceVariant,
                           ),
-
-                          const SizedBox(width: 12),
-
+                          const SizedBox(width: 8),
                           Expanded(
-                            flex: 2,
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _selectedUnit,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Unit',
-                                prefixIcon: Icon(Icons.straighten_outlined),
+                            child: Text(
+                              'Next you\'ll record your first purchase — price, quantity, and where you bought it.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.onSurfaceVariant,
                               ),
-                              items: _units
-                                  .map(
-                                    (unit) => DropdownMenuItem<String>(
-                                      value: unit,
-                                      child: Text(
-                                        _capitalize(unit),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                setState(() {
-                                  _selectedUnit = value;
-                                });
-                              },
                             ),
                           ),
                         ],
                       ),
-                    ],
-
-                    const SizedBox(height: 24),
-
-                    // ----------------------------------------------------------
-                    // SUPPLIER DETAILS
-                    // ----------------------------------------------------------
-                    const _SectionLabel(
-                      title: 'Where you bought it',
-                      icon: Icons.storefront_outlined,
                     ),
 
-                    const SizedBox(height: 12),
-
-                    TextFormField(
-                      controller: _storeController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(
-                        labelText: 'Store / supplier',
-                        hintText: 'Optional',
-                        prefixIcon: Icon(Icons.storefront_outlined),
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    TextFormField(
-                      controller: _addressController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(
-                        labelText: 'Address',
-                        hintText: 'Optional',
-                        prefixIcon: Icon(Icons.location_on_outlined),
-                      ),
-                    ),
-
-                    const SizedBox(height: 26),
+                    const SizedBox(height: 20),
 
                     // ----------------------------------------------------------
                     // CANCEL + SAVE
@@ -2330,9 +2287,9 @@ class _SupplyFormState extends ConsumerState<_SupplyForm> {
                                         strokeWidth: 2,
                                       ),
                                     )
-                                  : const Icon(Icons.check_rounded),
+                                  : const Icon(Icons.arrow_forward_rounded),
                               label: Text(
-                                _saving ? 'Saving...' : 'Save supply',
+                                _saving ? 'Saving...' : 'Next: Add Stock',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -2388,19 +2345,137 @@ class _SectionLabel extends StatelessWidget {
 // SUPPLY DETAIL
 // ============================================================================
 
+// ============================================================
+// USED IN PRODUCTS — surfaces which recipes depend on this
+// supply, so a price spike or stock-out shows its real impact
+// before it becomes a surprise.
+// ============================================================
+
+final _productsUsingSupplyProvider =
+    FutureProvider.family<List<Product>, String>((ref, supplyId) {
+      ref.watch(ledgerVersionProvider);
+      return ref
+          .watch(costingServiceProvider)
+          .findProductsUsingSupply(supplyId);
+    });
+
+class _UsedInProductsSection extends ConsumerWidget {
+  final Supply supply;
+  const _UsedInProductsSection({required this.supply});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final productsAsync = ref.watch(_productsUsingSupplyProvider(supply.id));
+
+    return productsAsync.when(
+      data: (products) {
+        if (products.isEmpty) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.account_tree_outlined,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Used in ${products.length} product${products.length == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: products
+                    .map(
+                      (p) => ActionChip(
+                        label: Text(p.name),
+                        avatar: const Icon(
+                          Icons.restaurant_menu_outlined,
+                          size: 15,
+                        ),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ProductDetailPage(product: p),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+          ),
+        );
+      },
+      loading: () => const SizedBox(
+        height: 24,
+        child: Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+}
+
 class SupplyDetailPage extends ConsumerWidget {
   final Supply supply;
 
   const SupplyDetailPage({super.key, required this.supply});
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
+    // THE FIX (#1): check whether this supply is used in any recipe
+    // before deleting it — same reference-check pattern as Products.
+    final affectedProducts = await ref
+        .read(costingServiceProvider)
+        .findProductsUsingSupply(supply.id);
+
+    if (!context.mounted) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Delete supply?'),
-          content: Text(
-            'This will remove "${supply.name}" and its recorded price history.',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This will remove "${supply.name}" and its recorded price history.',
+              ),
+              if (affectedProducts.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'It\'s used in: ${affectedProducts.map((p) => p.name).join(', ')}.',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Those recipes will lose this ingredient — you\'ll need to replace it if you still want to make them.',
+                ),
+              ],
+            ],
           ),
           actions: [
             TextButton(
@@ -2429,6 +2504,12 @@ class SupplyDetailPage extends ConsumerWidget {
 
     final db = ref.read(databaseProvider);
 
+    // Remove this supply from any recipe that references it, so
+    // nothing is left pointing at a deleted supply.
+    await (db.delete(
+      db.recipeComponents,
+    )..where((c) => c.supplyId.equals(supply.id))).go();
+
     await (db.delete(
       db.supplyPriceHistory,
     )..where((h) => h.supplyId.equals(supply.id))).go();
@@ -2437,10 +2518,90 @@ class SupplyDetailPage extends ConsumerWidget {
 
     ref.invalidate(suppliesProvider);
     ref.invalidate(priceHistoryProvider(supply.id));
+    ref
+        .read(ledgerVersionProvider.notifier)
+        .state++; // affected recipes need to recompute
 
     if (context.mounted) {
       Navigator.pop(context);
     }
+  }
+
+  Future<void> _setLowStockThreshold(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final controller = TextEditingController(
+      text: supply.lowStockThreshold != null
+          ? (supply.lowStockThreshold ==
+                    supply.lowStockThreshold!.roundToDouble()
+                ? supply.lowStockThreshold!.toInt().toString()
+                : supply.lowStockThreshold.toString())
+          : '',
+    );
+
+    final result = await showDialog<double?>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Low-stock alert'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Get notified when ${supply.name} drops to or below this amount.',
+              style: TextStyle(
+                color: Theme.of(dialogContext).colorScheme.onSurfaceVariant,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: InputDecoration(
+                labelText: 'Threshold',
+                suffixText: supply.stockUnit,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (supply.lowStockThreshold != null)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, -1.0), // sentinel: clear
+              child: const Text(
+                'Clear Alert',
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, double.tryParse(controller.text)),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return;
+    final db = ref.read(databaseProvider);
+    final newThreshold = result == -1.0 ? null : result;
+
+    await (db.update(db.supplies)..where((s) => s.id.equals(supply.id))).write(
+      SuppliesCompanion(lowStockThreshold: Value(newThreshold)),
+    );
+
+    ref.invalidate(suppliesProvider);
   }
 
   @override
@@ -2497,9 +2658,39 @@ class SupplyDetailPage extends ConsumerWidget {
             onSelected: (value) {
               if (value == 'delete') {
                 _confirmDelete(context, ref);
+              } else if (value == 'adjust_stock') {
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => StockAdjustmentSheet(supply: supply),
+                );
+              } else if (value == 'set_threshold') {
+                _setLowStockThreshold(context, ref);
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'set_threshold',
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_outlined),
+                    SizedBox(width: 10),
+                    Text('Set low-stock alert'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'adjust_stock',
+                child: Row(
+                  children: [
+                    Icon(Icons.remove_shopping_cart_outlined),
+                    SizedBox(width: 10),
+                    Text('Adjust stock (damaged/expired)'),
+                  ],
+                ),
+              ),
               PopupMenuItem(
                 value: 'delete',
                 child: Row(
@@ -2539,6 +2730,8 @@ class SupplyDetailPage extends ConsumerWidget {
                   date: cheapest.recordedDate,
                 ),
               ],
+              const SizedBox(height: 16),
+              _UsedInProductsSection(supply: liveSupply),
               const SizedBox(height: 24),
               Row(
                 children: [
@@ -2840,6 +3033,37 @@ class _CurrentPriceCard extends StatelessWidget {
               ),
             ),
           ],
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: scheme.onPrimaryContainer.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.inventory_2_outlined,
+                  size: 15,
+                  color: scheme.onPrimaryContainer,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  supply.currentStock <= 0
+                      ? 'Out of stock'
+                      : '${supply.currentStock == supply.currentStock.roundToDouble() ? supply.currentStock.toInt() : supply.currentStock.toStringAsFixed(1)} ${supply.stockUnit} in stock',
+                  style: TextStyle(
+                    color: supply.currentStock <= 0
+                        ? Colors.redAccent
+                        : scheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -3141,100 +3365,10 @@ class _CartPageState extends ConsumerState<CartPage> {
   }
 
   Future<void> _addCustomItem() async {
-    final nameController = TextEditingController();
-    final priceController = TextEditingController();
-    final unitController = TextEditingController();
-
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Add custom item'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Item name',
-                    prefixIcon: Icon(Icons.edit_note_outlined),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: priceController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Unit price',
-                    prefixText: '₱ ',
-                    prefixIcon: Icon(Icons.payments_outlined),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: unitController,
-                  decoration: const InputDecoration(
-                    labelText: 'Unit',
-                    hintText: 'Optional',
-                    prefixIcon: Icon(Icons.straighten_outlined),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-
-                final normalized = priceController.text
-                    .replaceAll(',', '')
-                    .trim();
-
-                final price = double.tryParse(normalized);
-
-                if (name.isEmpty || price == null || price < 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Enter a valid item name and price.'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                ref
-                    .read(cartProvider.notifier)
-                    .addCustomItem(
-                      name: name,
-                      unitPrice: (price * 100).round(),
-                      unit: unitController.text.trim().isEmpty
-                          ? null
-                          : unitController.text.trim(),
-                    );
-
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => const _AddCustomItemDialog(),
     );
-
-    nameController.dispose();
-    priceController.dispose();
-    unitController.dispose();
   }
 
   Future<void> _saveCart() async {
@@ -3354,8 +3488,13 @@ class _CartPageState extends ConsumerState<CartPage> {
           );
 
       // ----------------------------------------------------------------------
-      // Save each cart line.
+      // Save each cart line, and — for lines linked to an existing supply —
+      // record the purchase against it so currentStock, costPerBaseUnit,
+      // and price history reflect this cart's quantity/price too, the
+      // same way the standalone "Record Purchase" sheet does.
       // ----------------------------------------------------------------------
+
+      final costingService = ref.read(costingServiceProvider);
 
       for (final item in cart) {
         await db
@@ -3374,6 +3513,36 @@ class _CartPageState extends ConsumerState<CartPage> {
                 lineTotal: item.lineTotal,
               ),
             );
+
+        if (item.supplyId == null) continue;
+
+        final supply = await (db.select(
+          db.supplies,
+        )..where((s) => s.id.equals(item.supplyId!))).getSingleOrNull();
+
+        if (supply == null) continue;
+
+        final unitsPerPurchase = supply.unitsPerPurchase > 0
+            ? supply.unitsPerPurchase
+            : (item.unitQuantity != null && item.unitQuantity! > 0
+                  ? item.unitQuantity!
+                  : 1.0);
+
+        final purchaseUnit = (supply.purchaseUnit ?? '').trim().isNotEmpty
+            ? supply.purchaseUnit!
+            : ((item.unit ?? '').trim().isNotEmpty
+                  ? item.unit!
+                  : supply.stockUnit);
+
+        await costingService.recordPurchase(
+          supplyId: supply.id,
+          pricePerPurchaseUnitCents: item.unitPrice,
+          purchaseQuantity: item.quantity.toDouble(),
+          unitsPerPurchase: unitsPerPurchase,
+          purchaseUnit: purchaseUnit,
+          storeName: storeName ?? 'Unspecified',
+          date: purchaseDate,
+        );
       }
 
       ref.read(cartProvider.notifier).clear();
@@ -3619,6 +3788,193 @@ class _CartPageState extends ConsumerState<CartPage> {
 }
 
 // ============================================================================
+// TEXT ENTRY DIALOG — owns its own TextEditingController so disposal
+// is tied to this State's lifecycle (framework disposes it only once
+// the dialog route is actually removed), instead of a caller manually
+// calling controller.dispose() right after `await showDialog(...)`
+// resolves — which races the dialog's close animation and can leave
+// the still-rendering TextField pointed at an already-disposed
+// controller (FlutterError: "used after being disposed").
+// ============================================================================
+
+class _TextEntryDialog extends StatefulWidget {
+  final String title;
+  final String label;
+  final String initialText;
+  final String? prefixText;
+  final TextInputType? keyboardType;
+  final TextCapitalization textCapitalization;
+
+  /// Returns an error message to show (and block save) or null if valid.
+  final String? Function(String value)? validate;
+
+  const _TextEntryDialog({
+    required this.title,
+    required this.label,
+    required this.initialText,
+    this.prefixText,
+    this.keyboardType,
+    this.textCapitalization = TextCapitalization.none,
+    this.validate,
+  });
+
+  @override
+  State<_TextEntryDialog> createState() => _TextEntryDialogState();
+}
+
+class _TextEntryDialogState extends State<_TextEntryDialog> {
+  late final _controller = TextEditingController(text: widget.initialText);
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final value = _controller.text.trim();
+    final error = widget.validate?.call(value);
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: widget.keyboardType,
+        textCapitalization: widget.textCapitalization,
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          labelText: widget.label,
+          prefixText: widget.prefixText,
+          errorText: _error,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+// ============================================================================
+// ADD CUSTOM ITEM DIALOG — owns its own controllers (see _TextEntryDialog
+// for why manual dispose-after-await is unsafe).
+// ============================================================================
+
+class _AddCustomItemDialog extends ConsumerStatefulWidget {
+  const _AddCustomItemDialog();
+
+  @override
+  ConsumerState<_AddCustomItemDialog> createState() =>
+      _AddCustomItemDialogState();
+}
+
+class _AddCustomItemDialogState extends ConsumerState<_AddCustomItemDialog> {
+  final _nameController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _unitController = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _priceController.dispose();
+    _unitController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _nameController.text.trim();
+    final normalized = _priceController.text.replaceAll(',', '').trim();
+    final price = double.tryParse(normalized);
+
+    if (name.isEmpty || price == null || price < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid item name and price.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    ref
+        .read(cartProvider.notifier)
+        .addCustomItem(
+          name: name,
+          unitPrice: (price * 100).round(),
+          unit: _unitController.text.trim().isEmpty
+              ? null
+              : _unitController.text.trim(),
+        );
+
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add custom item'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Item name',
+                prefixIcon: Icon(Icons.edit_note_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _priceController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Unit price',
+                prefixText: '₱ ',
+                prefixIcon: Icon(Icons.payments_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _unitController,
+              decoration: const InputDecoration(
+                labelText: 'Unit',
+                hintText: 'Optional',
+                prefixIcon: Icon(Icons.straighten_outlined),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Add')),
+      ],
+    );
+  }
+}
+
+// ============================================================================
 // CART ITEM TILE
 // ============================================================================
 
@@ -3635,6 +3991,36 @@ class _CartItemTile extends ConsumerWidget {
     return Dismissible(
       key: ValueKey(item.id),
       direction: DismissDirection.endToStart,
+      // THE FIX: confirmDismiss runs BEFORE the item is removed, and
+      // the swipe only completes if this resolves to true. Without
+      // it, any swipe past the threshold deletes immediately — easy
+      // to trigger by accident while just scrolling the cart.
+      confirmDismiss: (_) async {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: const Text('Remove this item?'),
+            content: Text('Remove "${item.name}" from your cart?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                ),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        );
+        return confirmed ?? false;
+      },
       background: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
@@ -3748,142 +4134,74 @@ class _CartItemTile extends ConsumerWidget {
   }
 
   Future<void> _editName(BuildContext context, WidgetRef ref) async {
-    final controller = TextEditingController(text: item.name);
+    final cartNotifier = ref.read(cartProvider.notifier);
+    final itemId = item.id;
 
     final result = await showDialog<String>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit item name'),
-          content: TextField(
-            controller: controller,
-            textCapitalization: TextCapitalization.words,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Item name'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final value = controller.text.trim();
-
-                if (value.isEmpty) return;
-
-                Navigator.pop(dialogContext, value);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _TextEntryDialog(
+        title: 'Edit item name',
+        label: 'Item name',
+        initialText: item.name,
+        textCapitalization: TextCapitalization.words,
+        validate: (value) => value.isEmpty ? 'Enter an item name' : null,
+      ),
     );
 
-    controller.dispose();
-
     if (result != null && result.isNotEmpty) {
-      ref.read(cartProvider.notifier).updateName(item.id, result);
+      cartNotifier.updateName(itemId, result);
     }
   }
 
   Future<void> _editPrice(BuildContext context, WidgetRef ref) async {
-    final controller = TextEditingController(
-      text: (item.unitPrice / 100).toStringAsFixed(2),
-    );
+    final cartNotifier = ref.read(cartProvider.notifier);
+    final itemId = item.id;
 
-    final result = await showDialog<int>(
+    final result = await showDialog<String>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit unit price'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Unit price',
-              prefixText: '₱ ',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final normalized = controller.text.replaceAll(',', '').trim();
-
-                final price = double.tryParse(normalized);
-
-                if (price == null || price < 0) {
-                  return;
-                }
-
-                Navigator.pop(dialogContext, (price * 100).round());
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _TextEntryDialog(
+        title: 'Edit unit price',
+        label: 'Unit price',
+        prefixText: '₱ ',
+        initialText: (item.unitPrice / 100).toStringAsFixed(2),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        validate: (value) {
+          final price = double.tryParse(value.replaceAll(',', ''));
+          if (price == null || price < 0) return 'Enter a valid price';
+          return null;
+        },
+      ),
     );
-
-    controller.dispose();
 
     if (result != null) {
-      ref.read(cartProvider.notifier).updatePrice(item.id, result);
+      final price = double.parse(result.replaceAll(',', ''));
+      cartNotifier.updatePrice(itemId, (price * 100).round());
     }
   }
 
   Future<void> _editQuantity(BuildContext context, WidgetRef ref) async {
-    final controller = TextEditingController(text: '${item.quantity}');
+    final cartNotifier = ref.read(cartProvider.notifier);
+    final itemId = item.id;
 
-    final result = await showDialog<int>(
+    final result = await showDialog<String>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit quantity'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Quantity'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final quantity = int.tryParse(controller.text.trim());
-
-                if (quantity == null || quantity <= 0) {
-                  return;
-                }
-
-                Navigator.pop(dialogContext, quantity);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _TextEntryDialog(
+        title: 'Edit quantity',
+        label: 'Quantity',
+        initialText: '${item.quantity}',
+        keyboardType: TextInputType.number,
+        validate: (value) {
+          final quantity = int.tryParse(value);
+          if (quantity == null || quantity <= 0) {
+            return 'Enter a valid quantity';
+          }
+          return null;
+        },
+      ),
     );
 
-    controller.dispose();
-
     if (result != null) {
-      ref.read(cartProvider.notifier).updateQuantity(item.id, result);
+      cartNotifier.updateQuantity(itemId, int.parse(result));
     }
   }
 }
@@ -4023,5 +4341,291 @@ class _QuantityControl extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ============================================================
+// STOCK ADJUSTMENT SHEET — the "pull-out edit": write off stock
+// that's no longer sellable (damaged, expired, miscounted) without
+// touching cost-per-unit, only quantity on hand.
+// ============================================================
+
+enum _AdjustmentReason { damaged, expired, miscount, other }
+
+extension on _AdjustmentReason {
+  String get label => switch (this) {
+    _AdjustmentReason.damaged => 'Damaged',
+    _AdjustmentReason.expired => 'Expired',
+    _AdjustmentReason.miscount => 'Count correction',
+    _AdjustmentReason.other => 'Other',
+  };
+  IconData get icon => switch (this) {
+    _AdjustmentReason.damaged => Icons.broken_image_outlined,
+    _AdjustmentReason.expired => Icons.event_busy_outlined,
+    _AdjustmentReason.miscount => Icons.fact_check_outlined,
+    _AdjustmentReason.other => Icons.help_outline_rounded,
+  };
+}
+
+class StockAdjustmentSheet extends ConsumerStatefulWidget {
+  final Supply supply;
+  const StockAdjustmentSheet({super.key, required this.supply});
+
+  @override
+  ConsumerState<StockAdjustmentSheet> createState() =>
+      _StockAdjustmentSheetState();
+}
+
+class _StockAdjustmentSheetState extends ConsumerState<StockAdjustmentSheet> {
+  _AdjustmentReason _reason = _AdjustmentReason.damaged;
+  final _quantityController = TextEditingController();
+  final _noteController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _quantityController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  String _trim(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final qty = double.tryParse(_quantityController.text);
+    final resultingStock = qty == null
+        ? null
+        : widget.supply.currentStock - qty;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Adjust Stock',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              Text(
+                '${widget.supply.name} · currently ${_trim(widget.supply.currentStock)} ${widget.supply.stockUnit} in stock',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 18),
+
+              Text(
+                'Reason',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _AdjustmentReason.values
+                    .map(
+                      (r) => ChoiceChip(
+                        label: Text(r.label),
+                        avatar: Icon(r.icon, size: 16),
+                        selected: _reason == r,
+                        onSelected: (_) => setState(() => _reason = r),
+                        selectedColor: AppColors.primary.withValues(
+                          alpha: 0.16,
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+              const SizedBox(height: 16),
+
+              TextField(
+                controller: _quantityController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Quantity to remove',
+                  suffixText: widget.supply.stockUnit,
+                  prefixIcon: const Icon(Icons.remove_circle_outline),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+
+              if (resultingStock != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color:
+                        (resultingStock < 0
+                                ? Colors.redAccent
+                                : AppColors.primary)
+                            .withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    resultingStock < 0
+                        ? 'That\'s more than what\'s currently in stock.'
+                        : 'New stock after this: ${_trim(resultingStock)} ${widget.supply.stockUnit}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: resultingStock < 0
+                          ? Colors.redAccent
+                          : AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 14),
+              TextField(
+                controller: _noteController,
+                decoration: const InputDecoration(
+                  labelText: 'Note (optional)',
+                  prefixIcon: Icon(Icons.notes_outlined),
+                ),
+              ),
+
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Write Off Stock',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    final qty = double.tryParse(_quantityController.text);
+    if (qty == null || qty <= 0) {
+      setState(() => _error = 'Enter a valid quantity.');
+      return;
+    }
+    if (qty > widget.supply.currentStock) {
+      setState(() => _error = 'Cannot remove more than what\'s in stock.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      final note = _noteController.text.trim();
+      final reason = '${_reason.label}${note.isEmpty ? '' : ' — $note'}';
+
+      // THE FIX (#4): capture what the Undo action needs BEFORE
+      // popping this sheet — same "don't touch ref after the widget
+      // might be gone" rule as the cart edit crash fix. The captured
+      // service/notifier objects stay valid regardless of what
+      // happens to this widget.
+      final costingService = ref.read(costingServiceProvider);
+      final ledgerNotifier = ref.read(ledgerVersionProvider.notifier);
+      final messenger = ScaffoldMessenger.of(context);
+
+      await costingService.adjustStock(
+        supplyId: widget.supply.id,
+        deltaBaseUnits: -qty,
+        reason: reason,
+      );
+      ledgerNotifier.state++;
+
+      if (mounted) {
+        Navigator.pop(context);
+        messenger.showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+            content: Text(
+              '${_trim(qty)} ${widget.supply.stockUnit} written off (${_reason.label})',
+            ),
+            action: SnackBarAction(
+              label: 'Undo',
+              onPressed: () async {
+                await costingService.adjustStock(
+                  supplyId: widget.supply.id,
+                  deltaBaseUnits: qty, // reverse the write-off
+                  reason: 'Undo: $reason',
+                );
+                ledgerNotifier.state++;
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 }

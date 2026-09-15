@@ -19,8 +19,9 @@ import '../../../transactions/presentation/screens/transaction_page.dart'
         businessProfileProvider,
         kCurrentBusinessId,
         ledgerVersionProvider,
-        paymentAccountsProvider,
-        transactionServiceProvider;
+        paymentAccountsProvider;
+import '../../../transactions/presentation/screens/cashflow_page.dart'
+    show capitalAssetLiabilityServiceProvider;
 
 class OnboardingScreen extends StatelessWidget {
   final VoidCallback onFinished;
@@ -461,49 +462,100 @@ class _BusinessProfileEditorState
   }
 
   Future<void> _loadProvinces() async {
+    if (_country != 'Philippines') {
+      setState(() {
+        _provinces = [];
+        _cities = [];
+        _barangays = [];
+        _locationsLoading = false;
+        _locationsError = null;
+      });
+      return;
+    }
+
     setState(() {
       _locationsLoading = true;
       _locationsError = null;
     });
+
     try {
       final provinces = await _fetchPlaces('provinces');
-      if (!mounted) return;
+      if (!mounted || _country != 'Philippines') return;
+
       setState(() {
         _provinces = provinces;
         _locationsLoading = false;
       });
+
       final selected = provinces
           .where((item) => item.name == _province)
           .firstOrNull;
-      if (selected != null) await _loadCities(selected);
+      if (selected != null) {
+        await _loadCities(selected);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _locationsLoading = false;
-        _locationsError = 'Unable to load Philippine locations.';
+        _locationsError =
+            'Unable to load Philippine locations. Please try again.';
       });
     }
   }
 
   Future<void> _loadCities(_PsgcPlace province) async {
-    final cities = await _fetchPlaces(
-      'provinces/${province.code}/cities-municipalities',
-    );
-    if (!mounted) return;
-    setState(() {
-      _cities = cities;
-      _barangays = [];
-    });
-    final selected = cities.where((item) => item.name == _city).firstOrNull;
-    if (selected != null) await _loadBarangays(selected);
+    if (_country != 'Philippines' || province.name != _province) {
+      return;
+    }
+
+    try {
+      final cities = await _fetchPlaces(
+        'provinces/${province.code}/cities-municipalities',
+      );
+      if (!mounted || _country != 'Philippines' || province.name != _province) {
+        return;
+      }
+
+      setState(() {
+        _cities = cities;
+        _barangays = [];
+      });
+
+      final selected = cities.where((item) => item.name == _city).firstOrNull;
+      if (selected != null) {
+        await _loadBarangays(selected);
+      }
+    } catch (error) {
+      if (!mounted || _country != 'Philippines') return;
+      setState(() {
+        _cities = [];
+        _barangays = [];
+        _locationsError = 'Unable to load Philippine cities. Please try again.';
+      });
+    }
   }
 
   Future<void> _loadBarangays(_PsgcPlace city) async {
-    final barangays = await _fetchPlaces(
-      'cities-municipalities/${city.code}/barangays',
-    );
-    if (!mounted) return;
-    setState(() => _barangays = barangays);
+    if (_country != 'Philippines' || city.name != _city) {
+      return;
+    }
+
+    try {
+      final barangays = await _fetchPlaces(
+        'cities-municipalities/${city.code}/barangays',
+      );
+      if (!mounted || _country != 'Philippines' || city.name != _city) {
+        return;
+      }
+      setState(() => _barangays = barangays);
+    } catch (error) {
+      if (!mounted || _country != 'Philippines') return;
+      setState(() {
+        _barangays = [];
+        _locationsError =
+            'Unable to load Philippine barangays. Please try again.';
+      });
+    }
   }
 
   @override
@@ -586,36 +638,20 @@ class _BusinessProfileEditorState
       final capitalDelta = capitalCents - previousCapitalCents;
 
       if (!skip && business != null && capitalDelta > 0) {
-        final categories =
-            await (db.select(db.categories)..where(
-                  (category) =>
-                      category.businessId.equals(kCurrentBusinessId) &
-                      category.name.equals('Additional Capital') &
-                      category.txnType.equals('income'),
-                ))
-                .get();
-
-        if (categories.isEmpty) {
-          throw Exception(
-            'The "Additional Capital" income category was not found.',
-          );
-        }
-
         if (_capitalAccountId == null) {
           throw Exception('No capital account was selected.');
         }
 
         await ref
-            .read(transactionServiceProvider)
-            .saveIncome(
+            .read(capitalAssetLiabilityServiceProvider)
+            .recordCapital(
+              businessId: kCurrentBusinessId,
               date: DateTime.now(),
-              categoryId: categories.first.id,
               amount: capitalDelta,
-              paymentAccountId: _capitalAccountId,
+              paymentAccountId: _capitalAccountId!,
               description: previousCapitalCents == 0
                   ? 'Starting capital'
                   : 'Starting capital adjustment',
-              markAsPending: false,
             );
 
         ledgerChanged = true;

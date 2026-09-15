@@ -16,6 +16,7 @@ import '../../../transactions/presentation/screens/transaction_page.dart'
     show ledgerVersionProvider, kCurrentBusinessId;
 import '../../domain/production_service.dart';
 import '../../domain/costing_service.dart';
+import '../../domain/unit_options.dart';
 
 // ============================================================
 // PROVIDERS
@@ -73,11 +74,31 @@ final suppliesForPickerProvider = StreamProvider<List<Supply>>((ref) {
 // PAGE — Products list
 // ============================================================
 
-class ProductsPage extends ConsumerWidget {
+class ProductsPage extends ConsumerStatefulWidget {
   const ProductsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProductsPage> createState() => _ProductsPageState();
+}
+
+class _ProductsPageState extends ConsumerState<ProductsPage> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Product> _filter(List<Product> products) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return products;
+    return products.where((p) => p.name.toLowerCase().contains(q)).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final productsAsync = ref.watch(productsProvider);
 
@@ -108,16 +129,57 @@ class ProductsPage extends ConsumerWidget {
           if (products.isEmpty) {
             return _EmptyState(onAdd: () => _openAddProductSheet(context));
           }
-          return ListView.separated(
+          final filtered = _filter(products);
+          return ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-            itemCount: products.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (context, i) => _ProductCard(product: products[i]),
+            children: [
+              TextField(
+                controller: _searchController,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search products...',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _query = '');
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: scheme.surfaceContainerLow,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              if (filtered.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32),
+                  child: Center(
+                    child: Text(
+                      'No products match "$_query".',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                )
+              else
+                ...filtered.map(
+                  (p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ProductCard(product: p),
+                  ),
+                ),
+            ],
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        heroTag: null,
+        heroTag: 'add_product',
         backgroundColor: AppColors.primary,
         onPressed: () => _openAddProductSheet(context),
         child: const Icon(Icons.add_rounded, color: Colors.white),
@@ -590,6 +652,11 @@ class ProductDetailPage extends ConsumerWidget {
               builder: (_) => _ProductForm(existing: product),
             ),
           ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: 'Delete product',
+            onPressed: () => _confirmDeleteProduct(context, ref),
+          ),
         ],
       ),
       body: ListView(
@@ -715,6 +782,110 @@ class ProductDetailPage extends ConsumerWidget {
       backgroundColor: Colors.transparent,
       builder: (_) => _AddComponentSheet(product: product),
     );
+  }
+
+  // ------------------------------------------------------------
+  // DELETE PRODUCT / RECIPE — checks whether this product is used
+  // as a sub-recipe ingredient elsewhere first, since deleting it
+  // out from under another recipe would silently break that
+  // recipe's cost/producibility calculation.
+  // ------------------------------------------------------------
+  Future<void> _confirmDeleteProduct(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final db = ref.read(databaseProvider);
+
+    // Find any OTHER recipe that uses this product as a component.
+    final referencingComponents = await (db.select(
+      db.recipeComponents,
+    )..where((c) => c.componentProductId.equals(product.id))).get();
+
+    final parentProductNames = <String>{};
+    for (final comp in referencingComponents) {
+      final recipe = await (db.select(
+        db.recipes,
+      )..where((r) => r.id.equals(comp.recipeId))).getSingleOrNull();
+      if (recipe == null) continue;
+      final parent = await (db.select(
+        db.products,
+      )..where((p) => p.id.equals(recipe.productId))).getSingleOrNull();
+      if (parent != null) parentProductNames.add(parent.name);
+    }
+
+    if (!context.mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Delete "${product.name}"?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This removes the product and its recipe. This can\'t be undone.',
+            ),
+            if (parentProductNames.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'It\'s also used as an ingredient in: ${parentProductNames.join(', ')}.',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Those recipes will lose this ingredient — you\'ll need to replace it if you still want to make them.',
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+
+    await db.transaction(() async {
+      // Remove this product's own recipe (and its components).
+      final ownRecipe = await (db.select(
+        db.recipes,
+      )..where((r) => r.productId.equals(product.id))).getSingleOrNull();
+      if (ownRecipe != null) {
+        await (db.delete(
+          db.recipeComponents,
+        )..where((c) => c.recipeId.equals(ownRecipe.id))).go();
+        await (db.delete(
+          db.recipes,
+        )..where((r) => r.id.equals(ownRecipe.id))).go();
+      }
+
+      // Remove any OTHER recipe's line that used this product as an
+      // ingredient, so nothing is left pointing at a deleted product.
+      await (db.delete(
+        db.recipeComponents,
+      )..where((c) => c.componentProductId.equals(product.id))).go();
+
+      await (db.delete(
+        db.products,
+      )..where((p) => p.id.equals(product.id))).go();
+    });
+
+    ref.invalidate(productsProvider);
+    ref.read(ledgerVersionProvider.notifier).state++;
+
+    if (context.mounted) Navigator.pop(context); // back to the Products list
   }
 }
 
@@ -1003,6 +1174,34 @@ class _ComponentTile extends ConsumerWidget {
   final String recipeId;
   const _ComponentTile({required this.component, required this.recipeId});
 
+  Future<void> _editQuantity(BuildContext context, WidgetRef ref) async {
+    final db = ref.read(databaseProvider);
+    final c = component.raw;
+
+    final result = await showDialog<_QuantityUnitResult>(
+      context: context,
+      builder: (_) => _EditComponentQuantityDialog(
+        componentName: component.name,
+        initialQuantity: c.quantityRequired,
+        initialUnit: c.unit,
+      ),
+    );
+
+    if (result == null) return;
+
+    await (db.update(
+      db.recipeComponents,
+    )..where((rc) => rc.id.equals(c.id))).write(
+      RecipeComponentsCompanion(
+        quantityRequired: Value(result.quantity),
+        unit: Value(result.unit),
+      ),
+    );
+
+    ref.invalidate(_recipeWithComponentsProvider);
+    ref.read(ledgerVersionProvider.notifier).state++;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
@@ -1031,9 +1230,30 @@ class _ComponentTile extends ConsumerWidget {
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
           ),
-          Text(
-            '${c.quantityRequired} ${c.unit}',
-            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _editQuantity(context, ref),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${c.quantityRequired} ${c.unit}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(
+                    Icons.edit_outlined,
+                    size: 13,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.close_rounded, size: 18),
@@ -1054,6 +1274,119 @@ class _ComponentTile extends ConsumerWidget {
 }
 
 // ============================================================
+// EDIT COMPONENT QUANTITY/UNIT DIALOG — lets an already-added
+// ingredient's amount be corrected without removing and re-adding
+// it. Saved changes bump ledgerVersionProvider, so producibility,
+// profitability, and the Supplies "Used in products" section all
+// recompute against the new quantity automatically.
+// ============================================================
+
+class _QuantityUnitResult {
+  final double quantity;
+  final String unit;
+  const _QuantityUnitResult(this.quantity, this.unit);
+}
+
+class _EditComponentQuantityDialog extends StatefulWidget {
+  final String componentName;
+  final double initialQuantity;
+  final String initialUnit;
+  const _EditComponentQuantityDialog({
+    required this.componentName,
+    required this.initialQuantity,
+    required this.initialUnit,
+  });
+
+  @override
+  State<_EditComponentQuantityDialog> createState() =>
+      _EditComponentQuantityDialogState();
+}
+
+class _EditComponentQuantityDialogState
+    extends State<_EditComponentQuantityDialog> {
+  late final _qtyController = TextEditingController(
+    text: widget.initialQuantity == widget.initialQuantity.roundToDouble()
+        ? widget.initialQuantity.toInt().toString()
+        : widget.initialQuantity.toString(),
+  );
+  late String _unit = widget.initialUnit;
+  String? _error;
+
+  @override
+  void dispose() {
+    _qtyController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final qty = double.tryParse(_qtyController.text.trim());
+    if (qty == null || qty <= 0) {
+      setState(() => _error = 'Enter a valid quantity');
+      return;
+    }
+    Navigator.pop(context, _QuantityUnitResult(qty, _unit));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final units = compatibleStockUnits(widget.initialUnit);
+    return AlertDialog(
+      title: Text('Edit "${widget.componentName}"'),
+      content: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 3,
+            child: TextField(
+              controller: _qtyController,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Quantity',
+                errorText: _error,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 2,
+            child: DropdownButtonFormField<String>(
+              initialValue: units.contains(_unit) ? _unit : null,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Unit'),
+              items: units
+                  .map(
+                    (u) => DropdownMenuItem(
+                      value: u,
+                      child: Text(
+                        kStockUnitLabels[u] ?? u,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) setState(() => _unit = v);
+              },
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+// ============================================================
 // ADD COMPONENT SHEET — pick a Supply OR another Product (nesting)
 // ============================================================
 
@@ -1069,6 +1402,7 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
   bool _isSupply = true;
   String? _selectedId;
   String? _selectedUnit;
+  double? _selectedStock;
   final _qtyController = TextEditingController();
   bool _saving = false;
 
@@ -1083,6 +1417,7 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
     final scheme = Theme.of(context).colorScheme;
     final suppliesAsync = ref.watch(suppliesForPickerProvider);
     final productsAsync = ref.watch(productsProvider);
+    final qty = double.tryParse(_qtyController.text);
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -1109,28 +1444,64 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: _saving ? null : () => Navigator.pop(context),
                     icon: const Icon(Icons.close_rounded),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              Text(
+                'For every ${widget.product.unit} of ${widget.product.name}, how much of something does it use?',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 18),
+
+              _StepLabel(number: 1, text: 'What kind of ingredient is this?'),
+              const SizedBox(height: 8),
               SegmentedButton<bool>(
                 segments: const [
-                  ButtonSegment(value: true, label: Text('Raw Supply')),
-                  ButtonSegment(value: false, label: Text('Sub-recipe')),
+                  ButtonSegment(
+                    value: true,
+                    label: Text('Raw Supply'),
+                    icon: Icon(Icons.inventory_2_outlined, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: false,
+                    label: Text('Sub-recipe'),
+                    icon: Icon(Icons.account_tree_outlined, size: 16),
+                  ),
                 ],
                 selected: {_isSupply},
                 onSelectionChanged: (s) => setState(() {
                   _isSupply = s.first;
                   _selectedId = null;
+                  _selectedUnit = null;
+                  _selectedStock = null;
                 }),
               ),
-              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  _isSupply
+                      ? 'A raw material tracked in Supplies — flour, milk, cups, etc.'
+                      : 'Another product with its own recipe — e.g. an Espresso Base used inside this one.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+
+              _StepLabel(
+                number: 2,
+                text: _isSupply ? 'Which supply?' : 'Which product?',
+              ),
+              const SizedBox(height: 8),
               if (_isSupply)
                 suppliesAsync.when(
                   data: (supplies) => DropdownButtonFormField<String>(
                     initialValue: _selectedId,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Supply',
                       prefixIcon: Icon(Icons.inventory_2_outlined),
@@ -1140,17 +1511,21 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
                           (s) => DropdownMenuItem(
                             value: s.id,
                             child: Text(
-                              '${s.name} (stock: ${s.currentStock} ${s.stockUnit})',
+                              '${s.name} — ${s.currentStock} ${s.stockUnit} in stock',
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         )
                         .toList(),
-                    onChanged: (v) => setState(() {
-                      _selectedId = v;
-                      _selectedUnit = supplies
-                          .firstWhere((s) => s.id == v)
-                          .stockUnit;
-                    }),
+                    onChanged: (v) {
+                      final chosen = supplies.firstWhere((s) => s.id == v);
+                      setState(() {
+                        _selectedId = v;
+                        _selectedUnit = chosen
+                            .stockUnit; // default to the supply's own unit
+                        _selectedStock = chosen.currentStock;
+                      });
+                    },
                   ),
                   loading: () => const LinearProgressIndicator(),
                   error: (_, __) => const Text('Unable to load supplies'),
@@ -1163,6 +1538,7 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
                         .toList();
                     return DropdownButtonFormField<String>(
                       initialValue: _selectedId,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'Product / Sub-recipe',
                         prefixIcon: Icon(Icons.account_tree_outlined),
@@ -1171,56 +1547,102 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
                           .map(
                             (p) => DropdownMenuItem(
                               value: p.id,
-                              child: Text(p.name),
+                              child: Text(
+                                p.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           )
                           .toList(),
-                      onChanged: (v) => setState(() {
-                        _selectedId = v;
-                        _selectedUnit = options
-                            .firstWhere((p) => p.id == v)
-                            .unit;
-                      }),
+                      onChanged: (v) {
+                        final chosen = options.firstWhere((p) => p.id == v);
+                        setState(() {
+                          _selectedId = v;
+                          _selectedUnit = chosen.unit;
+                          _selectedStock = null;
+                        });
+                      },
                     );
                   },
                   loading: () => const LinearProgressIndicator(),
                   error: (_, __) => const Text('Unable to load products'),
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 18),
+
+              _StepLabel(number: 3, text: 'How much is needed?'),
+              const SizedBox(height: 8),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    flex: 2,
+                    flex: 3,
                     child: TextField(
                       controller: _qtyController,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity required',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Quantity'),
+                      onChanged: (_) => setState(() {}),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: TextField(
-                      decoration: InputDecoration(
-                        labelText: 'Unit',
-                        hintText: _selectedUnit ?? 'g, ml, piece...',
-                      ),
-                      onChanged: (v) => _selectedUnit = v,
-                      controller: TextEditingController(text: _selectedUnit)
-                        ..selection = TextSelection.collapsed(
-                          offset: (_selectedUnit ?? '').length,
-                        ),
+                    flex: 2,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _selectedUnit,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Unit'),
+                      items:
+                          (_selectedUnit == null
+                                  ? kStockUnitOptions
+                                  : compatibleStockUnits(_selectedUnit!))
+                              .map(
+                                (u) => DropdownMenuItem(
+                                  value: u,
+                                  child: Text(
+                                    kStockUnitLabels[u] ?? u,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                      onChanged: _selectedId == null
+                          ? null
+                          : (v) => setState(() => _selectedUnit = v),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
-                'Tip: quantity is per batch — if this recipe yields more than 1 unit, that\'s set on the recipe, not here.',
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline_rounded,
+                      size: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        qty != null && _selectedUnit != null
+                            ? (_selectedStock != null
+                                  ? 'You have ${_selectedStock!.toStringAsFixed(_selectedStock! % 1 == 0 ? 0 : 1)} ${_selectedUnit!} available; this recipe needs $qty $_selectedUnit for each ${widget.product.unit}.'
+                                  : 'This means: making 1 ${widget.product.unit} of ${widget.product.name} uses $qty $_selectedUnit of this.')
+                            : 'Quantity is needed per single ${widget.product.unit} — if a batch makes more than one, set that on the recipe\'s yield, not here.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 20),
               SizedBox(
@@ -1291,9 +1713,56 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
   }
 }
 
+class _StepLabel extends StatelessWidget {
+  final int number;
+  final String text;
+  const _StepLabel({required this.number, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: const BoxDecoration(
+            color: AppColors.primary,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '$number',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          text,
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        ),
+      ],
+    );
+  }
+}
+
 // ============================================================
 // RECORD PRODUCTION SHEET
 // ============================================================
+
+final _productionPaymentAccountsProvider = FutureProvider<List<Account>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return (db.select(db.accounts)..where(
+        (a) =>
+            a.businessId.equals(kCurrentBusinessId) &
+            a.isPaymentAccount.equals(true) &
+            a.isActive.equals(true),
+      ))
+      .get();
+});
 
 class _RecordProductionSheet extends ConsumerStatefulWidget {
   final Product product;
@@ -1307,6 +1776,8 @@ class _RecordProductionSheet extends ConsumerStatefulWidget {
 class _RecordProductionSheetState
     extends ConsumerState<_RecordProductionSheet> {
   final _qtyController = TextEditingController(text: '1');
+  String? _paymentAccountId;
+  bool _stockOnly = false; // when true, skip the income/ledger side entirely
   bool _saving = false;
   String? _error;
 
@@ -1322,6 +1793,9 @@ class _RecordProductionSheetState
     final producibilityAsync = ref.watch(
       producibilityProvider(widget.product.id),
     );
+    final accountsAsync = ref.watch(_productionPaymentAccountsProvider);
+    final hasSellPrice = widget.product.sellPrice != null;
+    final qty = double.tryParse(_qtyController.text);
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -1331,83 +1805,191 @@ class _RecordProductionSheetState
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         ),
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Record Sale — ${widget.product.name}',
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Record Sale — ${widget.product.name}',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                  IconButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              producibilityAsync.when(
+                data: (r) => Text(
+                  'Currently makeable: ${r.maxUnits} ${widget.product.unit}',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
                   ),
                 ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
+                loading: () => const SizedBox.shrink(),
+                error: (_, __) => const SizedBox.shrink(),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _qtyController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Quantity sold',
+                  suffixText: widget.product.unit,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+
+              if (!hasSellPrice) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.info_outline_rounded,
+                        size: 16,
+                        color: Colors.orange,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'No sell price is set on this product, so only ingredient stock will be deducted — no income will be recorded. Set a price (edit the product) to record real sales here.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Stock deduction only'),
+                  subtitle: const Text(
+                    'Skip recording income — e.g. for a free sample or staff consumption',
+                  ),
+                  value: _stockOnly,
+                  activeThumbColor: AppColors.primary,
+                  onChanged: (v) => setState(() => _stockOnly = v),
+                ),
+                if (!_stockOnly) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Paid via',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  accountsAsync.when(
+                    data: (accounts) => Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: accounts
+                          .map(
+                            (a) => ChoiceChip(
+                              label: Text(a.name),
+                              selected: _paymentAccountId == a.id,
+                              onSelected: (_) =>
+                                  setState(() => _paymentAccountId = a.id),
+                              selectedColor: AppColors.primary.withValues(
+                                alpha: 0.16,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    loading: () => const LinearProgressIndicator(),
+                    error: (_, __) => const SizedBox.shrink(),
+                  ),
+                  if (qty != null && qty > 0) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        'Will record ₱${((widget.product.sellPrice! * qty) / 100).toStringAsFixed(2)} in income',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ],
+
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 12,
+                    ),
+                  ),
                 ),
               ],
-            ),
-            producibilityAsync.when(
-              data: (r) => Text(
-                'Currently makeable: ${r.maxUnits} ${widget.product.unit}',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-              ),
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _qtyController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Quantity sold',
-                suffixText: widget.product.unit,
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.redAccent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  _error!,
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          hasSellPrice && !_stockOnly
+                              ? 'Record Sale'
+                              : 'Deduct Ingredients',
+                        ),
                 ),
               ),
             ],
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: FilledButton(
-                onPressed: _saving ? null : _save,
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                ),
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Deduct Ingredients'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1415,7 +1997,19 @@ class _RecordProductionSheetState
 
   Future<void> _save() async {
     final qty = double.tryParse(_qtyController.text);
-    if (qty == null || qty <= 0) return;
+    if (qty == null || qty <= 0) {
+      setState(() => _error = 'Enter a valid quantity.');
+      return;
+    }
+
+    final recordIncome = widget.product.sellPrice != null && !_stockOnly;
+    if (recordIncome && _paymentAccountId == null) {
+      setState(
+        () => _error =
+            'Choose a payment account, or turn on "Stock deduction only".',
+      );
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -1423,13 +2017,20 @@ class _RecordProductionSheetState
     });
 
     try {
-      await ref
-          .read(productionServiceProvider)
-          .recordProduction(
-            productId: widget.product.id,
-            quantity: qty,
-            referenceType: 'product_sale',
-          );
+      final service = ref.read(productionServiceProvider);
+      if (recordIncome) {
+        await service.sellProduct(
+          productId: widget.product.id,
+          quantity: qty,
+          paymentAccountId: _paymentAccountId!,
+        );
+      } else {
+        await service.recordProduction(
+          productId: widget.product.id,
+          quantity: qty,
+          referenceType: 'product_sale',
+        );
+      }
       ref.read(ledgerVersionProvider.notifier).state++;
       ref.invalidate(producibilityProvider);
       if (mounted) Navigator.pop(context);

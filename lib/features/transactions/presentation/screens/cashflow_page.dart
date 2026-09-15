@@ -8,9 +8,14 @@ import 'package:drift/drift.dart' hide Column, Table;
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
+import '../../domain/capital_asset_liability_service.dart';
 
 import '../../../transactions/presentation/screens/transaction_page.dart'
-    show businessProfileProvider, ledgerVersionProvider, kCurrentBusinessId;
+    show
+        businessProfileProvider,
+        ledgerVersionProvider,
+        kCurrentBusinessId,
+        paymentAccountsProvider;
 
 // ============================================================
 // MODELS
@@ -197,8 +202,45 @@ final pendingCashflowProvider = FutureProvider<List<PendingCashflowItem>>((
 });
 
 // ============================================================
-// ACCOUNT VISUALS
+// CAPITAL / ASSETS / LIABILITIES — the balance-sheet side of the
+// ledger, surfaced under the e-wallet/payment-accounts list below.
 // ============================================================
+
+final capitalAssetLiabilityServiceProvider =
+    Provider<CapitalAssetLiabilityService>((ref) {
+      return CapitalAssetLiabilityService(ref.watch(databaseProvider));
+    });
+
+final assetBalancesProvider = FutureProvider<List<AccountBalanceEntry>>((ref) {
+  ref.watch(ledgerVersionProvider);
+  return ref
+      .watch(capitalAssetLiabilityServiceProvider)
+      .assetBalances(kCurrentBusinessId);
+});
+
+final liabilityBalancesProvider = FutureProvider<List<AccountBalanceEntry>>((
+  ref,
+) {
+  ref.watch(ledgerVersionProvider);
+  return ref
+      .watch(capitalAssetLiabilityServiceProvider)
+      .liabilityBalances(kCurrentBusinessId);
+});
+
+final capitalBalanceProvider = FutureProvider<int>((ref) {
+  ref.watch(ledgerVersionProvider);
+  return ref
+      .watch(capitalAssetLiabilityServiceProvider)
+      .capitalBalance(kCurrentBusinessId);
+});
+
+final accountLedgerEntriesProvider =
+    FutureProvider.family<List<LedgerEntryRow>, String>((ref, accountId) {
+      ref.watch(ledgerVersionProvider);
+      return ref
+          .watch(capitalAssetLiabilityServiceProvider)
+          .accountLedgerEntries(accountId);
+    });
 
 const _gradients = <List<Color>>[
   [Color(0xFF5B5FEF), Color(0xFF7C4DFF)],
@@ -405,7 +447,7 @@ class CashflowPage extends ConsumerWidget {
 
                   if (width >= 850) {
                     return SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
                       sliver: SliverGrid(
                         delegate: SliverChildBuilderDelegate((context, index) {
                           return _AccountCard(balance: balances[index]);
@@ -422,7 +464,7 @@ class CashflowPage extends ConsumerWidget {
                   }
 
                   return SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                     sliver: SliverList.separated(
                       itemCount: balances.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 14),
@@ -450,6 +492,51 @@ class CashflowPage extends ConsumerWidget {
                 ),
               );
             },
+          ),
+
+          // ==================================================
+          // ASSETS & LIABILITIES — balance-sheet side, below the
+          // e-wallet/payment-accounts list above.
+          // ==================================================
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final assetsAsync = ref.watch(assetBalancesProvider);
+                      return assetsAsync.when(
+                        data: (assets) => _AssetsSection(assets: assets),
+                        loading: () => const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: LinearProgressIndicator(),
+                        ),
+                        error: (_, __) => const SizedBox.shrink(),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final liabilitiesAsync = ref.watch(
+                        liabilityBalancesProvider,
+                      );
+                      return liabilitiesAsync.when(
+                        data: (liabilities) =>
+                            _LiabilitiesSection(liabilities: liabilities),
+                        loading: () => const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: LinearProgressIndicator(),
+                        ),
+                        error: (_, __) => const SizedBox.shrink(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -2347,5 +2434,1236 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
   String _generateId() {
     return DateTime.now().microsecondsSinceEpoch.toString() +
         Random().nextInt(9999).toString();
+  }
+}
+
+// ============================================================
+// ASSETS SECTION
+// ============================================================
+
+const _assetSubtypeLabels = {
+  'current_asset': 'Current Assets',
+  'non_current_asset': 'Non-current Assets',
+};
+
+class _AssetsSection extends StatelessWidget {
+  final List<AccountBalanceEntry> assets;
+  const _AssetsSection({required this.assets});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final total = assets.fold<int>(0, (sum, a) => sum + a.balance);
+
+    final grouped = <String, List<AccountBalanceEntry>>{};
+    for (final entry in assets) {
+      final label =
+          _assetSubtypeLabels[entry.account.subtype] ?? 'Other Assets';
+      grouped.putIfAbsent(label, () => []).add(entry);
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.inventory_2_outlined,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Assets',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                ),
+              ),
+              Text(
+                _peso(total),
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: scheme.primary,
+                ),
+              ),
+            ],
+          ),
+          if (assets.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'No non-cash assets recorded yet.',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+            )
+          else
+            for (final group in grouped.entries) ...[
+              const SizedBox(height: 12),
+              Text(
+                group.key,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final item in group.value)
+                _BalanceRow(account: item.account, amount: item.balance),
+              const SizedBox(height: 4),
+              _SubtotalRow(
+                amount: group.value.fold<int>(0, (sum, e) => sum + e.balance),
+              ),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// LIABILITIES SECTION
+// ============================================================
+
+const _liabilitySubtypeLabels = {
+  'trade_payable': 'Trade Payables',
+  'loan_payable': 'Loans Payable',
+  'other_payable': 'Other Payables',
+};
+
+class _LiabilitiesSection extends StatelessWidget {
+  final List<AccountBalanceEntry> liabilities;
+  const _LiabilitiesSection({required this.liabilities});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final total = liabilities.fold<int>(0, (sum, a) => sum + a.balance);
+
+    final grouped = <String, List<AccountBalanceEntry>>{};
+    for (final entry in liabilities) {
+      final label =
+          _liabilitySubtypeLabels[entry.account.subtype] ?? 'Other Liabilities';
+      grouped.putIfAbsent(label, () => []).add(entry);
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.request_quote_outlined,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Liabilities',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                ),
+              ),
+              Text(
+                _peso(total),
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: scheme.error,
+                ),
+              ),
+            ],
+          ),
+          if (liabilities.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'No liabilities (payables, loans) recorded yet.',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+            )
+          else
+            for (final group in grouped.entries) ...[
+              const SizedBox(height: 12),
+              Text(
+                group.key,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final item in group.value)
+                _BalanceRow(account: item.account, amount: item.balance),
+              const SizedBox(height: 4),
+              _SubtotalRow(
+                amount: group.value.fold<int>(0, (sum, e) => sum + e.balance),
+              ),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BalanceRow extends StatelessWidget {
+  final Account account;
+  final int amount;
+  const _BalanceRow({required this.account, required this.amount});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AccountLedgerPage(account: account, balance: amount),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                account.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            Text(
+              _peso(amount),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right_rounded, size: 16, color: scheme.outline),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SubtotalRow extends StatelessWidget {
+  final int amount;
+  const _SubtotalRow({required this.amount});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Subtotal',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Text(
+          _peso(amount),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================
+// ACCOUNT LEDGER PAGE — read-only, dated transaction history for an
+// asset/liability account. Assets/liabilities can't have transactions
+// added directly here (same as e-wallet/bank accounts) — new ones are
+// only ever recorded through the Journal Entry page or through
+// Suppliers/Customers.
+// ============================================================
+
+class AccountLedgerPage extends ConsumerWidget {
+  final Account account;
+  final int balance;
+
+  const AccountLedgerPage({
+    super.key,
+    required this.account,
+    required this.balance,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final entriesAsync = ref.watch(accountLedgerEntriesProvider(account.id));
+
+    return Scaffold(
+      backgroundColor: scheme.surfaceContainerLowest,
+      appBar: AppBar(
+        title: Text(
+          account.name,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Current balance',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _peso(balance),
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: entriesAsync.when(
+              data: (entries) {
+                if (entries.isEmpty) {
+                  return Center(
+                    child: Text(
+                      'No transactions recorded yet.',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                  itemCount: entries.length,
+                  separatorBuilder: (_, __) => const Divider(height: 20),
+                  itemBuilder: (context, index) {
+                    final entry = entries[index];
+                    final isIncrease = entry.debit > 0
+                        ? account.type == 'asset'
+                        : account.type != 'asset';
+                    final amount = entry.debit > 0 ? entry.debit : entry.credit;
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                entry.description?.trim().isNotEmpty == true
+                                    ? entry.description!.trim()
+                                    : _sourceTypeLabel(entry.sourceType),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                DateFormat('MMM d, yyyy').format(entry.date),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          '${isIncrease ? '+' : '-'}${_peso(amount)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                            color: isIncrease
+                                ? Colors.green.shade700
+                                : scheme.error,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, __) => Center(
+                child: Text(
+                  'Unable to load transactions.',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _sourceTypeLabel(String sourceType) {
+    switch (sourceType) {
+      case 'capital':
+        return 'Capital contribution';
+      case 'asset':
+        return 'Asset acquisition';
+      case 'liability':
+        return 'Liability incurred';
+      case 'supplier_purchase':
+        return 'Supplier purchase';
+      case 'payable_payment':
+        return 'Payment to supplier';
+      case 'income':
+        return 'Sale';
+      case 'receivable_payment':
+        return 'Payment from customer';
+      case 'transfer':
+        return 'Account transfer';
+      default:
+        return 'Transaction';
+    }
+  }
+}
+
+// ============================================================
+// ADD CAPITAL SHEET — shared by the Cashflow page and the Journal
+// Entry page's "add" menu.
+// ============================================================
+
+class AddCapitalSheet extends ConsumerStatefulWidget {
+  /// When set, edits this existing capital journal entry instead of
+  /// recording a new one.
+  final String? journalEntryId;
+
+  const AddCapitalSheet({super.key, this.journalEntryId});
+
+  @override
+  ConsumerState<AddCapitalSheet> createState() => _AddCapitalSheetState();
+}
+
+class _AddCapitalSheetState extends ConsumerState<AddCapitalSheet> {
+  final _amountController = TextEditingController();
+  final _noteController = TextEditingController();
+  String? _paymentAccountId;
+  DateTime _date = DateTime.now();
+  bool _saving = false;
+  bool _loading = false;
+
+  bool get _isEditing => widget.journalEntryId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isEditing) _loadExisting();
+  }
+
+  Future<void> _loadExisting() async {
+    setState(() => _loading = true);
+    final detail = await ref
+        .read(capitalAssetLiabilityServiceProvider)
+        .getCapitalDetail(widget.journalEntryId!);
+    if (!mounted) return;
+    setState(() {
+      _amountController.text = (detail.amount / 100).toStringAsFixed(2);
+      _noteController.text = detail.description ?? '';
+      _paymentAccountId = detail.paymentAccountId;
+      _date = detail.date;
+      _loading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final amount = double.tryParse(
+      _amountController.text.replaceAll(',', '').trim(),
+    );
+
+    if (amount == null || amount <= 0 || _paymentAccountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid amount and choose an account.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final service = ref.read(capitalAssetLiabilityServiceProvider);
+      final description = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
+
+      if (_isEditing) {
+        await service.updateCapital(
+          journalEntryId: widget.journalEntryId!,
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      } else {
+        await service.recordCapital(
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      }
+
+      ref.invalidate(capitalBalanceProvider);
+      ref.invalidate(accountBalancesProvider);
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _isEditing ? 'Edit Capital' : 'Add Capital',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Money the owner puts into the business.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _amountController,
+                      autofocus: true,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Amount',
+                        prefixText: '₱ ',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    accountsAsync.when(
+                      data: (accounts) => DropdownButtonFormField<String>(
+                        initialValue: _paymentAccountId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Goes into',
+                        ),
+                        items: accounts
+                            .map(
+                              (a) => DropdownMenuItem(
+                                value: a.id,
+                                child: Text(
+                                  a.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => _paymentAccountId = v),
+                      ),
+                      loading: () => const LinearProgressIndicator(),
+                      error: (_, __) => const Text('Unable to load accounts'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _noteController,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        hintText: 'Optional',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: FilledButton(
+                        onPressed: _saving ? null : _submit,
+                        child: _saving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(_isEditing ? 'Save Changes' : 'Add Capital'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ADD ASSET SHEET
+// ============================================================
+
+class AddAssetSheet extends ConsumerStatefulWidget {
+  /// When set, edits this existing asset journal entry instead of
+  /// recording a new one.
+  final String? journalEntryId;
+
+  const AddAssetSheet({super.key, this.journalEntryId});
+
+  @override
+  ConsumerState<AddAssetSheet> createState() => _AddAssetSheetState();
+}
+
+class _AddAssetSheetState extends ConsumerState<AddAssetSheet> {
+  final _nameController = TextEditingController();
+  final _amountController = TextEditingController();
+  final _noteController = TextEditingController();
+  bool _isCurrentAsset = true;
+  bool _onCredit = false;
+  String? _paymentAccountId;
+  DateTime _date = DateTime.now();
+  String? _assetAccountId;
+  bool _saving = false;
+  bool _loading = false;
+
+  bool get _isEditing => widget.journalEntryId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isEditing) _loadExisting();
+  }
+
+  Future<void> _loadExisting() async {
+    setState(() => _loading = true);
+    final detail = await ref
+        .read(capitalAssetLiabilityServiceProvider)
+        .getAssetDetail(widget.journalEntryId!);
+    if (!mounted) return;
+    final onCredit =
+        detail.paymentAccountId ==
+        CapitalAssetLiabilityService.payableAccountId(kCurrentBusinessId);
+    setState(() {
+      _nameController.text = detail.accountName;
+      _amountController.text = (detail.amount / 100).toStringAsFixed(2);
+      _noteController.text = detail.description ?? '';
+      _isCurrentAsset = detail.subtype != 'non_current_asset';
+      _onCredit = onCredit;
+      _paymentAccountId = onCredit ? null : detail.paymentAccountId;
+      _date = detail.date;
+      _assetAccountId = detail.accountId;
+      _loading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _amountController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final name = _nameController.text.trim();
+    final amount = double.tryParse(
+      _amountController.text.replaceAll(',', '').trim(),
+    );
+
+    if (name.isEmpty ||
+        amount == null ||
+        amount <= 0 ||
+        (!_onCredit && _paymentAccountId == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a name, a valid amount, and how it was paid.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final service = ref.read(capitalAssetLiabilityServiceProvider);
+      final description = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
+
+      if (_isEditing) {
+        await service.updateAsset(
+          journalEntryId: widget.journalEntryId!,
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          assetAccountId: _assetAccountId!,
+          assetAccountName: name,
+          isCurrentAsset: _isCurrentAsset,
+          paymentAccountId: _onCredit ? null : _paymentAccountId,
+          description: description,
+        );
+      } else {
+        final account = await service.addAssetAccount(
+          businessId: kCurrentBusinessId,
+          name: name,
+          isCurrentAsset: _isCurrentAsset,
+        );
+
+        await service.recordAsset(
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          assetAccountId: account.id,
+          paymentAccountId: _onCredit ? null : _paymentAccountId,
+          description: description,
+        );
+      }
+
+      ref.invalidate(assetBalancesProvider);
+      ref.invalidate(liabilityBalancesProvider);
+      ref.invalidate(accountBalancesProvider);
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _isEditing ? 'Edit Asset' : 'Add Asset',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Something the business now owns — equipment, a vehicle, etc.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Asset name',
+                        hintText: 'e.g. Espresso Machine',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(
+                          value: true,
+                          label: Text('Current'),
+                          icon: Icon(Icons.schedule_rounded, size: 16),
+                        ),
+                        ButtonSegment(
+                          value: false,
+                          label: Text('Non-current'),
+                          icon: Icon(Icons.apartment_rounded, size: 16),
+                        ),
+                      ],
+                      selected: {_isCurrentAsset},
+                      onSelectionChanged: (s) =>
+                          setState(() => _isCurrentAsset = s.first),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        _isCurrentAsset
+                            ? 'Expected to be used or converted to cash within a year.'
+                            : 'Longer-term — equipment, property, and the like.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _amountController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Amount',
+                        prefixText: '₱ ',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Bought on credit'),
+                      subtitle: const Text(
+                        'Adds to Accounts Payable instead of a payment account',
+                      ),
+                      value: _onCredit,
+                      onChanged: (v) => setState(() {
+                        _onCredit = v;
+                        if (v) _paymentAccountId = null;
+                      }),
+                    ),
+                    if (!_onCredit)
+                      accountsAsync.when(
+                        data: (accounts) => DropdownButtonFormField<String>(
+                          initialValue: _paymentAccountId,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Paid from',
+                          ),
+                          items: accounts
+                              .map(
+                                (a) => DropdownMenuItem(
+                                  value: a.id,
+                                  child: Text(
+                                    a.name,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => _paymentAccountId = v),
+                        ),
+                        loading: () => const LinearProgressIndicator(),
+                        error: (_, __) => const Text('Unable to load accounts'),
+                      ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _noteController,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        hintText: 'Optional',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: FilledButton(
+                        onPressed: _saving ? null : _submit,
+                        child: _saving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(_isEditing ? 'Save Changes' : 'Add Asset'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ADD LIABILITY SHEET
+// ============================================================
+
+const _liabilitySubtypeOptions = {
+  'trade_payable': 'Trade Payable',
+  'loan_payable': 'Loan Payable',
+  'other_payable': 'Other Payable',
+};
+
+class AddLiabilitySheet extends ConsumerStatefulWidget {
+  /// When set, edits this existing liability journal entry instead of
+  /// recording a new one.
+  final String? journalEntryId;
+
+  const AddLiabilitySheet({super.key, this.journalEntryId});
+
+  @override
+  ConsumerState<AddLiabilitySheet> createState() => _AddLiabilitySheetState();
+}
+
+class _AddLiabilitySheetState extends ConsumerState<AddLiabilitySheet> {
+  final _nameController = TextEditingController();
+  final _amountController = TextEditingController();
+  final _noteController = TextEditingController();
+  String _subtype = 'trade_payable';
+  String? _paymentAccountId;
+  DateTime _date = DateTime.now();
+  String? _liabilityAccountId;
+  bool _saving = false;
+  bool _loading = false;
+
+  bool get _isEditing => widget.journalEntryId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isEditing) _loadExisting();
+  }
+
+  Future<void> _loadExisting() async {
+    setState(() => _loading = true);
+    final detail = await ref
+        .read(capitalAssetLiabilityServiceProvider)
+        .getLiabilityDetail(widget.journalEntryId!);
+    if (!mounted) return;
+    setState(() {
+      _nameController.text = detail.accountName;
+      _amountController.text = (detail.amount / 100).toStringAsFixed(2);
+      _noteController.text = detail.description ?? '';
+      _subtype = detail.subtype ?? 'trade_payable';
+      _paymentAccountId = detail.paymentAccountId;
+      _date = detail.date;
+      _liabilityAccountId = detail.accountId;
+      _loading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _amountController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final name = _nameController.text.trim();
+    final amount = double.tryParse(
+      _amountController.text.replaceAll(',', '').trim(),
+    );
+
+    if (name.isEmpty ||
+        amount == null ||
+        amount <= 0 ||
+        _paymentAccountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enter a name, a valid amount, and where the money went.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final service = ref.read(capitalAssetLiabilityServiceProvider);
+      final description = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
+
+      if (_isEditing) {
+        await service.updateLiability(
+          journalEntryId: widget.journalEntryId!,
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          liabilityAccountId: _liabilityAccountId!,
+          liabilityAccountName: name,
+          subtype: _subtype,
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      } else {
+        final account = await service.addLiabilityAccount(
+          businessId: kCurrentBusinessId,
+          name: name,
+          subtype: _subtype,
+        );
+
+        await service.recordLiability(
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          liabilityAccountId: account.id,
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      }
+
+      ref.invalidate(liabilityBalancesProvider);
+      ref.invalidate(accountBalancesProvider);
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _isEditing ? 'Edit Liability' : 'Add Liability',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Something the business now owes — a payable, a loan, etc.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Liability name',
+                        hintText: 'e.g. Bank Loan',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: _subtype,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Type'),
+                      items: _liabilitySubtypeOptions.entries
+                          .map(
+                            (e) => DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) =>
+                          setState(() => _subtype = v ?? _subtype),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _amountController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Amount',
+                        prefixText: '₱ ',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    accountsAsync.when(
+                      data: (accounts) => DropdownButtonFormField<String>(
+                        initialValue: _paymentAccountId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Money received into',
+                        ),
+                        items: accounts
+                            .map(
+                              (a) => DropdownMenuItem(
+                                value: a.id,
+                                child: Text(
+                                  a.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => _paymentAccountId = v),
+                      ),
+                      loading: () => const LinearProgressIndicator(),
+                      error: (_, __) => const Text('Unable to load accounts'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _noteController,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        hintText: 'Optional',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: FilledButton(
+                        onPressed: _saving ? null : _submit,
+                        child: _saving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _isEditing ? 'Save Changes' : 'Add Liability',
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
   }
 }

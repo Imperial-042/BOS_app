@@ -1023,6 +1023,17 @@ class $AccountsTable extends Accounts with TableInfo<$AccountsTable, Account> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _subtypeMeta = const VerificationMeta(
+    'subtype',
+  );
+  @override
+  late final GeneratedColumn<String> subtype = GeneratedColumn<String>(
+    'subtype',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _isPaymentAccountMeta = const VerificationMeta(
     'isPaymentAccount',
   );
@@ -1083,6 +1094,7 @@ class $AccountsTable extends Accounts with TableInfo<$AccountsTable, Account> {
     businessId,
     name,
     type,
+    subtype,
     isPaymentAccount,
     startingBalance,
     isActive,
@@ -1128,6 +1140,12 @@ class $AccountsTable extends Accounts with TableInfo<$AccountsTable, Account> {
       );
     } else if (isInserting) {
       context.missing(_typeMeta);
+    }
+    if (data.containsKey('subtype')) {
+      context.handle(
+        _subtypeMeta,
+        subtype.isAcceptableOrUnknown(data['subtype']!, _subtypeMeta),
+      );
     }
     if (data.containsKey('is_payment_account')) {
       context.handle(
@@ -1184,6 +1202,10 @@ class $AccountsTable extends Accounts with TableInfo<$AccountsTable, Account> {
         DriftSqlType.string,
         data['${effectivePrefix}type'],
       )!,
+      subtype: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}subtype'],
+      ),
       isPaymentAccount: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_payment_account'],
@@ -1214,6 +1236,13 @@ class Account extends DataClass implements Insertable<Account> {
   final String businessId;
   final String name;
   final String type;
+
+  /// Finer-grained classification, mainly for asset/liability accounts so
+  /// the Cashflow "balance sheet" view can total and separate them:
+  /// 'current_asset'|'non_current_asset' for assets, and
+  /// 'trade_payable'|'loan_payable'|'other_payable' for liabilities.
+  /// Null for cash/payment accounts, income, expense, and equity.
+  final String? subtype;
   final bool isPaymentAccount;
   final int startingBalance;
   final bool isActive;
@@ -1223,6 +1252,7 @@ class Account extends DataClass implements Insertable<Account> {
     required this.businessId,
     required this.name,
     required this.type,
+    this.subtype,
     required this.isPaymentAccount,
     required this.startingBalance,
     required this.isActive,
@@ -1235,6 +1265,9 @@ class Account extends DataClass implements Insertable<Account> {
     map['business_id'] = Variable<String>(businessId);
     map['name'] = Variable<String>(name);
     map['type'] = Variable<String>(type);
+    if (!nullToAbsent || subtype != null) {
+      map['subtype'] = Variable<String>(subtype);
+    }
     map['is_payment_account'] = Variable<bool>(isPaymentAccount);
     map['starting_balance'] = Variable<int>(startingBalance);
     map['is_active'] = Variable<bool>(isActive);
@@ -1248,6 +1281,9 @@ class Account extends DataClass implements Insertable<Account> {
       businessId: Value(businessId),
       name: Value(name),
       type: Value(type),
+      subtype: subtype == null && nullToAbsent
+          ? const Value.absent()
+          : Value(subtype),
       isPaymentAccount: Value(isPaymentAccount),
       startingBalance: Value(startingBalance),
       isActive: Value(isActive),
@@ -1265,6 +1301,7 @@ class Account extends DataClass implements Insertable<Account> {
       businessId: serializer.fromJson<String>(json['businessId']),
       name: serializer.fromJson<String>(json['name']),
       type: serializer.fromJson<String>(json['type']),
+      subtype: serializer.fromJson<String?>(json['subtype']),
       isPaymentAccount: serializer.fromJson<bool>(json['isPaymentAccount']),
       startingBalance: serializer.fromJson<int>(json['startingBalance']),
       isActive: serializer.fromJson<bool>(json['isActive']),
@@ -1279,6 +1316,7 @@ class Account extends DataClass implements Insertable<Account> {
       'businessId': serializer.toJson<String>(businessId),
       'name': serializer.toJson<String>(name),
       'type': serializer.toJson<String>(type),
+      'subtype': serializer.toJson<String?>(subtype),
       'isPaymentAccount': serializer.toJson<bool>(isPaymentAccount),
       'startingBalance': serializer.toJson<int>(startingBalance),
       'isActive': serializer.toJson<bool>(isActive),
@@ -1291,6 +1329,7 @@ class Account extends DataClass implements Insertable<Account> {
     String? businessId,
     String? name,
     String? type,
+    Value<String?> subtype = const Value.absent(),
     bool? isPaymentAccount,
     int? startingBalance,
     bool? isActive,
@@ -1300,6 +1339,7 @@ class Account extends DataClass implements Insertable<Account> {
     businessId: businessId ?? this.businessId,
     name: name ?? this.name,
     type: type ?? this.type,
+    subtype: subtype.present ? subtype.value : this.subtype,
     isPaymentAccount: isPaymentAccount ?? this.isPaymentAccount,
     startingBalance: startingBalance ?? this.startingBalance,
     isActive: isActive ?? this.isActive,
@@ -1313,6 +1353,7 @@ class Account extends DataClass implements Insertable<Account> {
           : this.businessId,
       name: data.name.present ? data.name.value : this.name,
       type: data.type.present ? data.type.value : this.type,
+      subtype: data.subtype.present ? data.subtype.value : this.subtype,
       isPaymentAccount: data.isPaymentAccount.present
           ? data.isPaymentAccount.value
           : this.isPaymentAccount,
@@ -1331,6 +1372,7 @@ class Account extends DataClass implements Insertable<Account> {
           ..write('businessId: $businessId, ')
           ..write('name: $name, ')
           ..write('type: $type, ')
+          ..write('subtype: $subtype, ')
           ..write('isPaymentAccount: $isPaymentAccount, ')
           ..write('startingBalance: $startingBalance, ')
           ..write('isActive: $isActive, ')
@@ -1345,6 +1387,7 @@ class Account extends DataClass implements Insertable<Account> {
     businessId,
     name,
     type,
+    subtype,
     isPaymentAccount,
     startingBalance,
     isActive,
@@ -1358,6 +1401,7 @@ class Account extends DataClass implements Insertable<Account> {
           other.businessId == this.businessId &&
           other.name == this.name &&
           other.type == this.type &&
+          other.subtype == this.subtype &&
           other.isPaymentAccount == this.isPaymentAccount &&
           other.startingBalance == this.startingBalance &&
           other.isActive == this.isActive &&
@@ -1369,6 +1413,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
   final Value<String> businessId;
   final Value<String> name;
   final Value<String> type;
+  final Value<String?> subtype;
   final Value<bool> isPaymentAccount;
   final Value<int> startingBalance;
   final Value<bool> isActive;
@@ -1379,6 +1424,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
     this.businessId = const Value.absent(),
     this.name = const Value.absent(),
     this.type = const Value.absent(),
+    this.subtype = const Value.absent(),
     this.isPaymentAccount = const Value.absent(),
     this.startingBalance = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -1390,6 +1436,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
     required String businessId,
     required String name,
     required String type,
+    this.subtype = const Value.absent(),
     this.isPaymentAccount = const Value.absent(),
     this.startingBalance = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -1404,6 +1451,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
     Expression<String>? businessId,
     Expression<String>? name,
     Expression<String>? type,
+    Expression<String>? subtype,
     Expression<bool>? isPaymentAccount,
     Expression<int>? startingBalance,
     Expression<bool>? isActive,
@@ -1415,6 +1463,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
       if (businessId != null) 'business_id': businessId,
       if (name != null) 'name': name,
       if (type != null) 'type': type,
+      if (subtype != null) 'subtype': subtype,
       if (isPaymentAccount != null) 'is_payment_account': isPaymentAccount,
       if (startingBalance != null) 'starting_balance': startingBalance,
       if (isActive != null) 'is_active': isActive,
@@ -1428,6 +1477,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
     Value<String>? businessId,
     Value<String>? name,
     Value<String>? type,
+    Value<String?>? subtype,
     Value<bool>? isPaymentAccount,
     Value<int>? startingBalance,
     Value<bool>? isActive,
@@ -1439,6 +1489,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
       businessId: businessId ?? this.businessId,
       name: name ?? this.name,
       type: type ?? this.type,
+      subtype: subtype ?? this.subtype,
       isPaymentAccount: isPaymentAccount ?? this.isPaymentAccount,
       startingBalance: startingBalance ?? this.startingBalance,
       isActive: isActive ?? this.isActive,
@@ -1461,6 +1512,9 @@ class AccountsCompanion extends UpdateCompanion<Account> {
     }
     if (type.present) {
       map['type'] = Variable<String>(type.value);
+    }
+    if (subtype.present) {
+      map['subtype'] = Variable<String>(subtype.value);
     }
     if (isPaymentAccount.present) {
       map['is_payment_account'] = Variable<bool>(isPaymentAccount.value);
@@ -1487,6 +1541,7 @@ class AccountsCompanion extends UpdateCompanion<Account> {
           ..write('businessId: $businessId, ')
           ..write('name: $name, ')
           ..write('type: $type, ')
+          ..write('subtype: $subtype, ')
           ..write('isPaymentAccount: $isPaymentAccount, ')
           ..write('startingBalance: $startingBalance, ')
           ..write('isActive: $isActive, ')
@@ -4256,12 +4311,37 @@ class $ReceivablePaymentsTable extends ReceivablePayments
   late final GeneratedColumn<String> paymentAccountId = GeneratedColumn<String>(
     'payment_account_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
       'REFERENCES accounts (id)',
     ),
+  );
+  static const VerificationMeta _isOnCreditMeta = const VerificationMeta(
+    'isOnCredit',
+  );
+  @override
+  late final GeneratedColumn<bool> isOnCredit = GeneratedColumn<bool>(
+    'is_on_credit',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_on_credit" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('completed'),
   );
   static const VerificationMeta _paymentDateMeta = const VerificationMeta(
     'paymentDate',
@@ -4302,6 +4382,8 @@ class $ReceivablePaymentsTable extends ReceivablePayments
     customerId,
     amount,
     paymentAccountId,
+    isOnCredit,
+    status,
     paymentDate,
     notes,
     createdAt,
@@ -4355,8 +4437,21 @@ class $ReceivablePaymentsTable extends ReceivablePayments
           _paymentAccountIdMeta,
         ),
       );
-    } else if (isInserting) {
-      context.missing(_paymentAccountIdMeta);
+    }
+    if (data.containsKey('is_on_credit')) {
+      context.handle(
+        _isOnCreditMeta,
+        isOnCredit.isAcceptableOrUnknown(
+          data['is_on_credit']!,
+          _isOnCreditMeta,
+        ),
+      );
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
     }
     if (data.containsKey('payment_date')) {
       context.handle(
@@ -4409,6 +4504,14 @@ class $ReceivablePaymentsTable extends ReceivablePayments
       paymentAccountId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}payment_account_id'],
+      ),
+      isOnCredit: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_on_credit'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
       )!,
       paymentDate: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
@@ -4437,7 +4540,15 @@ class ReceivablePayment extends DataClass
   final String businessId;
   final String customerId;
   final int amount;
-  final String paymentAccountId;
+
+  /// Null when [isOnCredit] is true — a pending payment the business
+  /// hasn't actually received into a cash/bank/e-wallet account yet.
+  final String? paymentAccountId;
+
+  /// True when the customer's payment is only a pending promise (a
+  /// credit they still owe), not yet received into a real account.
+  final bool isOnCredit;
+  final String status;
   final DateTime paymentDate;
   final String? notes;
   final DateTime createdAt;
@@ -4446,7 +4557,9 @@ class ReceivablePayment extends DataClass
     required this.businessId,
     required this.customerId,
     required this.amount,
-    required this.paymentAccountId,
+    this.paymentAccountId,
+    required this.isOnCredit,
+    required this.status,
     required this.paymentDate,
     this.notes,
     required this.createdAt,
@@ -4458,7 +4571,11 @@ class ReceivablePayment extends DataClass
     map['business_id'] = Variable<String>(businessId);
     map['customer_id'] = Variable<String>(customerId);
     map['amount'] = Variable<int>(amount);
-    map['payment_account_id'] = Variable<String>(paymentAccountId);
+    if (!nullToAbsent || paymentAccountId != null) {
+      map['payment_account_id'] = Variable<String>(paymentAccountId);
+    }
+    map['is_on_credit'] = Variable<bool>(isOnCredit);
+    map['status'] = Variable<String>(status);
     map['payment_date'] = Variable<DateTime>(paymentDate);
     if (!nullToAbsent || notes != null) {
       map['notes'] = Variable<String>(notes);
@@ -4473,7 +4590,11 @@ class ReceivablePayment extends DataClass
       businessId: Value(businessId),
       customerId: Value(customerId),
       amount: Value(amount),
-      paymentAccountId: Value(paymentAccountId),
+      paymentAccountId: paymentAccountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(paymentAccountId),
+      isOnCredit: Value(isOnCredit),
+      status: Value(status),
       paymentDate: Value(paymentDate),
       notes: notes == null && nullToAbsent
           ? const Value.absent()
@@ -4492,7 +4613,9 @@ class ReceivablePayment extends DataClass
       businessId: serializer.fromJson<String>(json['businessId']),
       customerId: serializer.fromJson<String>(json['customerId']),
       amount: serializer.fromJson<int>(json['amount']),
-      paymentAccountId: serializer.fromJson<String>(json['paymentAccountId']),
+      paymentAccountId: serializer.fromJson<String?>(json['paymentAccountId']),
+      isOnCredit: serializer.fromJson<bool>(json['isOnCredit']),
+      status: serializer.fromJson<String>(json['status']),
       paymentDate: serializer.fromJson<DateTime>(json['paymentDate']),
       notes: serializer.fromJson<String?>(json['notes']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -4506,7 +4629,9 @@ class ReceivablePayment extends DataClass
       'businessId': serializer.toJson<String>(businessId),
       'customerId': serializer.toJson<String>(customerId),
       'amount': serializer.toJson<int>(amount),
-      'paymentAccountId': serializer.toJson<String>(paymentAccountId),
+      'paymentAccountId': serializer.toJson<String?>(paymentAccountId),
+      'isOnCredit': serializer.toJson<bool>(isOnCredit),
+      'status': serializer.toJson<String>(status),
       'paymentDate': serializer.toJson<DateTime>(paymentDate),
       'notes': serializer.toJson<String?>(notes),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -4518,7 +4643,9 @@ class ReceivablePayment extends DataClass
     String? businessId,
     String? customerId,
     int? amount,
-    String? paymentAccountId,
+    Value<String?> paymentAccountId = const Value.absent(),
+    bool? isOnCredit,
+    String? status,
     DateTime? paymentDate,
     Value<String?> notes = const Value.absent(),
     DateTime? createdAt,
@@ -4527,7 +4654,11 @@ class ReceivablePayment extends DataClass
     businessId: businessId ?? this.businessId,
     customerId: customerId ?? this.customerId,
     amount: amount ?? this.amount,
-    paymentAccountId: paymentAccountId ?? this.paymentAccountId,
+    paymentAccountId: paymentAccountId.present
+        ? paymentAccountId.value
+        : this.paymentAccountId,
+    isOnCredit: isOnCredit ?? this.isOnCredit,
+    status: status ?? this.status,
     paymentDate: paymentDate ?? this.paymentDate,
     notes: notes.present ? notes.value : this.notes,
     createdAt: createdAt ?? this.createdAt,
@@ -4545,6 +4676,10 @@ class ReceivablePayment extends DataClass
       paymentAccountId: data.paymentAccountId.present
           ? data.paymentAccountId.value
           : this.paymentAccountId,
+      isOnCredit: data.isOnCredit.present
+          ? data.isOnCredit.value
+          : this.isOnCredit,
+      status: data.status.present ? data.status.value : this.status,
       paymentDate: data.paymentDate.present
           ? data.paymentDate.value
           : this.paymentDate,
@@ -4561,6 +4696,8 @@ class ReceivablePayment extends DataClass
           ..write('customerId: $customerId, ')
           ..write('amount: $amount, ')
           ..write('paymentAccountId: $paymentAccountId, ')
+          ..write('isOnCredit: $isOnCredit, ')
+          ..write('status: $status, ')
           ..write('paymentDate: $paymentDate, ')
           ..write('notes: $notes, ')
           ..write('createdAt: $createdAt')
@@ -4575,6 +4712,8 @@ class ReceivablePayment extends DataClass
     customerId,
     amount,
     paymentAccountId,
+    isOnCredit,
+    status,
     paymentDate,
     notes,
     createdAt,
@@ -4588,6 +4727,8 @@ class ReceivablePayment extends DataClass
           other.customerId == this.customerId &&
           other.amount == this.amount &&
           other.paymentAccountId == this.paymentAccountId &&
+          other.isOnCredit == this.isOnCredit &&
+          other.status == this.status &&
           other.paymentDate == this.paymentDate &&
           other.notes == this.notes &&
           other.createdAt == this.createdAt);
@@ -4598,7 +4739,9 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
   final Value<String> businessId;
   final Value<String> customerId;
   final Value<int> amount;
-  final Value<String> paymentAccountId;
+  final Value<String?> paymentAccountId;
+  final Value<bool> isOnCredit;
+  final Value<String> status;
   final Value<DateTime> paymentDate;
   final Value<String?> notes;
   final Value<DateTime> createdAt;
@@ -4609,6 +4752,8 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
     this.customerId = const Value.absent(),
     this.amount = const Value.absent(),
     this.paymentAccountId = const Value.absent(),
+    this.isOnCredit = const Value.absent(),
+    this.status = const Value.absent(),
     this.paymentDate = const Value.absent(),
     this.notes = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -4619,7 +4764,9 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
     required String businessId,
     required String customerId,
     required int amount,
-    required String paymentAccountId,
+    this.paymentAccountId = const Value.absent(),
+    this.isOnCredit = const Value.absent(),
+    this.status = const Value.absent(),
     required DateTime paymentDate,
     this.notes = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -4628,7 +4775,6 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
        businessId = Value(businessId),
        customerId = Value(customerId),
        amount = Value(amount),
-       paymentAccountId = Value(paymentAccountId),
        paymentDate = Value(paymentDate);
   static Insertable<ReceivablePayment> custom({
     Expression<String>? id,
@@ -4636,6 +4782,8 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
     Expression<String>? customerId,
     Expression<int>? amount,
     Expression<String>? paymentAccountId,
+    Expression<bool>? isOnCredit,
+    Expression<String>? status,
     Expression<DateTime>? paymentDate,
     Expression<String>? notes,
     Expression<DateTime>? createdAt,
@@ -4647,6 +4795,8 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
       if (customerId != null) 'customer_id': customerId,
       if (amount != null) 'amount': amount,
       if (paymentAccountId != null) 'payment_account_id': paymentAccountId,
+      if (isOnCredit != null) 'is_on_credit': isOnCredit,
+      if (status != null) 'status': status,
       if (paymentDate != null) 'payment_date': paymentDate,
       if (notes != null) 'notes': notes,
       if (createdAt != null) 'created_at': createdAt,
@@ -4659,7 +4809,9 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
     Value<String>? businessId,
     Value<String>? customerId,
     Value<int>? amount,
-    Value<String>? paymentAccountId,
+    Value<String?>? paymentAccountId,
+    Value<bool>? isOnCredit,
+    Value<String>? status,
     Value<DateTime>? paymentDate,
     Value<String?>? notes,
     Value<DateTime>? createdAt,
@@ -4671,6 +4823,8 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
       customerId: customerId ?? this.customerId,
       amount: amount ?? this.amount,
       paymentAccountId: paymentAccountId ?? this.paymentAccountId,
+      isOnCredit: isOnCredit ?? this.isOnCredit,
+      status: status ?? this.status,
       paymentDate: paymentDate ?? this.paymentDate,
       notes: notes ?? this.notes,
       createdAt: createdAt ?? this.createdAt,
@@ -4696,6 +4850,12 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
     if (paymentAccountId.present) {
       map['payment_account_id'] = Variable<String>(paymentAccountId.value);
     }
+    if (isOnCredit.present) {
+      map['is_on_credit'] = Variable<bool>(isOnCredit.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
     if (paymentDate.present) {
       map['payment_date'] = Variable<DateTime>(paymentDate.value);
     }
@@ -4719,6 +4879,8 @@ class ReceivablePaymentsCompanion extends UpdateCompanion<ReceivablePayment> {
           ..write('customerId: $customerId, ')
           ..write('amount: $amount, ')
           ..write('paymentAccountId: $paymentAccountId, ')
+          ..write('isOnCredit: $isOnCredit, ')
+          ..write('status: $status, ')
           ..write('paymentDate: $paymentDate, ')
           ..write('notes: $notes, ')
           ..write('createdAt: $createdAt, ')
@@ -5932,12 +6094,37 @@ class $PayablePaymentsTable extends PayablePayments
   late final GeneratedColumn<String> paymentAccountId = GeneratedColumn<String>(
     'payment_account_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
       'REFERENCES accounts (id)',
     ),
+  );
+  static const VerificationMeta _isOnCreditMeta = const VerificationMeta(
+    'isOnCredit',
+  );
+  @override
+  late final GeneratedColumn<bool> isOnCredit = GeneratedColumn<bool>(
+    'is_on_credit',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_on_credit" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('completed'),
   );
   static const VerificationMeta _paymentDateMeta = const VerificationMeta(
     'paymentDate',
@@ -5978,6 +6165,8 @@ class $PayablePaymentsTable extends PayablePayments
     supplierId,
     amount,
     paymentAccountId,
+    isOnCredit,
+    status,
     paymentDate,
     notes,
     createdAt,
@@ -6031,8 +6220,21 @@ class $PayablePaymentsTable extends PayablePayments
           _paymentAccountIdMeta,
         ),
       );
-    } else if (isInserting) {
-      context.missing(_paymentAccountIdMeta);
+    }
+    if (data.containsKey('is_on_credit')) {
+      context.handle(
+        _isOnCreditMeta,
+        isOnCredit.isAcceptableOrUnknown(
+          data['is_on_credit']!,
+          _isOnCreditMeta,
+        ),
+      );
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
     }
     if (data.containsKey('payment_date')) {
       context.handle(
@@ -6085,6 +6287,14 @@ class $PayablePaymentsTable extends PayablePayments
       paymentAccountId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}payment_account_id'],
+      ),
+      isOnCredit: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_on_credit'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
       )!,
       paymentDate: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
@@ -6112,7 +6322,15 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
   final String businessId;
   final String supplierId;
   final int amount;
-  final String paymentAccountId;
+
+  /// Null when [isOnCredit] is true — a pending payment the business
+  /// hasn't actually paid out of a cash/bank/e-wallet account yet.
+  final String? paymentAccountId;
+
+  /// True when this payment is only a pending promise to pay (e.g. a
+  /// credit the supplier is extending), not yet paid from a real account.
+  final bool isOnCredit;
+  final String status;
   final DateTime paymentDate;
   final String? notes;
   final DateTime createdAt;
@@ -6121,7 +6339,9 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
     required this.businessId,
     required this.supplierId,
     required this.amount,
-    required this.paymentAccountId,
+    this.paymentAccountId,
+    required this.isOnCredit,
+    required this.status,
     required this.paymentDate,
     this.notes,
     required this.createdAt,
@@ -6133,7 +6353,11 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
     map['business_id'] = Variable<String>(businessId);
     map['supplier_id'] = Variable<String>(supplierId);
     map['amount'] = Variable<int>(amount);
-    map['payment_account_id'] = Variable<String>(paymentAccountId);
+    if (!nullToAbsent || paymentAccountId != null) {
+      map['payment_account_id'] = Variable<String>(paymentAccountId);
+    }
+    map['is_on_credit'] = Variable<bool>(isOnCredit);
+    map['status'] = Variable<String>(status);
     map['payment_date'] = Variable<DateTime>(paymentDate);
     if (!nullToAbsent || notes != null) {
       map['notes'] = Variable<String>(notes);
@@ -6148,7 +6372,11 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
       businessId: Value(businessId),
       supplierId: Value(supplierId),
       amount: Value(amount),
-      paymentAccountId: Value(paymentAccountId),
+      paymentAccountId: paymentAccountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(paymentAccountId),
+      isOnCredit: Value(isOnCredit),
+      status: Value(status),
       paymentDate: Value(paymentDate),
       notes: notes == null && nullToAbsent
           ? const Value.absent()
@@ -6167,7 +6395,9 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
       businessId: serializer.fromJson<String>(json['businessId']),
       supplierId: serializer.fromJson<String>(json['supplierId']),
       amount: serializer.fromJson<int>(json['amount']),
-      paymentAccountId: serializer.fromJson<String>(json['paymentAccountId']),
+      paymentAccountId: serializer.fromJson<String?>(json['paymentAccountId']),
+      isOnCredit: serializer.fromJson<bool>(json['isOnCredit']),
+      status: serializer.fromJson<String>(json['status']),
       paymentDate: serializer.fromJson<DateTime>(json['paymentDate']),
       notes: serializer.fromJson<String?>(json['notes']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -6181,7 +6411,9 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
       'businessId': serializer.toJson<String>(businessId),
       'supplierId': serializer.toJson<String>(supplierId),
       'amount': serializer.toJson<int>(amount),
-      'paymentAccountId': serializer.toJson<String>(paymentAccountId),
+      'paymentAccountId': serializer.toJson<String?>(paymentAccountId),
+      'isOnCredit': serializer.toJson<bool>(isOnCredit),
+      'status': serializer.toJson<String>(status),
       'paymentDate': serializer.toJson<DateTime>(paymentDate),
       'notes': serializer.toJson<String?>(notes),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -6193,7 +6425,9 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
     String? businessId,
     String? supplierId,
     int? amount,
-    String? paymentAccountId,
+    Value<String?> paymentAccountId = const Value.absent(),
+    bool? isOnCredit,
+    String? status,
     DateTime? paymentDate,
     Value<String?> notes = const Value.absent(),
     DateTime? createdAt,
@@ -6202,7 +6436,11 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
     businessId: businessId ?? this.businessId,
     supplierId: supplierId ?? this.supplierId,
     amount: amount ?? this.amount,
-    paymentAccountId: paymentAccountId ?? this.paymentAccountId,
+    paymentAccountId: paymentAccountId.present
+        ? paymentAccountId.value
+        : this.paymentAccountId,
+    isOnCredit: isOnCredit ?? this.isOnCredit,
+    status: status ?? this.status,
     paymentDate: paymentDate ?? this.paymentDate,
     notes: notes.present ? notes.value : this.notes,
     createdAt: createdAt ?? this.createdAt,
@@ -6220,6 +6458,10 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
       paymentAccountId: data.paymentAccountId.present
           ? data.paymentAccountId.value
           : this.paymentAccountId,
+      isOnCredit: data.isOnCredit.present
+          ? data.isOnCredit.value
+          : this.isOnCredit,
+      status: data.status.present ? data.status.value : this.status,
       paymentDate: data.paymentDate.present
           ? data.paymentDate.value
           : this.paymentDate,
@@ -6236,6 +6478,8 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
           ..write('supplierId: $supplierId, ')
           ..write('amount: $amount, ')
           ..write('paymentAccountId: $paymentAccountId, ')
+          ..write('isOnCredit: $isOnCredit, ')
+          ..write('status: $status, ')
           ..write('paymentDate: $paymentDate, ')
           ..write('notes: $notes, ')
           ..write('createdAt: $createdAt')
@@ -6250,6 +6494,8 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
     supplierId,
     amount,
     paymentAccountId,
+    isOnCredit,
+    status,
     paymentDate,
     notes,
     createdAt,
@@ -6263,6 +6509,8 @@ class PayablePayment extends DataClass implements Insertable<PayablePayment> {
           other.supplierId == this.supplierId &&
           other.amount == this.amount &&
           other.paymentAccountId == this.paymentAccountId &&
+          other.isOnCredit == this.isOnCredit &&
+          other.status == this.status &&
           other.paymentDate == this.paymentDate &&
           other.notes == this.notes &&
           other.createdAt == this.createdAt);
@@ -6273,7 +6521,9 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
   final Value<String> businessId;
   final Value<String> supplierId;
   final Value<int> amount;
-  final Value<String> paymentAccountId;
+  final Value<String?> paymentAccountId;
+  final Value<bool> isOnCredit;
+  final Value<String> status;
   final Value<DateTime> paymentDate;
   final Value<String?> notes;
   final Value<DateTime> createdAt;
@@ -6284,6 +6534,8 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
     this.supplierId = const Value.absent(),
     this.amount = const Value.absent(),
     this.paymentAccountId = const Value.absent(),
+    this.isOnCredit = const Value.absent(),
+    this.status = const Value.absent(),
     this.paymentDate = const Value.absent(),
     this.notes = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -6294,7 +6546,9 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
     required String businessId,
     required String supplierId,
     required int amount,
-    required String paymentAccountId,
+    this.paymentAccountId = const Value.absent(),
+    this.isOnCredit = const Value.absent(),
+    this.status = const Value.absent(),
     required DateTime paymentDate,
     this.notes = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -6303,7 +6557,6 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
        businessId = Value(businessId),
        supplierId = Value(supplierId),
        amount = Value(amount),
-       paymentAccountId = Value(paymentAccountId),
        paymentDate = Value(paymentDate);
   static Insertable<PayablePayment> custom({
     Expression<String>? id,
@@ -6311,6 +6564,8 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
     Expression<String>? supplierId,
     Expression<int>? amount,
     Expression<String>? paymentAccountId,
+    Expression<bool>? isOnCredit,
+    Expression<String>? status,
     Expression<DateTime>? paymentDate,
     Expression<String>? notes,
     Expression<DateTime>? createdAt,
@@ -6322,6 +6577,8 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
       if (supplierId != null) 'supplier_id': supplierId,
       if (amount != null) 'amount': amount,
       if (paymentAccountId != null) 'payment_account_id': paymentAccountId,
+      if (isOnCredit != null) 'is_on_credit': isOnCredit,
+      if (status != null) 'status': status,
       if (paymentDate != null) 'payment_date': paymentDate,
       if (notes != null) 'notes': notes,
       if (createdAt != null) 'created_at': createdAt,
@@ -6334,7 +6591,9 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
     Value<String>? businessId,
     Value<String>? supplierId,
     Value<int>? amount,
-    Value<String>? paymentAccountId,
+    Value<String?>? paymentAccountId,
+    Value<bool>? isOnCredit,
+    Value<String>? status,
     Value<DateTime>? paymentDate,
     Value<String?>? notes,
     Value<DateTime>? createdAt,
@@ -6346,6 +6605,8 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
       supplierId: supplierId ?? this.supplierId,
       amount: amount ?? this.amount,
       paymentAccountId: paymentAccountId ?? this.paymentAccountId,
+      isOnCredit: isOnCredit ?? this.isOnCredit,
+      status: status ?? this.status,
       paymentDate: paymentDate ?? this.paymentDate,
       notes: notes ?? this.notes,
       createdAt: createdAt ?? this.createdAt,
@@ -6371,6 +6632,12 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
     if (paymentAccountId.present) {
       map['payment_account_id'] = Variable<String>(paymentAccountId.value);
     }
+    if (isOnCredit.present) {
+      map['is_on_credit'] = Variable<bool>(isOnCredit.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
     if (paymentDate.present) {
       map['payment_date'] = Variable<DateTime>(paymentDate.value);
     }
@@ -6394,6 +6661,8 @@ class PayablePaymentsCompanion extends UpdateCompanion<PayablePayment> {
           ..write('supplierId: $supplierId, ')
           ..write('amount: $amount, ')
           ..write('paymentAccountId: $paymentAccountId, ')
+          ..write('isOnCredit: $isOnCredit, ')
+          ..write('status: $status, ')
           ..write('paymentDate: $paymentDate, ')
           ..write('notes: $notes, ')
           ..write('createdAt: $createdAt, ')
@@ -7402,6 +7671,18 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _lowStockThresholdMeta = const VerificationMeta(
+    'lowStockThreshold',
+  );
+  @override
+  late final GeneratedColumn<double> lowStockThreshold =
+      GeneratedColumn<double>(
+        'low_stock_threshold',
+        aliasedName,
+        true,
+        type: DriftSqlType.double,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _stockUnitMeta = const VerificationMeta(
     'stockUnit',
   );
@@ -7465,6 +7746,7 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
     createdAt,
     updatedAt,
     currentStock,
+    lowStockThreshold,
     stockUnit,
     purchaseUnit,
     unitsPerPurchase,
@@ -7586,6 +7868,15 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
         ),
       );
     }
+    if (data.containsKey('low_stock_threshold')) {
+      context.handle(
+        _lowStockThresholdMeta,
+        lowStockThreshold.isAcceptableOrUnknown(
+          data['low_stock_threshold']!,
+          _lowStockThresholdMeta,
+        ),
+      );
+    }
     if (data.containsKey('stock_unit')) {
       context.handle(
         _stockUnitMeta,
@@ -7684,6 +7975,10 @@ class $SuppliesTable extends Supplies with TableInfo<$SuppliesTable, Supply> {
         DriftSqlType.double,
         data['${effectivePrefix}current_stock'],
       )!,
+      lowStockThreshold: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}low_stock_threshold'],
+      ),
       stockUnit: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}stock_unit'],
@@ -7724,6 +8019,7 @@ class Supply extends DataClass implements Insertable<Supply> {
   final DateTime createdAt;
   final DateTime updatedAt;
   final double currentStock;
+  final double? lowStockThreshold;
   final String stockUnit;
   final String? purchaseUnit;
   final double unitsPerPurchase;
@@ -7743,6 +8039,7 @@ class Supply extends DataClass implements Insertable<Supply> {
     required this.createdAt,
     required this.updatedAt,
     required this.currentStock,
+    this.lowStockThreshold,
     required this.stockUnit,
     this.purchaseUnit,
     required this.unitsPerPurchase,
@@ -7777,6 +8074,9 @@ class Supply extends DataClass implements Insertable<Supply> {
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     map['current_stock'] = Variable<double>(currentStock);
+    if (!nullToAbsent || lowStockThreshold != null) {
+      map['low_stock_threshold'] = Variable<double>(lowStockThreshold);
+    }
     map['stock_unit'] = Variable<String>(stockUnit);
     if (!nullToAbsent || purchaseUnit != null) {
       map['purchase_unit'] = Variable<String>(purchaseUnit);
@@ -7812,6 +8112,9 @@ class Supply extends DataClass implements Insertable<Supply> {
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
       currentStock: Value(currentStock),
+      lowStockThreshold: lowStockThreshold == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lowStockThreshold),
       stockUnit: Value(stockUnit),
       purchaseUnit: purchaseUnit == null && nullToAbsent
           ? const Value.absent()
@@ -7841,6 +8144,9 @@ class Supply extends DataClass implements Insertable<Supply> {
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
       currentStock: serializer.fromJson<double>(json['currentStock']),
+      lowStockThreshold: serializer.fromJson<double?>(
+        json['lowStockThreshold'],
+      ),
       stockUnit: serializer.fromJson<String>(json['stockUnit']),
       purchaseUnit: serializer.fromJson<String?>(json['purchaseUnit']),
       unitsPerPurchase: serializer.fromJson<double>(json['unitsPerPurchase']),
@@ -7865,6 +8171,7 @@ class Supply extends DataClass implements Insertable<Supply> {
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
       'currentStock': serializer.toJson<double>(currentStock),
+      'lowStockThreshold': serializer.toJson<double?>(lowStockThreshold),
       'stockUnit': serializer.toJson<String>(stockUnit),
       'purchaseUnit': serializer.toJson<String?>(purchaseUnit),
       'unitsPerPurchase': serializer.toJson<double>(unitsPerPurchase),
@@ -7887,6 +8194,7 @@ class Supply extends DataClass implements Insertable<Supply> {
     DateTime? createdAt,
     DateTime? updatedAt,
     double? currentStock,
+    Value<double?> lowStockThreshold = const Value.absent(),
     String? stockUnit,
     Value<String?> purchaseUnit = const Value.absent(),
     double? unitsPerPurchase,
@@ -7910,6 +8218,9 @@ class Supply extends DataClass implements Insertable<Supply> {
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
     currentStock: currentStock ?? this.currentStock,
+    lowStockThreshold: lowStockThreshold.present
+        ? lowStockThreshold.value
+        : this.lowStockThreshold,
     stockUnit: stockUnit ?? this.stockUnit,
     purchaseUnit: purchaseUnit.present ? purchaseUnit.value : this.purchaseUnit,
     unitsPerPurchase: unitsPerPurchase ?? this.unitsPerPurchase,
@@ -7943,6 +8254,9 @@ class Supply extends DataClass implements Insertable<Supply> {
       currentStock: data.currentStock.present
           ? data.currentStock.value
           : this.currentStock,
+      lowStockThreshold: data.lowStockThreshold.present
+          ? data.lowStockThreshold.value
+          : this.lowStockThreshold,
       stockUnit: data.stockUnit.present ? data.stockUnit.value : this.stockUnit,
       purchaseUnit: data.purchaseUnit.present
           ? data.purchaseUnit.value
@@ -7973,6 +8287,7 @@ class Supply extends DataClass implements Insertable<Supply> {
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('currentStock: $currentStock, ')
+          ..write('lowStockThreshold: $lowStockThreshold, ')
           ..write('stockUnit: $stockUnit, ')
           ..write('purchaseUnit: $purchaseUnit, ')
           ..write('unitsPerPurchase: $unitsPerPurchase, ')
@@ -7997,6 +8312,7 @@ class Supply extends DataClass implements Insertable<Supply> {
     createdAt,
     updatedAt,
     currentStock,
+    lowStockThreshold,
     stockUnit,
     purchaseUnit,
     unitsPerPurchase,
@@ -8020,6 +8336,7 @@ class Supply extends DataClass implements Insertable<Supply> {
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
           other.currentStock == this.currentStock &&
+          other.lowStockThreshold == this.lowStockThreshold &&
           other.stockUnit == this.stockUnit &&
           other.purchaseUnit == this.purchaseUnit &&
           other.unitsPerPurchase == this.unitsPerPurchase &&
@@ -8041,6 +8358,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   final Value<double> currentStock;
+  final Value<double?> lowStockThreshold;
   final Value<String> stockUnit;
   final Value<String?> purchaseUnit;
   final Value<double> unitsPerPurchase;
@@ -8061,6 +8379,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.currentStock = const Value.absent(),
+    this.lowStockThreshold = const Value.absent(),
     this.stockUnit = const Value.absent(),
     this.purchaseUnit = const Value.absent(),
     this.unitsPerPurchase = const Value.absent(),
@@ -8082,6 +8401,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.currentStock = const Value.absent(),
+    this.lowStockThreshold = const Value.absent(),
     this.stockUnit = const Value.absent(),
     this.purchaseUnit = const Value.absent(),
     this.unitsPerPurchase = const Value.absent(),
@@ -8106,6 +8426,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<double>? currentStock,
+    Expression<double>? lowStockThreshold,
     Expression<String>? stockUnit,
     Expression<String>? purchaseUnit,
     Expression<double>? unitsPerPurchase,
@@ -8127,6 +8448,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (currentStock != null) 'current_stock': currentStock,
+      if (lowStockThreshold != null) 'low_stock_threshold': lowStockThreshold,
       if (stockUnit != null) 'stock_unit': stockUnit,
       if (purchaseUnit != null) 'purchase_unit': purchaseUnit,
       if (unitsPerPurchase != null) 'units_per_purchase': unitsPerPurchase,
@@ -8150,6 +8472,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
     Value<double>? currentStock,
+    Value<double?>? lowStockThreshold,
     Value<String>? stockUnit,
     Value<String?>? purchaseUnit,
     Value<double>? unitsPerPurchase,
@@ -8171,6 +8494,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       currentStock: currentStock ?? this.currentStock,
+      lowStockThreshold: lowStockThreshold ?? this.lowStockThreshold,
       stockUnit: stockUnit ?? this.stockUnit,
       purchaseUnit: purchaseUnit ?? this.purchaseUnit,
       unitsPerPurchase: unitsPerPurchase ?? this.unitsPerPurchase,
@@ -8224,6 +8548,9 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
     if (currentStock.present) {
       map['current_stock'] = Variable<double>(currentStock.value);
     }
+    if (lowStockThreshold.present) {
+      map['low_stock_threshold'] = Variable<double>(lowStockThreshold.value);
+    }
     if (stockUnit.present) {
       map['stock_unit'] = Variable<String>(stockUnit.value);
     }
@@ -8259,6 +8586,7 @@ class SuppliesCompanion extends UpdateCompanion<Supply> {
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('currentStock: $currentStock, ')
+          ..write('lowStockThreshold: $lowStockThreshold, ')
           ..write('stockUnit: $stockUnit, ')
           ..write('purchaseUnit: $purchaseUnit, ')
           ..write('unitsPerPurchase: $unitsPerPurchase, ')
@@ -14503,6 +14831,7 @@ typedef $$AccountsTableCreateCompanionBuilder =
       required String businessId,
       required String name,
       required String type,
+      Value<String?> subtype,
       Value<bool> isPaymentAccount,
       Value<int> startingBalance,
       Value<bool> isActive,
@@ -14515,6 +14844,7 @@ typedef $$AccountsTableUpdateCompanionBuilder =
       Value<String> businessId,
       Value<String> name,
       Value<String> type,
+      Value<String?> subtype,
       Value<bool> isPaymentAccount,
       Value<int> startingBalance,
       Value<bool> isActive,
@@ -14710,6 +15040,11 @@ class $$AccountsTableFilterComposer
 
   ColumnFilters<String> get type => $composableBuilder(
     column: $table.type,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get subtype => $composableBuilder(
+    column: $table.subtype,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -14956,6 +15291,11 @@ class $$AccountsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get subtype => $composableBuilder(
+    column: $table.subtype,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isPaymentAccount => $composableBuilder(
     column: $table.isPaymentAccount,
     builder: (column) => ColumnOrderings(column),
@@ -15017,6 +15357,9 @@ class $$AccountsTableAnnotationComposer
 
   GeneratedColumn<String> get type =>
       $composableBuilder(column: $table.type, builder: (column) => column);
+
+  GeneratedColumn<String> get subtype =>
+      $composableBuilder(column: $table.subtype, builder: (column) => column);
 
   GeneratedColumn<bool> get isPaymentAccount => $composableBuilder(
     column: $table.isPaymentAccount,
@@ -15277,6 +15620,7 @@ class $$AccountsTableTableManager
                 Value<String> businessId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<String> type = const Value.absent(),
+                Value<String?> subtype = const Value.absent(),
                 Value<bool> isPaymentAccount = const Value.absent(),
                 Value<int> startingBalance = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
@@ -15287,6 +15631,7 @@ class $$AccountsTableTableManager
                 businessId: businessId,
                 name: name,
                 type: type,
+                subtype: subtype,
                 isPaymentAccount: isPaymentAccount,
                 startingBalance: startingBalance,
                 isActive: isActive,
@@ -15299,6 +15644,7 @@ class $$AccountsTableTableManager
                 required String businessId,
                 required String name,
                 required String type,
+                Value<String?> subtype = const Value.absent(),
                 Value<bool> isPaymentAccount = const Value.absent(),
                 Value<int> startingBalance = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
@@ -15309,6 +15655,7 @@ class $$AccountsTableTableManager
                 businessId: businessId,
                 name: name,
                 type: type,
+                subtype: subtype,
                 isPaymentAccount: isPaymentAccount,
                 startingBalance: startingBalance,
                 isActive: isActive,
@@ -18750,7 +19097,9 @@ typedef $$ReceivablePaymentsTableCreateCompanionBuilder =
       required String businessId,
       required String customerId,
       required int amount,
-      required String paymentAccountId,
+      Value<String?> paymentAccountId,
+      Value<bool> isOnCredit,
+      Value<String> status,
       required DateTime paymentDate,
       Value<String?> notes,
       Value<DateTime> createdAt,
@@ -18762,7 +19111,9 @@ typedef $$ReceivablePaymentsTableUpdateCompanionBuilder =
       Value<String> businessId,
       Value<String> customerId,
       Value<int> amount,
-      Value<String> paymentAccountId,
+      Value<String?> paymentAccountId,
+      Value<bool> isOnCredit,
+      Value<String> status,
       Value<DateTime> paymentDate,
       Value<String?> notes,
       Value<DateTime> createdAt,
@@ -18819,9 +19170,9 @@ final class $$ReceivablePaymentsTableReferences
   static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
       .createAlias('receivable_payments__payment_account_id__accounts__id');
 
-  $$AccountsTableProcessedTableManager get paymentAccountId {
-    final $_column = $_itemColumn<String>('payment_account_id')!;
-
+  $$AccountsTableProcessedTableManager? get paymentAccountId {
+    final $_column = $_itemColumn<String>('payment_account_id');
+    if ($_column == null) return null;
     final manager = $$AccountsTableTableManager(
       $_db,
       $_db.accounts,
@@ -18850,6 +19201,16 @@ class $$ReceivablePaymentsTableFilterComposer
 
   ColumnFilters<int> get amount => $composableBuilder(
     column: $table.amount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -18957,6 +19318,16 @@ class $$ReceivablePaymentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get paymentDate => $composableBuilder(
     column: $table.paymentDate,
     builder: (column) => ColumnOrderings(column),
@@ -19056,6 +19427,14 @@ class $$ReceivablePaymentsTableAnnotationComposer
 
   GeneratedColumn<int> get amount =>
       $composableBuilder(column: $table.amount, builder: (column) => column);
+
+  GeneratedColumn<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
 
   GeneratedColumn<DateTime> get paymentDate => $composableBuilder(
     column: $table.paymentDate,
@@ -19179,7 +19558,9 @@ class $$ReceivablePaymentsTableTableManager
                 Value<String> businessId = const Value.absent(),
                 Value<String> customerId = const Value.absent(),
                 Value<int> amount = const Value.absent(),
-                Value<String> paymentAccountId = const Value.absent(),
+                Value<String?> paymentAccountId = const Value.absent(),
+                Value<bool> isOnCredit = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 Value<DateTime> paymentDate = const Value.absent(),
                 Value<String?> notes = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -19190,6 +19571,8 @@ class $$ReceivablePaymentsTableTableManager
                 customerId: customerId,
                 amount: amount,
                 paymentAccountId: paymentAccountId,
+                isOnCredit: isOnCredit,
+                status: status,
                 paymentDate: paymentDate,
                 notes: notes,
                 createdAt: createdAt,
@@ -19201,7 +19584,9 @@ class $$ReceivablePaymentsTableTableManager
                 required String businessId,
                 required String customerId,
                 required int amount,
-                required String paymentAccountId,
+                Value<String?> paymentAccountId = const Value.absent(),
+                Value<bool> isOnCredit = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 required DateTime paymentDate,
                 Value<String?> notes = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -19212,6 +19597,8 @@ class $$ReceivablePaymentsTableTableManager
                 customerId: customerId,
                 amount: amount,
                 paymentAccountId: paymentAccountId,
+                isOnCredit: isOnCredit,
+                status: status,
                 paymentDate: paymentDate,
                 notes: notes,
                 createdAt: createdAt,
@@ -20629,7 +21016,9 @@ typedef $$PayablePaymentsTableCreateCompanionBuilder =
       required String businessId,
       required String supplierId,
       required int amount,
-      required String paymentAccountId,
+      Value<String?> paymentAccountId,
+      Value<bool> isOnCredit,
+      Value<String> status,
       required DateTime paymentDate,
       Value<String?> notes,
       Value<DateTime> createdAt,
@@ -20641,7 +21030,9 @@ typedef $$PayablePaymentsTableUpdateCompanionBuilder =
       Value<String> businessId,
       Value<String> supplierId,
       Value<int> amount,
-      Value<String> paymentAccountId,
+      Value<String?> paymentAccountId,
+      Value<bool> isOnCredit,
+      Value<String> status,
       Value<DateTime> paymentDate,
       Value<String?> notes,
       Value<DateTime> createdAt,
@@ -20694,9 +21085,9 @@ final class $$PayablePaymentsTableReferences
   static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
       .createAlias('payable_payments__payment_account_id__accounts__id');
 
-  $$AccountsTableProcessedTableManager get paymentAccountId {
-    final $_column = $_itemColumn<String>('payment_account_id')!;
-
+  $$AccountsTableProcessedTableManager? get paymentAccountId {
+    final $_column = $_itemColumn<String>('payment_account_id');
+    if ($_column == null) return null;
     final manager = $$AccountsTableTableManager(
       $_db,
       $_db.accounts,
@@ -20725,6 +21116,16 @@ class $$PayablePaymentsTableFilterComposer
 
   ColumnFilters<int> get amount => $composableBuilder(
     column: $table.amount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -20832,6 +21233,16 @@ class $$PayablePaymentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get paymentDate => $composableBuilder(
     column: $table.paymentDate,
     builder: (column) => ColumnOrderings(column),
@@ -20931,6 +21342,14 @@ class $$PayablePaymentsTableAnnotationComposer
 
   GeneratedColumn<int> get amount =>
       $composableBuilder(column: $table.amount, builder: (column) => column);
+
+  GeneratedColumn<bool> get isOnCredit => $composableBuilder(
+    column: $table.isOnCredit,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
 
   GeneratedColumn<DateTime> get paymentDate => $composableBuilder(
     column: $table.paymentDate,
@@ -21051,7 +21470,9 @@ class $$PayablePaymentsTableTableManager
                 Value<String> businessId = const Value.absent(),
                 Value<String> supplierId = const Value.absent(),
                 Value<int> amount = const Value.absent(),
-                Value<String> paymentAccountId = const Value.absent(),
+                Value<String?> paymentAccountId = const Value.absent(),
+                Value<bool> isOnCredit = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 Value<DateTime> paymentDate = const Value.absent(),
                 Value<String?> notes = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -21062,6 +21483,8 @@ class $$PayablePaymentsTableTableManager
                 supplierId: supplierId,
                 amount: amount,
                 paymentAccountId: paymentAccountId,
+                isOnCredit: isOnCredit,
+                status: status,
                 paymentDate: paymentDate,
                 notes: notes,
                 createdAt: createdAt,
@@ -21073,7 +21496,9 @@ class $$PayablePaymentsTableTableManager
                 required String businessId,
                 required String supplierId,
                 required int amount,
-                required String paymentAccountId,
+                Value<String?> paymentAccountId = const Value.absent(),
+                Value<bool> isOnCredit = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 required DateTime paymentDate,
                 Value<String?> notes = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -21084,6 +21509,8 @@ class $$PayablePaymentsTableTableManager
                 supplierId: supplierId,
                 amount: amount,
                 paymentAccountId: paymentAccountId,
+                isOnCredit: isOnCredit,
+                status: status,
                 paymentDate: paymentDate,
                 notes: notes,
                 createdAt: createdAt,
@@ -22077,6 +22504,7 @@ typedef $$SuppliesTableCreateCompanionBuilder =
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
       Value<double> currentStock,
+      Value<double?> lowStockThreshold,
       Value<String> stockUnit,
       Value<String?> purchaseUnit,
       Value<double> unitsPerPurchase,
@@ -22099,6 +22527,7 @@ typedef $$SuppliesTableUpdateCompanionBuilder =
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
       Value<double> currentStock,
+      Value<double?> lowStockThreshold,
       Value<String> stockUnit,
       Value<String?> purchaseUnit,
       Value<double> unitsPerPurchase,
@@ -22285,6 +22714,11 @@ class $$SuppliesTableFilterComposer
 
   ColumnFilters<double> get currentStock => $composableBuilder(
     column: $table.currentStock,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get lowStockThreshold => $composableBuilder(
+    column: $table.lowStockThreshold,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -22506,6 +22940,11 @@ class $$SuppliesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<double> get lowStockThreshold => $composableBuilder(
+    column: $table.lowStockThreshold,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get stockUnit => $composableBuilder(
     column: $table.stockUnit,
     builder: (column) => ColumnOrderings(column),
@@ -22605,6 +23044,11 @@ class $$SuppliesTableAnnotationComposer
 
   GeneratedColumn<double> get currentStock => $composableBuilder(
     column: $table.currentStock,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get lowStockThreshold => $composableBuilder(
+    column: $table.lowStockThreshold,
     builder: (column) => column,
   );
 
@@ -22801,6 +23245,7 @@ class $$SuppliesTableTableManager
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<double> currentStock = const Value.absent(),
+                Value<double?> lowStockThreshold = const Value.absent(),
                 Value<String> stockUnit = const Value.absent(),
                 Value<String?> purchaseUnit = const Value.absent(),
                 Value<double> unitsPerPurchase = const Value.absent(),
@@ -22821,6 +23266,7 @@ class $$SuppliesTableTableManager
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 currentStock: currentStock,
+                lowStockThreshold: lowStockThreshold,
                 stockUnit: stockUnit,
                 purchaseUnit: purchaseUnit,
                 unitsPerPurchase: unitsPerPurchase,
@@ -22843,6 +23289,7 @@ class $$SuppliesTableTableManager
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<double> currentStock = const Value.absent(),
+                Value<double?> lowStockThreshold = const Value.absent(),
                 Value<String> stockUnit = const Value.absent(),
                 Value<String?> purchaseUnit = const Value.absent(),
                 Value<double> unitsPerPurchase = const Value.absent(),
@@ -22863,6 +23310,7 @@ class $$SuppliesTableTableManager
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 currentStock: currentStock,
+                lowStockThreshold: lowStockThreshold,
                 stockUnit: stockUnit,
                 purchaseUnit: purchaseUnit,
                 unitsPerPurchase: unitsPerPurchase,

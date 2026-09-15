@@ -66,7 +66,7 @@ final customerBalanceProvider = FutureProvider.family<int, String>((
       .customSelect(
         '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM receivable_payments
-    WHERE customer_id = ?
+    WHERE customer_id = ? AND status = 'completed'
     ''',
         variables: [Variable.withString(customerId)],
       )
@@ -98,7 +98,7 @@ final totalReceivableProvider = FutureProvider<int>((ref) async {
     SELECT COALESCE(SUM(rp.amount), 0) AS total
     FROM receivable_payments rp
     JOIN customers c ON c.id = rp.customer_id
-    WHERE c.business_id = ?
+    WHERE c.business_id = ? AND rp.status = 'completed'
     ''',
         variables: [Variable.withString(kCurrentBusinessId)],
       )
@@ -131,6 +131,7 @@ final customerActivityProvider =
             amount: s.amount,
             date: s.txnDate,
             isOnCredit: s.paymentAccountId == null,
+            isPending: false,
             notes: s.notes,
           ),
         ),
@@ -140,6 +141,7 @@ final customerActivityProvider =
             amount: p.amount,
             date: p.paymentDate,
             isOnCredit: false,
+            isPending: p.isOnCredit,
             notes: p.notes,
           ),
         ),
@@ -153,12 +155,14 @@ class _ActivityItem {
   final int amount;
   final DateTime date;
   final bool isOnCredit;
+  final bool isPending;
   final String? notes;
   _ActivityItem({
     required this.isSale,
     required this.amount,
     required this.date,
     required this.isOnCredit,
+    required this.isPending,
     this.notes,
   });
 }
@@ -283,58 +287,87 @@ class CustomerService {
   Future<void> recordPayment({
     required String customerId,
     required int amount,
-    required String paymentAccountId,
+    String? paymentAccountId,
     required DateTime date,
+    required bool isOnCredit,
     String? notes,
   }) async {
-    await db.transaction(() async {
-      final entryId = const Uuid().v4();
+    if (!isOnCredit && paymentAccountId == null) {
+      throw ArgumentError('paymentAccountId is required unless on credit.');
+    }
 
-      await db
-          .into(db.journalEntries)
-          .insert(
-            JournalEntriesCompanion.insert(
-              id: entryId,
-              businessId: kCurrentBusinessId,
-              entryDate: date,
-              sourceType: 'receivable_payment',
-              description: Value(notes),
-            ),
-          );
-      await db
-          .into(db.ledgerLines)
-          .insert(
-            LedgerLinesCompanion.insert(
-              id: const Uuid().v4(),
-              journalEntryId: entryId,
-              accountId: paymentAccountId,
-              debit: Value(amount),
-            ),
-          );
-      await db
-          .into(db.ledgerLines)
-          .insert(
-            LedgerLinesCompanion.insert(
-              id: const Uuid().v4(),
-              journalEntryId: entryId,
-              accountId: 'acc_ar_$kCurrentBusinessId',
-              credit: Value(amount),
-            ),
-          );
+    await db.transaction(() async {
+      final paymentId = const Uuid().v4();
+
+      // An on-credit payment is just a pending promise — no cash moved,
+      // so nothing gets posted to the ledger until it's actually received.
+      if (!isOnCredit) {
+        final entryId = const Uuid().v4();
+
+        await db
+            .into(db.journalEntries)
+            .insert(
+              JournalEntriesCompanion.insert(
+                id: entryId,
+                businessId: kCurrentBusinessId,
+                entryDate: date,
+                sourceType: 'receivable_payment',
+                sourceId: Value(paymentId),
+                description: Value(notes),
+              ),
+            );
+        await db
+            .into(db.ledgerLines)
+            .insert(
+              LedgerLinesCompanion.insert(
+                id: const Uuid().v4(),
+                journalEntryId: entryId,
+                accountId: paymentAccountId!,
+                debit: Value(amount),
+              ),
+            );
+        await db
+            .into(db.ledgerLines)
+            .insert(
+              LedgerLinesCompanion.insert(
+                id: const Uuid().v4(),
+                journalEntryId: entryId,
+                accountId: 'acc_ar_$kCurrentBusinessId',
+                credit: Value(amount),
+              ),
+            );
+      }
 
       await db
           .into(db.receivablePayments)
           .insert(
             ReceivablePaymentsCompanion.insert(
-              id: const Uuid().v4(),
+              id: paymentId,
               businessId: kCurrentBusinessId,
               customerId: customerId,
               amount: amount,
-              paymentAccountId: paymentAccountId,
+              paymentAccountId: Value(isOnCredit ? null : paymentAccountId),
+              isOnCredit: Value(isOnCredit),
+              status: Value(isOnCredit ? 'pending' : 'completed'),
               paymentDate: date,
               notes: Value(notes),
             ),
           );
+    });
+  }
+
+  /// Removes a payment and its matching ledger posting together.
+  Future<void> deleteReceivablePayment(String paymentId) async {
+    await db.transaction(() async {
+      await (db.delete(db.journalEntries)..where(
+            (j) =>
+                j.sourceType.equals('receivable_payment') &
+                j.sourceId.equals(paymentId),
+          ))
+          .go();
+      await (db.delete(
+        db.receivablePayments,
+      )..where((p) => p.id.equals(paymentId))).go();
     });
   }
 }
@@ -1392,7 +1425,7 @@ class _ActivityTile extends StatelessWidget {
         : Icons.payments_outlined;
     final label = item.isSale
         ? (item.isOnCredit ? 'Sale (credit)' : 'Sale (paid)')
-        : 'Payment received';
+        : (item.isPending ? 'Payment (on credit)' : 'Payment received');
 
     return Container(
       padding: const EdgeInsets.all(13),
@@ -1648,6 +1681,7 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
   String? _paymentAccountId;
+  bool _isOnCredit = false;
   bool _saving = false;
 
   @override
@@ -1717,36 +1751,49 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                'Received via',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 12,
+              Material(
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('On credit'),
+                  subtitle: const Text('Pending — not actually received yet'),
+                  value: _isOnCredit,
+                  activeThumbColor: AppColors.primary,
+                  onChanged: (v) => setState(() => _isOnCredit = v),
                 ),
               ),
-              const SizedBox(height: 8),
-              accountsAsync.when(
-                data: (accounts) => Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: accounts
-                      .map(
-                        (a) => ChoiceChip(
-                          label: Text(a.name),
-                          selected: _paymentAccountId == a.id,
-                          onSelected: (_) =>
-                              setState(() => _paymentAccountId = a.id),
-                          selectedColor: AppColors.primary.withValues(
-                            alpha: 0.16,
+              if (!_isOnCredit) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Received via',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                accountsAsync.when(
+                  data: (accounts) => Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: accounts
+                        .map(
+                          (a) => ChoiceChip(
+                            label: Text(a.name),
+                            selected: _paymentAccountId == a.id,
+                            onSelected: (_) =>
+                                setState(() => _paymentAccountId = a.id),
+                            selectedColor: AppColors.primary.withValues(
+                              alpha: 0.16,
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(),
+                        )
+                        .toList(),
+                  ),
+                  loading: () => const LinearProgressIndicator(),
+                  error: (_, __) => const SizedBox.shrink(),
                 ),
-                loading: () => const LinearProgressIndicator(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
+              ],
               const SizedBox(height: 16),
               TextField(
                 controller: _notesController,
@@ -1788,7 +1835,8 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
 
   Future<void> _save() async {
     final amount = double.tryParse(_amountController.text);
-    if (amount == null || amount <= 0 || _paymentAccountId == null) return;
+    if (amount == null || amount <= 0) return;
+    if (!_isOnCredit && _paymentAccountId == null) return;
 
     setState(() => _saving = true);
     final service = ref.read(customerServiceProvider);
@@ -1796,8 +1844,9 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
       await service.recordPayment(
         customerId: widget.customer.id,
         amount: (amount * 100).round(),
-        paymentAccountId: _paymentAccountId!,
+        paymentAccountId: _isOnCredit ? null : _paymentAccountId,
         date: DateTime.now(),
+        isOnCredit: _isOnCredit,
         notes: _notesController.text.trim().isEmpty
             ? null
             : _notesController.text.trim(),

@@ -122,6 +122,12 @@ class UnitConverter {
     final b = _dimension[unitB.toLowerCase().trim()];
     return a != null && b != null && a == b;
   }
+
+  /// The dimension ('mass' | 'volume' | 'count') a unit belongs to,
+  /// or null if unrecognized. Used to build contextual unit dropdowns
+  /// (e.g. only show g/kg once the ingredient is mass-based).
+  static String? dimensionOf(String unit) =>
+      _dimension[unit.toLowerCase().trim()];
 }
 
 // ============================================================
@@ -285,6 +291,56 @@ class ProductionService {
   /// components down to actual supply stock. Wrapped in a single
   /// transaction, so a shortage partway through never leaves stock
   /// half-deducted.
+  Future<void> sellProduct({
+    required String productId,
+    required double quantity,
+    required String paymentAccountId,
+    String? referenceId,
+    String? notes,
+  }) async {
+    final product = await (db.select(
+      db.products,
+    )..where((p) => p.id.equals(productId))).getSingleOrNull();
+
+    if (product == null) {
+      throw StateError('Product not found.');
+    }
+    if (product.sellPrice == null) {
+      throw StateError('Product "$productId" has no sell price set.');
+    }
+    if (quantity <= 0) {
+      throw ArgumentError('Sale quantity must be greater than zero.');
+    }
+
+    await db.transaction(() async {
+      await _deductRecursive(
+        productId,
+        quantity,
+        'product_sale',
+        referenceId,
+        notes,
+      );
+
+      final saleAmountCents = (product.sellPrice! * quantity).round();
+      await db
+          .into(db.incomeTransactions)
+          .insert(
+            IncomeTransactionsCompanion.insert(
+              id: const Uuid().v4(),
+              businessId: 'biz_001',
+              txnDate: DateTime.now(),
+              categoryId: 'sale_biz_001',
+              amount: saleAmountCents,
+              paymentAccountId: Value(paymentAccountId),
+              description: Value(product.name),
+              reference: Value(productId),
+              notes: Value(notes),
+              status: const Value('completed'),
+            ),
+          );
+    });
+  }
+
   Future<void> recordProduction({
     required String productId,
     required double quantity,

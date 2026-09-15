@@ -1067,14 +1067,27 @@ class DashboardPage extends ConsumerWidget {
               delegate: SliverChildListDelegate([
                 totalsAsync.when(
                   data: (totals) => balancesAsync.when(
-                    data: (balances) => _SummaryHero(
-                      income: totals.income,
-                      expense: totals.expense,
-                      cashPosition: balances.fold<int>(
-                        0,
-                        (s, b) => s + b.balance,
-                      ),
-                      period: period,
+                    data: (balances) => entriesAsync.when(
+                      data: (entries) {
+                        int sumOf(JournalEntryType type) => entries
+                            .where((e) => e.type == type)
+                            .fold<int>(0, (s, e) => s + e.amount);
+
+                        return _SummaryHero(
+                          income: totals.income,
+                          expense: totals.expense,
+                          capital: sumOf(JournalEntryType.capital),
+                          asset: sumOf(JournalEntryType.asset),
+                          liability: sumOf(JournalEntryType.liability),
+                          cashPosition: balances.fold<int>(
+                            0,
+                            (s, b) => s + b.balance,
+                          ),
+                          period: period,
+                        );
+                      },
+                      loading: () => const _HeroSkeleton(),
+                      error: (_, __) => const _HeroSkeleton(),
                     ),
                     loading: () => const _HeroSkeleton(),
                     error: (_, __) => const _HeroSkeleton(),
@@ -1269,11 +1282,17 @@ class _PeriodSelector extends ConsumerWidget {
 class _SummaryHero extends StatelessWidget {
   final int income;
   final int expense;
+  final int capital;
+  final int asset;
+  final int liability;
   final int cashPosition;
   final TransactionDateFilter period;
   const _SummaryHero({
     required this.income,
     required this.expense,
+    required this.capital,
+    required this.asset,
+    required this.liability,
     required this.cashPosition,
     required this.period,
   });
@@ -1357,6 +1376,39 @@ class _SummaryHero extends StatelessWidget {
                   value: cashPosition,
                   icon: Icons.account_balance_wallet,
                   positive: null,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(height: 1, color: Colors.white24),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _HeroStat(
+                  label: 'Capital',
+                  value: capital,
+                  icon: Icons.savings_outlined,
+                  positive: true,
+                ),
+              ),
+              Container(width: 1, height: 36, color: Colors.white24),
+              Expanded(
+                child: _HeroStat(
+                  label: 'Assets',
+                  value: asset,
+                  icon: Icons.inventory_2_outlined,
+                  positive: true,
+                ),
+              ),
+              Container(width: 1, height: 36, color: Colors.white24),
+              Expanded(
+                child: _HeroStat(
+                  label: 'Liabilities',
+                  value: liability,
+                  icon: Icons.request_quote_outlined,
+                  positive: false,
                 ),
               ),
             ],

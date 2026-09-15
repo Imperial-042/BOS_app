@@ -29,13 +29,34 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 
 import 'transaction_page.dart';
+import 'cashflow_page.dart'
+    show
+        capitalAssetLiabilityServiceProvider,
+        assetBalancesProvider,
+        liabilityBalancesProvider,
+        capitalBalanceProvider,
+        accountBalancesProvider,
+        AddCapitalSheet,
+        AddAssetSheet,
+        AddLiabilitySheet;
+import 'suppliers_page.dart' show supplierServiceProvider;
+import 'customers_page.dart' show customerServiceProvider;
 import '../providers/transaction_date_filter.dart';
 
 // ============================================================
 // MODEL
 // ============================================================
 
-enum JournalEntryType { income, expense }
+enum JournalEntryType {
+  income,
+  expense,
+  capital,
+  asset,
+  liability,
+  supplierPurchase,
+  payablePayment,
+  receivablePayment,
+}
 
 class JournalEntryRow {
   final String id;
@@ -112,6 +133,130 @@ final journalEntriesProvider =
         return categoryMap[id] ?? 'Uncategorized';
       }
 
+      // Capital/Asset/Liability entries live directly in journal_entries +
+      // ledger_lines (no dedicated domain table like expenses/income have).
+      // Pick out the non-cash side of each balanced pair to display.
+      final calRows = await db
+          .customSelect(
+            '''
+            SELECT je.id AS je_id, je.entry_date AS entry_date,
+                   je.description AS je_description, je.source_type AS source_type,
+                   a.name AS account_name, ll.debit AS debit, ll.credit AS credit
+            FROM journal_entries je
+            INNER JOIN ledger_lines ll ON ll.journal_entry_id = je.id
+            INNER JOIN accounts a ON a.id = ll.account_id
+            WHERE je.business_id = ?
+              AND je.entry_date >= ? AND je.entry_date < ?
+              AND (
+                (je.source_type = 'capital' AND a.type = 'equity') OR
+                (je.source_type = 'asset' AND a.type = 'asset' AND a.is_payment_account = 0) OR
+                (je.source_type = 'liability' AND a.type = 'liability')
+              )
+            ORDER BY je.entry_date DESC
+            ''',
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
+            ],
+          )
+          .get();
+
+      final calEntries = calRows.map((row) {
+        final sourceType = row.read<String>('source_type');
+        final type = switch (sourceType) {
+          'capital' => JournalEntryType.capital,
+          'asset' => JournalEntryType.asset,
+          _ => JournalEntryType.liability,
+        };
+
+        return JournalEntryRow(
+          id: row.read<String>('je_id'),
+          type: type,
+          date: row.read<DateTime>('entry_date'),
+          description: row.readNullable<String>('je_description'),
+          categoryName: row.read<String>('account_name'),
+          amount: row.read<int>('debit') + row.read<int>('credit'),
+          status: 'completed',
+        );
+      });
+
+      // Supplier purchases and payable/receivable payments live in their
+      // own domain tables (mirroring expenses/income), joined here with
+      // the supplier/customer name so payables/receivables show up in
+      // the journal too, not just on the Suppliers/Customers pages.
+      final supplierPurchaseRows = await db
+          .customSelect(
+            '''
+            SELECT sp.id AS id, sp.purchase_date AS date, sp.amount AS amount,
+                   sp.notes AS notes, sp.status AS status, s.name AS party_name
+            FROM supplier_purchases sp
+            INNER JOIN suppliers s ON s.id = sp.supplier_id
+            WHERE sp.business_id = ?
+              AND sp.purchase_date >= ? AND sp.purchase_date < ?
+            ORDER BY sp.purchase_date DESC
+            ''',
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
+            ],
+          )
+          .get();
+
+      final payablePaymentRows = await db
+          .customSelect(
+            '''
+            SELECT pp.id AS id, pp.payment_date AS date, pp.amount AS amount,
+                   pp.notes AS notes, pp.status AS status, s.name AS party_name
+            FROM payable_payments pp
+            INNER JOIN suppliers s ON s.id = pp.supplier_id
+            WHERE pp.business_id = ?
+              AND pp.payment_date >= ? AND pp.payment_date < ?
+            ORDER BY pp.payment_date DESC
+            ''',
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
+            ],
+          )
+          .get();
+
+      final receivablePaymentRows = await db
+          .customSelect(
+            '''
+            SELECT rp.id AS id, rp.payment_date AS date, rp.amount AS amount,
+                   rp.notes AS notes, rp.status AS status, c.name AS party_name
+            FROM receivable_payments rp
+            INNER JOIN customers c ON c.id = rp.customer_id
+            WHERE rp.business_id = ?
+              AND rp.payment_date >= ? AND rp.payment_date < ?
+            ORDER BY rp.payment_date DESC
+            ''',
+            variables: [
+              Variable.withString(kCurrentBusinessId),
+              Variable.withDateTime(range.start),
+              Variable.withDateTime(range.end),
+            ],
+          )
+          .get();
+
+      JournalEntryRow payableReceivableRow(
+        QueryRow row,
+        JournalEntryType type,
+      ) {
+        return JournalEntryRow(
+          id: row.read<String>('id'),
+          type: type,
+          date: row.read<DateTime>('date'),
+          description: row.readNullable<String>('notes'),
+          categoryName: row.read<String>('party_name'),
+          amount: row.read<int>('amount'),
+          status: row.read<String>('status'),
+        );
+      }
+
       final merged = <JournalEntryRow>[
         ...expenseRows.map(
           (e) => JournalEntryRow(
@@ -136,6 +281,17 @@ final journalEntriesProvider =
             status: i.status,
             sourceIncome: i,
           ),
+        ),
+        ...calEntries,
+        ...supplierPurchaseRows.map(
+          (row) => payableReceivableRow(row, JournalEntryType.supplierPurchase),
+        ),
+        ...payablePaymentRows.map(
+          (row) => payableReceivableRow(row, JournalEntryType.payablePayment),
+        ),
+        ...receivablePaymentRows.map(
+          (row) =>
+              payableReceivableRow(row, JournalEntryType.receivablePayment),
         ),
       ];
 
@@ -259,7 +415,7 @@ class JournalEntryPage extends ConsumerWidget {
       elevation: 3,
       backgroundColor: colors.primary,
       foregroundColor: colors.onPrimary,
-      onPressed: () => _openNewTransaction(context),
+      onPressed: () => _openAddEntryMenu(context),
       child: const Icon(Icons.add_rounded),
     );
   }
@@ -268,6 +424,82 @@ class JournalEntryPage extends ConsumerWidget {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const TransactionPage()),
+    );
+  }
+
+  void _openAddEntryMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(
+                Icons.south_west_rounded,
+                color: Colors.green,
+              ),
+              title: const Text('Income'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openNewTransaction(context);
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.north_east_rounded,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: const Text('Expense'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openNewTransaction(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.savings_outlined, color: Colors.blue),
+              title: const Text('Capital'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openSheet(context, const AddCapitalSheet());
+              },
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.inventory_2_outlined,
+                color: Colors.purple,
+              ),
+              title: const Text('Asset'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openSheet(context, const AddAssetSheet());
+              },
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.request_quote_outlined,
+                color: Colors.orange,
+              ),
+              title: const Text('Liability'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openSheet(context, const AddLiabilitySheet());
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openSheet(BuildContext context, Widget sheet) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => sheet,
     );
   }
 
@@ -368,6 +600,18 @@ class _JournalSummary extends StatelessWidget {
 
     final expense = entries
         .where((e) => e.type == JournalEntryType.expense)
+        .fold<int>(0, (sum, e) => sum + e.amount);
+
+    final capital = entries
+        .where((e) => e.type == JournalEntryType.capital)
+        .fold<int>(0, (sum, e) => sum + e.amount);
+
+    final asset = entries
+        .where((e) => e.type == JournalEntryType.asset)
+        .fold<int>(0, (sum, e) => sum + e.amount);
+
+    final liability = entries
+        .where((e) => e.type == JournalEntryType.liability)
         .fold<int>(0, (sum, e) => sum + e.amount);
 
     final balance = income - expense;
@@ -497,6 +741,55 @@ class _JournalSummary extends StatelessWidget {
                       color: colors.error,
                     ),
                   ),
+                ],
+              );
+            },
+          ),
+
+          const SizedBox(height: 10),
+
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 500;
+
+              final metrics = [
+                _SummaryMetric(
+                  icon: Icons.savings_outlined,
+                  label: 'Capital',
+                  amount: capital,
+                  color: Colors.blue,
+                ),
+                _SummaryMetric(
+                  icon: Icons.inventory_2_outlined,
+                  label: 'Assets',
+                  amount: asset,
+                  color: Colors.purple,
+                ),
+                _SummaryMetric(
+                  icon: Icons.request_quote_outlined,
+                  label: 'Liabilities',
+                  amount: liability,
+                  color: Colors.orange.shade800,
+                ),
+              ];
+
+              if (compact) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < metrics.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      SizedBox(width: double.infinity, child: metrics[i]),
+                    ],
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  for (var i = 0; i < metrics.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 12),
+                    Expanded(child: metrics[i]),
+                  ],
                 ],
               );
             },
@@ -728,9 +1021,45 @@ class _JournalEntryTile extends ConsumerWidget {
     final colors = theme.colorScheme;
 
     final isIncome = entry.type == JournalEntryType.income;
+    final isBalanceSheetEntry =
+        entry.type == JournalEntryType.capital ||
+        entry.type == JournalEntryType.asset ||
+        entry.type == JournalEntryType.liability;
+    final isReadOnlyEntry =
+        entry.type == JournalEntryType.supplierPurchase ||
+        entry.type == JournalEntryType.payablePayment ||
+        entry.type == JournalEntryType.receivablePayment;
     final isPending = entry.status.toLowerCase() == 'pending';
 
-    final accentColor = isIncome ? Colors.green.shade700 : colors.error;
+    final accentColor = switch (entry.type) {
+      JournalEntryType.income => Colors.green.shade700,
+      JournalEntryType.expense => colors.error,
+      JournalEntryType.capital => Colors.blue.shade700,
+      JournalEntryType.asset => Colors.purple.shade700,
+      JournalEntryType.liability => Colors.orange.shade800,
+      JournalEntryType.supplierPurchase => colors.error,
+      JournalEntryType.payablePayment => Colors.orange.shade800,
+      JournalEntryType.receivablePayment => Colors.green.shade700,
+    };
+
+    final tileIcon = switch (entry.type) {
+      JournalEntryType.income => Icons.south_west_rounded,
+      JournalEntryType.expense => Icons.north_east_rounded,
+      JournalEntryType.capital => Icons.savings_outlined,
+      JournalEntryType.asset => Icons.inventory_2_outlined,
+      JournalEntryType.liability => Icons.request_quote_outlined,
+      JournalEntryType.supplierPurchase => Icons.local_shipping_outlined,
+      JournalEntryType.payablePayment => Icons.payments_outlined,
+      JournalEntryType.receivablePayment => Icons.savings_outlined,
+    };
+
+    // Balance-sheet rows (capital/asset/liability) and payments received
+    // from customers always represent an increase, so they're always
+    // shown with a '+' regardless of the income/expense sign convention.
+    final isPositive =
+        isIncome ||
+        isBalanceSheetEntry ||
+        entry.type == JournalEntryType.receivablePayment;
 
     final title = entry.description?.trim().isNotEmpty == true
         ? entry.description!.trim()
@@ -744,38 +1073,45 @@ class _JournalEntryTile extends ConsumerWidget {
 
     final time = DateFormat('h:mm a').format(entry.date);
 
+    // Supplier/customer payable-and-receivable activity is view + delete
+    // only for now; capital/asset/liability entries edit through their
+    // own sheets instead of the income/expense form.
+    final isNonEditable = isReadOnlyEntry;
+
     return Slidable(
       key: ValueKey(entry.id),
 
       endActionPane: ActionPane(
         motion: const BehindMotion(),
-        extentRatio: 0.42,
+        extentRatio: isNonEditable ? 0.22 : 0.42,
         children: [
-          SlidableAction(
-            onPressed: (_) => _openEdit(context),
-            backgroundColor: colors.secondaryContainer,
-            foregroundColor: colors.onSecondaryContainer,
-            icon: Icons.edit_rounded,
-            label: 'Edit',
-            borderRadius: const BorderRadius.horizontal(
-              left: Radius.circular(18),
+          if (!isNonEditable)
+            SlidableAction(
+              onPressed: (_) => _openEdit(context),
+              backgroundColor: colors.secondaryContainer,
+              foregroundColor: colors.onSecondaryContainer,
+              icon: Icons.edit_rounded,
+              label: 'Edit',
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(18),
+              ),
             ),
-          ),
           SlidableAction(
             onPressed: (_) => _confirmDelete(context, ref),
             backgroundColor: colors.errorContainer,
             foregroundColor: colors.onErrorContainer,
             icon: Icons.delete_outline_rounded,
             label: 'Delete',
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(18),
+            borderRadius: BorderRadius.horizontal(
+              left: isNonEditable ? const Radius.circular(18) : Radius.zero,
+              right: const Radius.circular(18),
             ),
           ),
         ],
       ),
 
       child: InkWell(
-        onTap: () => _openEdit(context),
+        onTap: isNonEditable ? null : () => _openEdit(context),
 
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
@@ -793,13 +1129,7 @@ class _JournalEntryTile extends ConsumerWidget {
                   color: accentColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(15),
                 ),
-                child: Icon(
-                  isIncome
-                      ? Icons.south_west_rounded
-                      : Icons.north_east_rounded,
-                  color: accentColor,
-                  size: 22,
-                ),
+                child: Icon(tileIcon, color: accentColor, size: 22),
               ),
 
               const SizedBox(width: 12),
@@ -855,7 +1185,7 @@ class _JournalEntryTile extends ConsumerWidget {
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerRight,
                       child: Text(
-                        '${isIncome ? '+' : '-'}$amount',
+                        '${isPositive ? '+' : '-'}$amount',
                         maxLines: 1,
                         style: theme.textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.w800,
@@ -866,11 +1196,12 @@ class _JournalEntryTile extends ConsumerWidget {
 
                     const SizedBox(height: 4),
 
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      size: 18,
-                      color: colors.outline,
-                    ),
+                    if (!isNonEditable)
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: colors.outline,
+                      ),
                   ],
                 ),
               ),
@@ -885,14 +1216,38 @@ class _JournalEntryTile extends ConsumerWidget {
   // EDIT
   // ============================================================
   void _openEdit(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TransactionPage(
-          existingExpense: entry.sourceExpense,
-          existingIncome: entry.sourceIncome,
-        ),
-      ),
+    switch (entry.type) {
+      case JournalEntryType.expense:
+      case JournalEntryType.income:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TransactionPage(
+              existingExpense: entry.sourceExpense,
+              existingIncome: entry.sourceIncome,
+            ),
+          ),
+        );
+      case JournalEntryType.capital:
+        _openSheet(context, AddCapitalSheet(journalEntryId: entry.id));
+      case JournalEntryType.asset:
+        _openSheet(context, AddAssetSheet(journalEntryId: entry.id));
+      case JournalEntryType.liability:
+        _openSheet(context, AddLiabilitySheet(journalEntryId: entry.id));
+      case JournalEntryType.supplierPurchase:
+      case JournalEntryType.payablePayment:
+      case JournalEntryType.receivablePayment:
+        break; // read-only — no edit action is wired up for these rows
+    }
+  }
+
+  void _openSheet(BuildContext context, Widget sheet) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => sheet,
     );
   }
 
@@ -958,13 +1313,40 @@ class _JournalEntryTile extends ConsumerWidget {
       return;
     }
 
-    final service = ref.read(transactionServiceProvider);
-
     try {
-      if (entry.type == JournalEntryType.expense) {
-        await service.deleteExpense(entry.id);
-      } else {
-        await service.deleteIncome(entry.id);
+      switch (entry.type) {
+        case JournalEntryType.expense:
+          await ref.read(transactionServiceProvider).deleteExpense(entry.id);
+        case JournalEntryType.income:
+          await ref.read(transactionServiceProvider).deleteIncome(entry.id);
+        case JournalEntryType.capital:
+        case JournalEntryType.asset:
+        case JournalEntryType.liability:
+          await ref
+              .read(capitalAssetLiabilityServiceProvider)
+              .deleteEntry(entry.id);
+          ref.invalidate(assetBalancesProvider);
+          ref.invalidate(liabilityBalancesProvider);
+          ref.invalidate(capitalBalanceProvider);
+          ref.invalidate(accountBalancesProvider);
+        case JournalEntryType.supplierPurchase:
+          await ref
+              .read(supplierServiceProvider)
+              .deleteSupplierPurchase(entry.id);
+          ref.invalidate(liabilityBalancesProvider);
+          ref.invalidate(accountBalancesProvider);
+        case JournalEntryType.payablePayment:
+          await ref
+              .read(supplierServiceProvider)
+              .deletePayablePayment(entry.id);
+          ref.invalidate(liabilityBalancesProvider);
+          ref.invalidate(accountBalancesProvider);
+        case JournalEntryType.receivablePayment:
+          await ref
+              .read(customerServiceProvider)
+              .deleteReceivablePayment(entry.id);
+          ref.invalidate(assetBalancesProvider);
+          ref.invalidate(accountBalancesProvider);
       }
 
       ref.read(ledgerVersionProvider.notifier).state++;

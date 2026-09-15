@@ -62,6 +62,13 @@ class Accounts extends Table {
     min: 1,
     max: 20,
   )(); // asset|liability|equity|income|expense
+
+  /// Finer-grained classification, mainly for asset/liability accounts so
+  /// the Cashflow "balance sheet" view can total and separate them:
+  /// 'current_asset'|'non_current_asset' for assets, and
+  /// 'trade_payable'|'loan_payable'|'other_payable' for liabilities.
+  /// Null for cash/payment accounts, income, expense, and equity.
+  TextColumn get subtype => text().nullable()();
   BoolColumn get isPaymentAccount =>
       boolean().withDefault(const Constant(false))();
   IntColumn get startingBalance => integer().withDefault(const Constant(0))();
@@ -162,7 +169,16 @@ class ReceivablePayments extends Table {
   TextColumn get businessId => text().references(Businesses, #id)();
   TextColumn get customerId => text().references(Customers, #id)();
   IntColumn get amount => integer()();
-  TextColumn get paymentAccountId => text().references(Accounts, #id)();
+
+  /// Null when [isOnCredit] is true — a pending payment the business
+  /// hasn't actually received into a cash/bank/e-wallet account yet.
+  TextColumn get paymentAccountId =>
+      text().nullable().references(Accounts, #id)();
+
+  /// True when the customer's payment is only a pending promise (a
+  /// credit they still owe), not yet received into a real account.
+  BoolColumn get isOnCredit => boolean().withDefault(const Constant(false))();
+  TextColumn get status => text().withDefault(const Constant('completed'))();
   DateTimeColumn get paymentDate => dateTime()();
   TextColumn get notes => text().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
@@ -211,7 +227,16 @@ class PayablePayments extends Table {
   TextColumn get businessId => text().references(Businesses, #id)();
   TextColumn get supplierId => text().references(Suppliers, #id)();
   IntColumn get amount => integer()();
-  TextColumn get paymentAccountId => text().references(Accounts, #id)();
+
+  /// Null when [isOnCredit] is true — a pending payment the business
+  /// hasn't actually paid out of a cash/bank/e-wallet account yet.
+  TextColumn get paymentAccountId =>
+      text().nullable().references(Accounts, #id)();
+
+  /// True when this payment is only a pending promise to pay (e.g. a
+  /// credit the supplier is extending), not yet paid from a real account.
+  BoolColumn get isOnCredit => boolean().withDefault(const Constant(false))();
+  TextColumn get status => text().withDefault(const Constant('completed'))();
   DateTimeColumn get paymentDate => dateTime()();
   TextColumn get notes => text().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
@@ -267,6 +292,7 @@ class Supplies extends Table {
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
   RealColumn get currentStock =>
       real().withDefault(const Constant(0))(); // in stockUnit
+  RealColumn get lowStockThreshold => real().nullable()();
   TextColumn get stockUnit =>
       text().withDefault(const Constant('piece'))(); // g, kg, ml, L, piece...
   TextColumn get purchaseUnit => text().nullable()(); // "pack", "sack",
@@ -476,7 +502,7 @@ class AppDatabase extends _$AppDatabase {
   // AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -545,33 +571,113 @@ class AppDatabase extends _$AppDatabase {
         // and let onCreate rebuild fresh. If you have real data, write an
         // explicit column-copy migration instead — ask if you need that.
       }
+      if (from < 11) {
+        await m.addColumn(accounts, accounts.subtype);
+        // Backfill subtype on the accounts seeded before this column existed,
+        // so existing businesses' Cashflow Assets/Liabilities sections group
+        // correctly instead of everything landing under "Other".
+        await customStatement(
+          "UPDATE accounts SET subtype = 'current_asset' "
+          "WHERE type = 'asset' AND subtype IS NULL AND "
+          "(id LIKE 'acc_cash_%' OR id LIKE 'acc_bank_%' OR "
+          "id LIKE 'acc_ewallet_%' OR id LIKE 'acc_ar_%')",
+        );
+        await customStatement(
+          "UPDATE accounts SET subtype = 'trade_payable' "
+          "WHERE type = 'liability' AND subtype IS NULL AND id LIKE 'acc_ap_%'",
+        );
+      }
+      if (from < 12) {
+        // payment_account_id needs to become nullable (an on-credit/pending
+        // payment has no real account yet) — SQLite can't relax a NOT NULL
+        // constraint in place, so recreate each table from the current
+        // Dart definition and copy the existing rows across.
+        await customStatement(
+          'ALTER TABLE payable_payments RENAME TO payable_payments_old',
+        );
+        await m.createTable(payablePayments);
+        await customStatement('''
+          INSERT INTO payable_payments
+            (id, business_id, supplier_id, amount, payment_account_id,
+             is_on_credit, status, payment_date, notes, created_at)
+          SELECT id, business_id, supplier_id, amount, payment_account_id,
+                 0, 'completed', payment_date, notes, created_at
+          FROM payable_payments_old
+        ''');
+        await customStatement('DROP TABLE payable_payments_old');
+
+        await customStatement(
+          'ALTER TABLE receivable_payments RENAME TO receivable_payments_old',
+        );
+        await m.createTable(receivablePayments);
+        await customStatement('''
+          INSERT INTO receivable_payments
+            (id, business_id, customer_id, amount, payment_account_id,
+             is_on_credit, status, payment_date, notes, created_at)
+          SELECT id, business_id, customer_id, amount, payment_account_id,
+                 0, 'completed', payment_date, notes, created_at
+          FROM receivable_payments_old
+        ''');
+        await customStatement('DROP TABLE receivable_payments_old');
+      }
     },
   );
 
   /// Seeds the default chart of accounts + starter categories for a newly
   /// created business. Call this once, right after inserting the Businesses row.
   Future<void> seedDefaultsForBusiness(String businessId) async {
-    final defaultAccounts = <(String, String, String, bool)>[
-      ('acc_cash_$businessId', 'Cash on Hand', 'asset', true),
-      ('acc_bank_$businessId', 'Bank Account', 'asset', true),
-      ('acc_ewallet_$businessId', 'E-Wallet', 'asset', true),
-      ('acc_ar_$businessId', 'Accounts Receivable', 'asset', false),
-      ('acc_ap_$businessId', 'Accounts Payable', 'liability', false),
-      ('acc_equity_$businessId', "Owner's Equity", 'equity', false),
-      ('acc_sales_$businessId', 'Sales Income', 'income', false),
-      ('acc_other_inc_$businessId', 'Other Income', 'income', false),
-      ('acc_inv_exp_$businessId', 'Inventory/Stock Expense', 'expense', false),
-      ('acc_labor_exp_$businessId', 'Salary/Labor Expense', 'expense', false),
-      ('acc_rent_exp_$businessId', 'Rent Expense', 'expense', false),
-      ('acc_util_exp_$businessId', 'Utilities Expense', 'expense', false),
+    final defaultAccounts = <(String, String, String, bool, String?)>[
+      ('acc_cash_$businessId', 'Cash on Hand', 'asset', true, null),
+      ('acc_bank_$businessId', 'Bank Account', 'asset', true, null),
+      ('acc_ewallet_$businessId', 'E-Wallet', 'asset', true, null),
+      (
+        'acc_ar_$businessId',
+        'Accounts Receivable',
+        'asset',
+        false,
+        'current_asset',
+      ),
+      (
+        'acc_ap_$businessId',
+        'Accounts Payable',
+        'liability',
+        false,
+        'trade_payable',
+      ),
+      ('acc_equity_$businessId', "Owner's Equity", 'equity', false, null),
+      ('acc_sales_$businessId', 'Sales Income', 'income', false, null),
+      ('acc_other_inc_$businessId', 'Other Income', 'income', false, null),
+      (
+        'acc_inv_exp_$businessId',
+        'Inventory/Stock Expense',
+        'expense',
+        false,
+        null,
+      ),
+      (
+        'acc_labor_exp_$businessId',
+        'Salary/Labor Expense',
+        'expense',
+        false,
+        null,
+      ),
+      ('acc_rent_exp_$businessId', 'Rent Expense', 'expense', false, null),
+      ('acc_util_exp_$businessId', 'Utilities Expense', 'expense', false, null),
       (
         'acc_transport_exp_$businessId',
         'Transportation Expense',
         'expense',
         false,
+        null,
       ),
-      ('acc_supplies_exp_$businessId', 'Supplies Expense', 'expense', false),
-      ('acc_other_exp_$businessId', 'Other Expense', 'expense', false),
+      (
+        'acc_supplies_exp_$businessId',
+        'Supplies Expense',
+        'expense',
+        false,
+        null,
+      ),
+      ('acc_other_exp_$businessId', 'Other Expense', 'expense', false, null),
     ];
 
     await batch((b) {
@@ -585,6 +691,7 @@ class AppDatabase extends _$AppDatabase {
                 name: a.$2,
                 type: a.$3,
                 isPaymentAccount: Value(a.$4),
+                subtype: Value(a.$5),
               ),
             )
             .toList(),
