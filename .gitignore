@@ -39,6 +39,15 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
+# Release signing — never commit the keystore or its passwords.
+android/key.properties
+*.jks
+*.keystore
+
+# Local run config with Supabase/Google keys (see tool/run_config.example.ps1).
+tool/run_config.ps1
+
+
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile

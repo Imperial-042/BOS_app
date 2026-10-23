@@ -1,13 +1,17 @@
 import 'dart:math';
 
+import 'package:bos_application/core/audit/audit_enums.dart';
+import 'package:bos_application/core/audit/audit_log_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:drift/drift.dart' hide Column, Table;
+import 'package:uuid/uuid.dart';
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
+import '../../../../core/ledger/ledger_service.dart';
 import '../../domain/capital_asset_liability_service.dart';
 
 import '../../../transactions/presentation/screens/transaction_page.dart'
@@ -50,7 +54,7 @@ class PendingCashflowItem {
 }
 
 // ============================================================
-// PROVIDERS
+// PROVIDERS  (unchanged)
 // ============================================================
 
 final accountBalancesProvider = FutureProvider<List<AccountBalance>>((
@@ -201,11 +205,6 @@ final pendingCashflowProvider = FutureProvider<List<PendingCashflowItem>>((
   ]..sort((a, b) => b.date.compareTo(a.date));
 });
 
-// ============================================================
-// CAPITAL / ASSETS / LIABILITIES — the balance-sheet side of the
-// ledger, surfaced under the e-wallet/payment-accounts list below.
-// ============================================================
-
 final capitalAssetLiabilityServiceProvider =
     Provider<CapitalAssetLiabilityService>((ref) {
       return CapitalAssetLiabilityService(ref.watch(databaseProvider));
@@ -242,41 +241,45 @@ final accountLedgerEntriesProvider =
           .accountLedgerEntries(accountId);
     });
 
+// ============================================================
+// DESIGN TOKENS & HELPERS
+// ============================================================
+
+/// Widest the content ever gets. Beyond this, margins grow instead,
+/// so tablets, desktop and web never stretch into unreadable rows.
+const double _kMaxWidth = 1180;
+
+/// Ink-navy used for the hero. Kept fixed so it reads the same in
+/// light and dark themes.
+const _inkTop = Color(0xFF101C30);
+const _inkBottom = Color(0xFF0A1220);
+
+/// Tabular figures keep columns of money aligned.
+const _tabular = [FontFeature.tabularFigures()];
+
 const _gradients = <List<Color>>[
-  [Color(0xFF5B5FEF), Color(0xFF7C4DFF)],
-  [Color(0xFF00897B), Color(0xFF26A69A)],
-  [Color(0xFFF57C00), Color(0xFFFFB300)],
-  [Color(0xFFD84315), Color(0xFFF4511E)],
-  [Color(0xFF1976D2), Color(0xFF29B6F6)],
-  [Color(0xFF7B1FA2), Color(0xFFAB47BC)],
+  [Color(0xFF3F51D9), Color(0xFF6C5CE7)],
+  [Color(0xFF00796B), Color(0xFF2BB5A0)],
+  [Color(0xFFE65100), Color(0xFFF9A825)],
+  [Color(0xFFC2410C), Color(0xFFEF6C45)],
+  [Color(0xFF1565C0), Color(0xFF38B6F0)],
+  [Color(0xFF8E24AA), Color(0xFFC265D6)],
 ];
 
 List<Color> _gradientFor(String name) {
   final index =
       name.codeUnits.fold<int>(0, (a, b) => a + b) % _gradients.length;
-
   return _gradients[index];
 }
 
 IconData _iconFor(String name) {
   final lower = name.toLowerCase();
-
-  if (lower.contains('bank')) {
-    return Icons.account_balance_rounded;
-  }
-
-  if (lower.contains('cash')) {
-    return Icons.payments_rounded;
-  }
-
-  if (lower.contains('gcash')) {
+  if (lower.contains('bank')) return Icons.account_balance_rounded;
+  if (lower.contains('cash')) return Icons.payments_rounded;
+  if (lower.contains('gcash') || lower.contains('maya')) {
     return Icons.phone_android_rounded;
   }
-
-  if (lower.contains('wallet')) {
-    return Icons.account_balance_wallet_rounded;
-  }
-
+  if (lower.contains('wallet')) return Icons.account_balance_wallet_rounded;
   return Icons.account_balance_wallet_outlined;
 }
 
@@ -288,6 +291,129 @@ String _peso(int cents) {
   ).format(cents / 100);
 }
 
+String _compactPeso(double cents) {
+  return NumberFormat.compactCurrency(
+    locale: 'en_PH',
+    symbol: '₱',
+    decimalDigits: 0,
+  ).format(cents / 100);
+}
+
+/// Green that stays readable on both light and dark surfaces.
+Color _positive(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF5FD3A0)
+    : const Color(0xFF1F8F5F);
+
+double _sidePad(double width) =>
+    max(width >= 720 ? 28.0 : 16.0, (width - _kMaxWidth) / 2);
+
+String _sourceTypeLabel(String sourceType) {
+  switch (sourceType) {
+    case 'capital':
+      return 'Capital contribution';
+    case 'asset':
+      return 'Asset acquisition';
+    case 'liability':
+      return 'Liability incurred';
+    case 'supplier_purchase':
+      return 'Supplier purchase';
+    case 'payable_payment':
+      return 'Payment to supplier';
+    case 'income':
+      return 'Sale';
+    case 'receivable_payment':
+      return 'Payment from customer';
+    case 'transfer':
+      return 'Account transfer';
+    default:
+      return 'Transaction';
+  }
+}
+
+/// Lays children out in as many equal-width columns as fit, so the
+/// layout adapts from a 320dp phone to an ultrawide monitor and the
+/// tiles are never a fixed height (safe with large text sizes).
+class _AdaptiveWrap extends StatelessWidget {
+  final List<Widget> children;
+  final double minTileWidth;
+  final double spacing;
+  final int maxColumns;
+
+  const _AdaptiveWrap({
+    required this.children,
+    required this.minTileWidth,
+    this.spacing = 14,
+    this.maxColumns = 4,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final fit = ((width + spacing) / (minTileWidth + spacing)).floor();
+        final columns = fit.clamp(1, max(1, maxColumns));
+        final tileWidth = (width - spacing * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final child in children)
+              SizedBox(width: tileWidth, child: child),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+
+  const _SectionHeader({required this.title, this.subtitle}) : trailing = null;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 28, bottom: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+}
+
 // ============================================================
 // CASHFLOW PAGE
 // ============================================================
@@ -295,336 +421,222 @@ String _peso(int cents) {
 class CashflowPage extends ConsumerWidget {
   const CashflowPage({super.key});
 
+  Future<void> _refresh(WidgetRef ref) async {
+    ref.invalidate(accountBalancesProvider);
+    ref.invalidate(pendingCashflowProvider);
+    ref.invalidate(assetBalancesProvider);
+    ref.invalidate(liabilityBalancesProvider);
+    await ref.read(accountBalancesProvider.future);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final balancesAsync = ref.watch(accountBalancesProvider);
-    final pendingAsync = ref.watch(pendingCashflowProvider);
     final businessName = ref
         .watch(businessProfileProvider)
         .maybeWhen(data: (value) => value.name, orElse: () => null);
-    final colors = Theme.of(context).colorScheme;
+    final scheme = Theme.of(context).colorScheme;
+    final width = MediaQuery.sizeOf(context).width;
 
-    return Scaffold(
-      backgroundColor: colors.surfaceContainerLowest,
-      body: CustomScrollView(
-        physics: const BouncingScrollPhysics(
-          parent: AlwaysScrollableScrollPhysics(),
-        ),
-        slivers: [
-          SliverAppBar.large(
-            pinned: true,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            surfaceTintColor: Colors.transparent,
-            backgroundColor: Theme.of(
-              context,
-            ).colorScheme.surfaceContainerLowest,
-            titleSpacing: 20,
-            title: Builder(
-              builder: (context) {
-                final theme = Theme.of(context);
-                final scheme = theme.colorScheme;
-
-                return LayoutBuilder(
-                  builder: (context, constraints) {
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        // Brand/accent mark
-                        Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [scheme.primary, scheme.primaryContainer],
-                            ),
-                            borderRadius: BorderRadius.circular(15),
-                            boxShadow: [
-                              BoxShadow(
-                                color: scheme.primary.withValues(alpha: 0.18),
-                                blurRadius: 18,
-                                offset: const Offset(0, 7),
-                              ),
-                            ],
-                          ),
-                          child: Icon(
-                            Icons.balance_rounded,
-                            size: 23,
-                            color: scheme.onPrimary,
-                          ),
-                        ),
-
-                        const SizedBox(width: 14),
-
-                        // Title hierarchy
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 5),
-                              Text(
-                                businessName == null || businessName.isEmpty
-                                    ? 'Cashflow'
-                                    : '$businessName Cashflow',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.headlineMedium?.copyWith(
-                                  color: scheme.onSurface,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: -1.2,
-                                  height: 1,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                'Your money, organized in one place',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                  fontWeight: FontWeight.w500,
-                                  letterSpacing: -0.05,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
+    // Large accessibility text still fits; extreme scales are capped.
+    return MediaQuery.withClampedTextScaling(
+      minScaleFactor: 1.0,
+      maxScaleFactor: 1.3,
+      child: Scaffold(
+        backgroundColor: scheme.surfaceContainerLowest,
+        body: RefreshIndicator(
+          onRefresh: () => _refresh(ref),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
             ),
-          ),
-
-          // ==================================================
-          // HERO
-          // ==================================================
-          SliverToBoxAdapter(
-            child: balancesAsync.when(
-              data: (balances) {
-                return _TotalBalanceHero(
-                  balances: balances,
-                  onTransfer: balances.length >= 2
-                      ? () => _showTransferSheet(context, ref)
-                      : null,
-                );
-              },
-              loading: () => const _HeroSkeleton(),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-          ),
-
-          SliverToBoxAdapter(
-            child: pendingAsync.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(20),
-                child: LinearProgressIndicator(),
+            slivers: [
+              SliverAppBar(
+                pinned: true,
+                toolbarHeight: 76,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                surfaceTintColor: Colors.transparent,
+                backgroundColor: scheme.surfaceContainerLowest,
+                centerTitle: false,
+                titleSpacing: _sidePad(width),
+                title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      businessName == null || businessName.isEmpty
+                          ? 'Accounts'
+                          : '$businessName Accounts',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.8,
+                          ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Where your money is right now',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              error: (_, __) => const SizedBox.shrink(),
-              data: (items) => _PendingCashflowSection(items: items),
-            ),
-          ),
-
-          // ==================================================
-          // ACCOUNT SECTION
-          // ==================================================
-          balancesAsync.when(
-            data: (balances) {
-              if (balances.isEmpty) {
-                return const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptyAccountsState(),
-                );
-              }
-
-              return SliverLayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.crossAxisExtent;
-
-                  if (width >= 850) {
-                    return SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-                      sliver: SliverGrid(
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          return _AccountCard(balance: balances[index]);
-                        }, childCount: balances.length),
-                        gridDelegate:
-                            const SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: 470,
-                              mainAxisExtent: 220,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 16,
-                            ),
+              SliverToBoxAdapter(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final pad = constraints.maxWidth >= 720 ? 28.0 : 16.0;
+                    return Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: _kMaxWidth + pad * 2,
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(pad, 4, pad, 120),
+                          child: const _CashflowContent(),
+                        ),
                       ),
                     );
-                  }
-
-                  return SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    sliver: SliverList.separated(
-                      itemCount: balances.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 14),
-                      itemBuilder: (context, index) {
-                        return _AccountCard(balance: balances[index]);
-                      },
-                    ),
-                  );
-                },
-              );
-            },
-            loading: () {
-              return const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            },
-            error: (error, _) {
-              return SliverFillRemaining(
-                hasScrollBody: false,
-                child: _CashflowErrorState(
-                  onRetry: () {
-                    ref.invalidate(accountBalancesProvider);
                   },
                 ),
-              );
-            },
-          ),
-
-          // ==================================================
-          // ASSETS & LIABILITIES — balance-sheet side, below the
-          // e-wallet/payment-accounts list above.
-          // ==================================================
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
-            sliver: SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Consumer(
-                    builder: (context, ref, _) {
-                      final assetsAsync = ref.watch(assetBalancesProvider);
-                      return assetsAsync.when(
-                        data: (assets) => _AssetsSection(assets: assets),
-                        loading: () => const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: LinearProgressIndicator(),
-                        ),
-                        error: (_, __) => const SizedBox.shrink(),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  Consumer(
-                    builder: (context, ref, _) {
-                      final liabilitiesAsync = ref.watch(
-                        liabilityBalancesProvider,
-                      );
-                      return liabilitiesAsync.when(
-                        data: (liabilities) =>
-                            _LiabilitiesSection(liabilities: liabilities),
-                        loading: () => const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: LinearProgressIndicator(),
-                        ),
-                        error: (_, __) => const SizedBox.shrink(),
-                      );
-                    },
-                  ),
-                ],
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
-    );
-  }
-
-  void _showTransferSheet(BuildContext context, WidgetRef ref) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      constraints: const BoxConstraints(maxWidth: 640),
-      builder: (_) => const _TransferSheet(),
     );
   }
 }
 
-class _PendingCashflowSection extends StatelessWidget {
-  final List<PendingCashflowItem> items;
+void _showTransferSheet(BuildContext context) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    showDragHandle: true,
+    backgroundColor: Theme.of(context).colorScheme.surface,
+    constraints: const BoxConstraints(maxWidth: 640),
+    builder: (_) => const _TransferSheet(),
+  );
+}
 
-  const _PendingCashflowSection({required this.items});
+class _CashflowContent extends ConsumerWidget {
+  const _CashflowContent();
 
   @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) return const SizedBox.shrink();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final balancesAsync = ref.watch(accountBalancesProvider);
+    final pendingAsync = ref.watch(pendingCashflowProvider);
+    final assetsAsync = ref.watch(assetBalancesProvider);
+    final liabilitiesAsync = ref.watch(liabilityBalancesProvider);
 
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Pending receivables and payables',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+    final balances = balancesAsync.maybeWhen(
+      data: (v) => v,
+      orElse: () => null,
+    );
+    final assets = assetsAsync.maybeWhen(data: (v) => v, orElse: () => null);
+    final liabilities = liabilitiesAsync.maybeWhen(
+      data: (v) => v,
+      orElse: () => null,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ---------------- HERO ----------------
+        balancesAsync.when(
+          data: (list) => _TotalBalanceHero(
+            balances: list,
+            onTransfer: list.length >= 2
+                ? () => _showTransferSheet(context)
+                : null,
           ),
-          const SizedBox(height: 10),
-          ...items.map(
-            (item) => Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(13),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    item.receivable
-                        ? Icons.call_received_rounded
-                        : Icons.call_made_rounded,
-                    color: item.receivable ? Colors.green : scheme.error,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.receivable ? 'Receivable' : 'Payable',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        Text(
-                          item.description,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    _peso(item.amount),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      color: item.receivable ? Colors.green : scheme.error,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          loading: () => const _HeroSkeleton(),
+          error: (_, __) => _CashflowErrorState(
+            onRetry: () => ref.invalidate(accountBalancesProvider),
+          ),
+        ),
+
+        // ---------------- NET POSITION ----------------
+        if (balances != null) ...[
+          const SizedBox(height: 14),
+          _PositionStrip(
+            cash: balances.fold<int>(0, (s, b) => s + b.balance),
+            assets: assets?.fold<int>(0, (s, a) => s + a.balance),
+            liabilities: liabilities?.fold<int>(0, (s, a) => s + a.balance),
           ),
         ],
-      ),
+
+        // ---------------- PENDING ----------------
+        pendingAsync.maybeWhen(
+          data: (items) => _PendingCashflowSection(items: items),
+          orElse: () => const SizedBox.shrink(),
+        ),
+
+        // ---------------- ACCOUNTS ----------------
+        if (balances != null) ...[
+          _SectionHeader(
+            title: 'Payment accounts',
+            subtitle: balances.isEmpty
+                ? null
+                : '${balances.length} active · tap one for its history',
+          ),
+          if (balances.isEmpty)
+            const _EmptyAccountsState()
+          else
+            _AdaptiveWrap(
+              minTileWidth: 330,
+              maxColumns: 3,
+              children: [for (final b in balances) _AccountCard(balance: b)],
+            ),
+        ],
+
+        // ---------------- ASSETS & LIABILITIES ----------------
+        const _SectionHeader(
+          title: 'Balance sheet',
+          subtitle: 'What the business owns and what it owes',
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final sideBySide = constraints.maxWidth >= 760;
+
+            final assetsWidget = assetsAsync.when(
+              data: (a) => _AssetsSection(assets: a),
+              loading: () => const _PanelSkeleton(),
+              error: (_, __) => const SizedBox.shrink(),
+            );
+            final liabilitiesWidget = liabilitiesAsync.when(
+              data: (l) => _LiabilitiesSection(liabilities: l),
+              loading: () => const _PanelSkeleton(),
+              error: (_, __) => const SizedBox.shrink(),
+            );
+
+            if (sideBySide) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: assetsWidget),
+                  const SizedBox(width: 14),
+                  Expanded(child: liabilitiesWidget),
+                ],
+              );
+            }
+            return Column(
+              children: [
+                assetsWidget,
+                const SizedBox(height: 14),
+                liabilitiesWidget,
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -643,282 +655,225 @@ class _TotalBalanceHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     final total = balances.fold<int>(0, (sum, item) => sum + item.balance);
-
     final positiveAccounts = balances.where((e) => e.balance >= 0).length;
-
-    final negativeAccounts = balances.where((e) => e.balance < 0).length;
-
+    final negativeAccounts = balances.length - positiveAccounts;
     final isNegative = total < 0;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 560;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        final pad = constraints.maxWidth < 420 ? 20.0 : 30.0;
+        final amountSize = constraints.maxWidth < 420
+            ? 38.0
+            : (wide ? 56.0 : 48.0);
 
-          return Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF1F2937), Color(0xFF111827)],
-              ),
-              borderRadius: BorderRadius.circular(30),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 30,
-                  offset: const Offset(0, 14),
+        final figure = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    'Cash on hand',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _HeroPill(
+                  text:
+                      '${balances.length} ${balances.length == 1 ? 'account' : 'accounts'}',
                 ),
               ],
             ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
+            const SizedBox(height: 12),
+            TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: total.toDouble()),
+              duration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 800),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) {
+                return FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _peso(value.round()),
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: amountSize,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -1.8,
+                      height: 1.05,
+                      fontFeatures: _tabular,
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            _HeroPill(
+              icon: isNegative
+                  ? Icons.warning_amber_rounded
+                  : Icons.check_circle_outline_rounded,
+              text: isNegative
+                  ? 'Total is below zero'
+                  : 'Funds are in the green',
+              tint: isNegative ? const Color(0xFFFFB4A8) : null,
+            ),
+          ],
+        );
+
+        final side = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
               children: [
-                // Decorative background orb.
-                Positioned(
-                  right: -70,
-                  top: -85,
-                  child: Container(
-                    width: 220,
-                    height: 220,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: scheme.primary.withValues(alpha: 0.18),
-                    ),
+                Expanded(
+                  child: _HeroMetric(
+                    icon: Icons.trending_up_rounded,
+                    label: 'Positive',
+                    value: '$positiveAccounts',
                   ),
                 ),
-
-                Positioned(
-                  right: 80,
-                  bottom: -120,
-                  child: Container(
-                    width: 230,
-                    height: 230,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: scheme.secondary.withValues(alpha: 0.07),
-                    ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _HeroMetric(
+                    icon: Icons.trending_down_rounded,
+                    label: 'Negative',
+                    value: '$negativeAccounts',
                   ),
                 ),
+              ],
+            ),
+            if (onTransfer != null) ...[
+              const SizedBox(height: 10),
+              _HeroTransferButton(onPressed: onTransfer!),
+            ],
+          ],
+        );
 
-                Padding(
-                  padding: EdgeInsets.all(compact ? 22 : 28),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // ----------------------------------------
-                      // HEADER
-                      // ----------------------------------------
-
-                      Row(
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_inkTop, _inkBottom],
+            ),
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.16),
+                blurRadius: 28,
+                offset: const Offset(0, 14),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: [
+              Positioned(
+                right: -80,
+                top: -100,
+                child: Container(
+                  width: 260,
+                  height: 260,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.primary.withValues(alpha: 0.22),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: -60,
+                bottom: -120,
+                child: Container(
+                  width: 240,
+                  height: 240,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.tertiary.withValues(alpha: 0.10),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.all(pad),
+                child: wide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Container(
-                            width: 46,
-                            height: 46,
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.10),
-                              borderRadius: BorderRadius.circular(15),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.07),
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.account_balance_wallet_rounded,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                          ),
-                          const SizedBox(width: 13),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'TOTAL BALANCE',
-                                  style: theme.textTheme.labelMedium?.copyWith(
-                                    color: Colors.white.withValues(alpha: 0.55),
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  'Across all active accounts',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: Colors.white.withValues(alpha: 0.40),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 7,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(100),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.06),
-                              ),
-                            ),
-                            child: Text(
-                              '${balances.length} ${balances.length == 1 ? 'account' : 'accounts'}',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: Colors.white.withValues(alpha: 0.78),
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
+                          Expanded(flex: 6, child: figure),
+                          SizedBox(width: pad),
+                          Expanded(flex: 4, child: side),
+                        ],
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          figure,
+                          SizedBox(height: pad - 4),
+                          side,
                         ],
                       ),
-
-                      const SizedBox(height: 28),
-
-                      // ----------------------------------------
-                      // MAIN BALANCE
-                      // ----------------------------------------
-                      Text(
-                        'Available cash',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.50),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-
-                      const SizedBox(height: 5),
-
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          _peso(total),
-                          maxLines: 1,
-                          style: theme.textTheme.displaySmall?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -2.0,
-                            height: 1,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      // ----------------------------------------
-                      // STATUS
-                      // ----------------------------------------
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 11,
-                          vertical: 7,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(100),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isNegative
-                                  ? Icons.warning_amber_rounded
-                                  : Icons.check_circle_outline_rounded,
-                              size: 16,
-                              color: Colors.white.withValues(alpha: 0.80),
-                            ),
-                            const SizedBox(width: 7),
-                            Text(
-                              isNegative
-                                  ? 'Net balance is below zero'
-                                  : 'Your available funds are positive',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: Colors.white.withValues(alpha: 0.80),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      // ----------------------------------------
-                      // BOTTOM ROW
-                      // ----------------------------------------
-                      if (compact)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _HeroMetric(
-                                    icon: Icons.check_circle_rounded,
-                                    label: 'Healthy',
-                                    value: '$positiveAccounts',
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _HeroMetric(
-                                    icon: Icons.warning_rounded,
-                                    label: 'Negative',
-                                    value: '$negativeAccounts',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (onTransfer != null) ...[
-                              const SizedBox(height: 10),
-                              _HeroTransferButton(onPressed: onTransfer!),
-                            ],
-                          ],
-                        )
-                      else
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _HeroMetric(
-                                icon: Icons.check_circle_rounded,
-                                label: 'Healthy accounts',
-                                value: '$positiveAccounts',
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _HeroMetric(
-                                icon: Icons.warning_rounded,
-                                label: 'Negative accounts',
-                                value: '$negativeAccounts',
-                              ),
-                            ),
-                            if (onTransfer != null) ...[
-                              const SizedBox(width: 12),
-                              _HeroTransferButton(onPressed: onTransfer!),
-                            ],
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
-// ============================================================
-// HERO METRIC
-// ============================================================
+class _HeroPill extends StatelessWidget {
+  final String text;
+  final IconData? icon;
+  final Color? tint;
+
+  const _HeroPill({required this.text, this.icon, this.tint});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = tint ?? Colors.white.withValues(alpha: 0.82);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(100),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 6),
+          ],
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _HeroMetric extends StatelessWidget {
   final IconData icon;
@@ -936,16 +891,16 @@ class _HeroMetric extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.075),
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 17, color: Colors.white.withValues(alpha: 0.70)),
-          const SizedBox(width: 9),
+          Icon(icon, size: 18, color: Colors.white.withValues(alpha: 0.7)),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -955,13 +910,12 @@ class _HeroMetric extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.45),
+                    color: Colors.white.withValues(alpha: 0.55),
                   ),
                 ),
-                const SizedBox(height: 2),
                 Text(
                   value,
-                  style: theme.textTheme.titleSmall?.copyWith(
+                  style: theme.textTheme.titleMedium?.copyWith(
                     color: Colors.white,
                     fontWeight: FontWeight.w800,
                   ),
@@ -975,10 +929,6 @@ class _HeroMetric extends StatelessWidget {
   }
 }
 
-// ============================================================
-// HERO TRANSFER BUTTON
-// ============================================================
-
 class _HeroTransferButton extends StatelessWidget {
   final VoidCallback onPressed;
 
@@ -986,32 +936,349 @@ class _HeroTransferButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 52,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: _inkTop,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        icon: const Icon(Icons.swap_horiz_rounded, size: 20),
+        label: const Text(
+          'Transfer between accounts',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+}
 
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(17),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(17),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
+// ============================================================
+// NET POSITION STRIP
+// ============================================================
+
+class _PositionStrip extends StatelessWidget {
+  final int cash;
+  final int? assets;
+  final int? liabilities;
+
+  const _PositionStrip({
+    required this.cash,
+    required this.assets,
+    required this.liabilities,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final net = cash + (assets ?? 0) - (liabilities ?? 0);
+
+    return _AdaptiveWrap(
+      minTileWidth: 150,
+      spacing: 10,
+      maxColumns: 4,
+      children: [
+        _StatTile(
+          icon: Icons.account_balance_wallet_outlined,
+          label: 'Cash',
+          value: _peso(cash),
+          color: scheme.primary,
+        ),
+        _StatTile(
+          icon: Icons.inventory_2_outlined,
+          label: 'Other assets',
+          value: assets == null ? '—' : _peso(assets!),
+          color: _positive(context),
+        ),
+        _StatTile(
+          icon: Icons.request_quote_outlined,
+          label: 'Liabilities',
+          value: liabilities == null ? '—' : _peso(liabilities!),
+          color: scheme.error,
+        ),
+        _StatTile(
+          icon: Icons.stacked_line_chart_rounded,
+          label: 'Net position',
+          value: _peso(net),
+          color: net >= 0 ? _positive(context) : scheme.error,
+          emphasized: true,
+        ),
+      ],
+    );
+  }
+}
+
+class _StatTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  final bool emphasized;
+
+  const _StatTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+    this.emphasized = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: emphasized ? color.withValues(alpha: 0.10) : scheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: emphasized
+              ? color.withValues(alpha: 0.35)
+              : scheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Icon(Icons.swap_horiz_rounded, size: 19, color: scheme.primary),
-              const SizedBox(width: 7),
-              Text(
-                'Transfer',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: scheme.primary,
-                  fontWeight: FontWeight.w800,
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 16, color: color),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontFeatures: _tabular,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// PENDING RECEIVABLES / PAYABLES
+// ============================================================
+
+class _PendingCashflowSection extends StatelessWidget {
+  final List<PendingCashflowItem> items;
+
+  const _PendingCashflowSection({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    final receivables = items.where((i) => i.receivable).toList();
+    final payables = items.where((i) => !i.receivable).toList();
+
+    final panels = <Widget>[
+      if (receivables.isNotEmpty)
+        _PendingPanel(
+          title: 'Money coming in',
+          items: receivables,
+          receivable: true,
         ),
+      if (payables.isNotEmpty)
+        _PendingPanel(
+          title: 'Money going out',
+          items: payables,
+          receivable: false,
+        ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionHeader(
+          title: 'Pending',
+          subtitle: 'Not yet in your accounts',
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth >= 760 && panels.length == 2) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: panels[0]),
+                  const SizedBox(width: 14),
+                  Expanded(child: panels[1]),
+                ],
+              );
+            }
+            return Column(
+              children: [
+                for (var i = 0; i < panels.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 14),
+                  panels[i],
+                ],
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _PendingPanel extends StatefulWidget {
+  final String title;
+  final List<PendingCashflowItem> items;
+  final bool receivable;
+
+  const _PendingPanel({
+    required this.title,
+    required this.items,
+    required this.receivable,
+  });
+
+  @override
+  State<_PendingPanel> createState() => _PendingPanelState();
+}
+
+class _PendingPanelState extends State<_PendingPanel> {
+  static const _collapsedCount = 3;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final color = widget.receivable ? _positive(context) : scheme.error;
+    final total = widget.items.fold<int>(0, (s, i) => s + i.amount);
+    final visible = _expanded
+        ? widget.items
+        : widget.items.take(_collapsedCount).toList();
+    final hidden = widget.items.length - visible.length;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  widget.receivable
+                      ? Icons.south_west_rounded
+                      : Icons.north_east_rounded,
+                  size: 18,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                _peso(total),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                  fontFeatures: _tabular,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final item in visible)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.description,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          DateFormat('MMM d, yyyy').format(item.date),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    _peso(item.amount),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: _tabular,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (widget.items.length > _collapsedCount)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => setState(() => _expanded = !_expanded),
+                child: Text(_expanded ? 'Show less' : 'Show $hidden more'),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1029,165 +1296,171 @@ class _AccountCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = _gradientFor(balance.account.name);
-
     final historyAsync = ref.watch(
       accountBalanceHistoryProvider(balance.account.id),
     );
 
     final trend = historyAsync.maybeWhen(
       data: (points) {
-        if (points.length < 2) {
-          return 0;
-        }
-
+        if (points.length < 2) return 0;
         return points.last.runningBalance -
             points[points.length - 2].runningBalance;
       },
       orElse: () => 0,
     );
 
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(24),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(24),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => AccountDetailPage(account: balance.account),
-            ),
-          );
-        },
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: colors,
-            ),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: colors.first.withValues(alpha: 0.20),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
+    final overdrawn = balance.balance < 0;
+
+    return Semantics(
+      button: true,
+      label:
+          '${balance.account.name}, balance ${_peso(balance.balance)}. Opens history.',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(26),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(26),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => AccountDetailPage(account: balance.account),
               ),
-            ],
-          ),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(15),
+            );
+          },
+          child: Ink(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: colors,
+              ),
+              borderRadius: BorderRadius.circular(26),
+              boxShadow: [
+                BoxShadow(
+                  color: colors.first.withValues(alpha: 0.24),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      child: Icon(
+                        _iconFor(balance.account.name),
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
-                    child: Icon(
-                      _iconFor(balance.account.name),
-                      color: Colors.white,
-                      size: 22,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        balance.account.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          balance.account.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                    if (overdrawn)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(100),
+                        ),
+                        child: const Text(
+                          'Overdrawn',
+                          style: TextStyle(
                             color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Payment account',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.65),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_outward_rounded,
-                    color: Colors.white70,
-                    size: 19,
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 20),
-
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Available balance',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.68),
-                            fontSize: 12,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        FittedBox(
-                          alignment: Alignment.centerLeft,
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            _peso(balance.balance),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: -0.8,
+                      )
+                    else
+                      const Icon(
+                        Icons.arrow_outward_rounded,
+                        color: Colors.white70,
+                        size: 19,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Available balance',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.72),
+                              fontSize: 12,
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 3),
+                          FittedBox(
+                            alignment: Alignment.centerLeft,
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              _peso(balance.balance),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -0.8,
+                                fontFeatures: _tabular,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  if (trend != 0) _TrendBadge(value: trend),
-                ],
-              ),
-
-              const SizedBox(height: 15),
-
-              SizedBox(
-                height: 42,
-                width: double.infinity,
-                child: historyAsync.when(
-                  data: (points) {
-                    return _Sparkline(points: points);
-                  },
-                  loading: () => const SizedBox.shrink(),
-                  error: (_, __) => const SizedBox.shrink(),
+                    if (trend != 0) ...[
+                      const SizedBox(width: 8),
+                      _TrendBadge(value: trend),
+                    ],
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 44,
+                  width: double.infinity,
+                  child: historyAsync.when(
+                    data: (points) => _Sparkline(points: points),
+                    loading: () => const SizedBox.shrink(),
+                    error: (_, __) => const SizedBox.shrink(),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
-
-// ============================================================
-// TREND BADGE
-// ============================================================
 
 class _TrendBadge extends StatelessWidget {
   final int value;
@@ -1201,7 +1474,7 @@ class _TrendBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.13),
+        color: Colors.white.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -1227,10 +1500,6 @@ class _TrendBadge extends StatelessWidget {
   }
 }
 
-// ============================================================
-// SPARKLINE
-// ============================================================
-
 class _Sparkline extends StatelessWidget {
   final List<BalancePoint> points;
 
@@ -1242,9 +1511,9 @@ class _Sparkline extends StatelessWidget {
       return Align(
         alignment: Alignment.centerLeft,
         child: Text(
-          'Not enough history for a trend',
+          'Trend appears after your first entry',
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: Colors.white.withValues(alpha: 0.6),
             fontSize: 11,
           ),
         ),
@@ -1256,35 +1525,37 @@ class _Sparkline extends StatelessWidget {
         FlSpot(i.toDouble(), points[i].runningBalance.toDouble()),
     ];
 
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: max(1, (spots.length - 1).toDouble()),
-        gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        lineTouchData: const LineTouchData(enabled: false),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            curveSmoothness: 0.28,
-            color: Colors.white,
-            barWidth: 2.5,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.white.withValues(alpha: 0.18),
-                  Colors.white.withValues(alpha: 0.0),
-                ],
+    return IgnorePointer(
+      child: LineChart(
+        LineChartData(
+          minX: 0,
+          maxX: max(1, (spots.length - 1).toDouble()),
+          gridData: const FlGridData(show: false),
+          titlesData: const FlTitlesData(show: false),
+          borderData: FlBorderData(show: false),
+          lineTouchData: const LineTouchData(enabled: false),
+          lineBarsData: [
+            LineChartBarData(
+              spots: spots,
+              isCurved: true,
+              curveSmoothness: 0.28,
+              color: Colors.white,
+              barWidth: 2.5,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.2),
+                    Colors.white.withValues(alpha: 0.0),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1313,75 +1584,131 @@ class _AccountDetailPageState extends ConsumerState<AccountDetailPage> {
     final historyAsync = ref.watch(
       accountBalanceHistoryProvider(widget.account.id),
     );
-
     final gradient = _gradientFor(widget.account.name);
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-      appBar: AppBar(
-        title: Text(
-          widget.account.name,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-      ),
-      body: historyAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(
-          child: Text(
-            'Unable to load account history.',
-            style: Theme.of(context).textTheme.bodyLarge,
+    return MediaQuery.withClampedTextScaling(
+      minScaleFactor: 1.0,
+      maxScaleFactor: 1.3,
+      child: Scaffold(
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+        appBar: AppBar(
+          title: Text(
+            widget.account.name,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
         ),
-        data: (points) {
-          final filtered = _filterByPeriod(points);
-
-          final currentBalance = points.isNotEmpty
-              ? points.last.runningBalance
-              : 0;
-
-          final previousBalance = points.length > 1
-              ? points[points.length - 2].runningBalance
-              : currentBalance;
-
-          final change = currentBalance - previousBalance;
-
-          return ListView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            children: [
-              _DetailHero(
-                account: widget.account,
-                balance: currentBalance,
-                change: change,
-                gradient: gradient,
+        body: historyAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Center(
+            child: _CashflowErrorState(
+              message: 'Couldn’t load this account’s history',
+              onRetry: () => ref.invalidate(
+                accountBalanceHistoryProvider(widget.account.id),
               ),
-              const SizedBox(height: 18),
-              _PeriodSelector(
-                selected: _period,
-                onChanged: (period) {
-                  setState(() {
-                    _period = period;
-                  });
-                },
-              ),
-              const SizedBox(height: 18),
-              _ChartCard(points: filtered, gradient: gradient),
-              const SizedBox(height: 18),
-              _DetailInsights(points: filtered, currentBalance: currentBalance),
-            ],
-          );
-        },
+            ),
+          ),
+          data: (points) {
+            final filtered = _filterByPeriod(points);
+            final currentBalance = points.isNotEmpty
+                ? points.last.runningBalance
+                : 0;
+            final previousBalance = points.length > 1
+                ? points[points.length - 2].runningBalance
+                : currentBalance;
+            final change = currentBalance - previousBalance;
+
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final w = constraints.maxWidth;
+                final wide = w >= 900;
+                final pad = w >= 720 ? 28.0 : 16.0;
+
+                final hero = _DetailHero(
+                  account: widget.account,
+                  balance: currentBalance,
+                  change: change,
+                  gradient: gradient,
+                );
+                final insights = _DetailInsights(
+                  points: filtered,
+                  currentBalance: currentBalance,
+                );
+                final chart = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _PeriodSelector(
+                      selected: _period,
+                      onChanged: (p) => setState(() => _period = p),
+                    ),
+                    const SizedBox(height: 14),
+                    _ChartCard(
+                      points: filtered,
+                      gradient: gradient,
+                      height: wide ? 300 : (w >= 600 ? 260 : 220),
+                    ),
+                  ],
+                );
+                final activity = _ActivitySection(account: widget.account);
+
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: _kMaxWidth),
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(pad, 8, pad, 40),
+                      child: wide
+                          ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 400,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      hero,
+                                      const SizedBox(height: 14),
+                                      insights,
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 24),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [chart, activity],
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                hero,
+                                const SizedBox(height: 16),
+                                chart,
+                                const SizedBox(height: 14),
+                                insights,
+                                activity,
+                              ],
+                            ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
 
   List<BalancePoint> _filterByPeriod(List<BalancePoint> points) {
-    if (points.isEmpty) {
-      return points;
-    }
+    if (points.isEmpty) return points;
 
     final now = DateTime.now();
-
     final cutoff = switch (_period) {
       _Period.week => now.subtract(const Duration(days: 7)),
       _Period.month => now.subtract(const Duration(days: 30)),
@@ -1389,23 +1716,15 @@ class _AccountDetailPageState extends ConsumerState<AccountDetailPage> {
     };
 
     final firstAfterCutoff = points.indexWhere((p) => !p.date.isBefore(cutoff));
-
-    if (firstAfterCutoff <= 0) {
-      return points;
-    }
+    if (firstAfterCutoff <= 0) return points;
 
     final result = <BalancePoint>[
       points[firstAfterCutoff - 1],
       ...points.skip(firstAfterCutoff),
     ];
-
     return result.length >= 2 ? result : points;
   }
 }
-
-// ============================================================
-// DETAIL HERO
-// ============================================================
 
 class _DetailHero extends StatelessWidget {
   final Account account;
@@ -1435,7 +1754,7 @@ class _DetailHero extends StatelessWidget {
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: gradient.first.withValues(alpha: 0.18),
+            color: gradient.first.withValues(alpha: 0.22),
             blurRadius: 24,
             offset: const Offset(0, 10),
           ),
@@ -1450,7 +1769,7 @@ class _DetailHero extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: Colors.white.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Icon(_iconFor(account.name), color: Colors.white),
@@ -1474,7 +1793,7 @@ class _DetailHero extends StatelessWidget {
           Text(
             'Current balance',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.70),
+              color: Colors.white.withValues(alpha: 0.72),
               fontSize: 12,
             ),
           ),
@@ -1486,17 +1805,18 @@ class _DetailHero extends StatelessWidget {
               _peso(balance),
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 34,
+                fontSize: 36,
                 fontWeight: FontWeight.w900,
-                letterSpacing: -1,
+                letterSpacing: -1.2,
+                fontFeatures: _tabular,
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.12),
+              color: Colors.white.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -1509,13 +1829,17 @@ class _DetailHero extends StatelessWidget {
                   size: 16,
                   color: Colors.white,
                 ),
-                const SizedBox(width: 5),
-                Text(
-                  '${positive ? '+' : '-'}${_peso(change.abs())} since last entry',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    '${positive ? '+' : '-'}${_peso(change.abs())} since last entry',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -1527,10 +1851,6 @@ class _DetailHero extends StatelessWidget {
   }
 }
 
-// ============================================================
-// PERIOD SELECTOR
-// ============================================================
-
 class _PeriodSelector extends StatelessWidget {
   final _Period selected;
   final ValueChanged<_Period> onChanged;
@@ -1540,35 +1860,35 @@ class _PeriodSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SegmentedButton<_Period>(
+      showSelectedIcon: false,
       segments: const [
         ButtonSegment(value: _Period.week, label: Text('7 days')),
         ButtonSegment(value: _Period.month, label: Text('30 days')),
         ButtonSegment(value: _Period.threeMonths, label: Text('3 months')),
       ],
       selected: {selected},
-      onSelectionChanged: (value) {
-        onChanged(value.first);
-      },
+      onSelectionChanged: (value) => onChanged(value.first),
     );
   }
 }
 
-// ============================================================
-// CHART CARD
-// ============================================================
-
 class _ChartCard extends StatelessWidget {
   final List<BalancePoint> points;
   final List<Color> gradient;
+  final double height;
 
-  const _ChartCard({required this.points, required this.gradient});
+  const _ChartCard({
+    required this.points,
+    required this.gradient,
+    required this.height,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+      padding: const EdgeInsets.fromLTRB(16, 18, 18, 12),
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: BorderRadius.circular(24),
@@ -1579,41 +1899,43 @@ class _ChartCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Balance history',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
+          Padding(
+            padding: const EdgeInsets.only(left: 2),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Balance history',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'How your account balance changed',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colors.onSurfaceVariant,
+                      const SizedBox(height: 2),
+                      Text(
+                        'Touch the line to see a day’s balance',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: gradient),
-                  shape: BoxShape.circle,
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: gradient),
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 18),
           SizedBox(
-            height: 220,
+            height: height,
             child: _DetailChart(points: points, gradient: gradient),
           ),
         ],
@@ -1621,10 +1943,6 @@ class _ChartCard extends StatelessWidget {
     );
   }
 }
-
-// ============================================================
-// DETAIL CHART
-// ============================================================
 
 class _DetailChart extends StatelessWidget {
   final List<BalancePoint> points;
@@ -1660,25 +1978,20 @@ class _DetailChart extends StatelessWidget {
     ];
 
     final values = spots.map((s) => s.y).toList();
-
     var minValue = values.reduce(min);
     var maxValue = values.reduce(max);
 
     if (minValue == maxValue) {
-      final padding = max(maxValue.abs() * 0.10, 100.0);
-
-      minValue -= padding;
-      maxValue += padding;
+      final flatPad = max(maxValue.abs() * 0.10, 100.0);
+      minValue -= flatPad;
+      maxValue += flatPad;
     }
 
     final range = maxValue - minValue;
     final padding = max(range * 0.12, 100.0);
-
     final minY = minValue - padding;
     final maxY = maxValue + padding;
-
     final horizontalInterval = max(range / 4, 1).toDouble();
-
     final bottomInterval = max((spots.length / 4).ceil(), 1).toDouble();
 
     return LineChart(
@@ -1691,22 +2004,40 @@ class _DetailChart extends StatelessWidget {
           show: true,
           drawVerticalLine: false,
           horizontalInterval: horizontalInterval,
-          getDrawingHorizontalLine: (value) {
-            return FlLine(
-              color: colors.outlineVariant.withValues(alpha: 0.55),
-              strokeWidth: 1,
-            );
-          },
+          getDrawingHorizontalLine: (value) => FlLine(
+            color: colors.outlineVariant.withValues(alpha: 0.5),
+            strokeWidth: 1,
+            dashArray: [4, 4],
+          ),
         ),
         titlesData: FlTitlesData(
           topTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
           ),
-          leftTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
           rightTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 46,
+              interval: horizontalInterval,
+              getTitlesWidget: (value, meta) {
+                if (value == meta.min || value == meta.max) {
+                  return const SizedBox.shrink();
+                }
+                return SideTitleWidget(
+                  meta: meta,
+                  child: Text(
+                    _compactPeso(value),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 10,
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
@@ -1715,11 +2046,9 @@ class _DetailChart extends StatelessWidget {
               interval: bottomInterval,
               getTitlesWidget: (value, meta) {
                 final index = value.toInt();
-
                 if (index < 0 || index >= points.length) {
                   return const SizedBox.shrink();
                 }
-
                 return Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
@@ -1738,10 +2067,9 @@ class _DetailChart extends StatelessWidget {
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
             getTooltipColor: (_) => colors.inverseSurface,
-            getTooltipItems: (spots) {
-              return spots.map((spot) {
+            getTooltipItems: (touched) {
+              return touched.map((spot) {
                 final index = spot.x.toInt();
-
                 final date = index >= 0 && index < points.length
                     ? points[index].date
                     : null;
@@ -1784,7 +2112,7 @@ class _DetailChart extends StatelessWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  gradient.first.withValues(alpha: 0.18),
+                  gradient.first.withValues(alpha: 0.2),
                   gradient.last.withValues(alpha: 0.0),
                 ],
               ),
@@ -1796,10 +2124,6 @@ class _DetailChart extends StatelessWidget {
   }
 }
 
-// ============================================================
-// DETAIL INSIGHTS
-// ============================================================
-
 class _DetailInsights extends StatelessWidget {
   final List<BalancePoint> points;
   final int currentBalance;
@@ -1810,85 +2134,37 @@ class _DetailInsights extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    if (points.length < 2) {
-      return const SizedBox.shrink();
-    }
+    if (points.length < 2) return const SizedBox.shrink();
 
     final first = points.first.runningBalance;
     final change = currentBalance - first;
-
     final highest = points.map((p) => p.runningBalance).reduce(max);
-
     final lowest = points.map((p) => p.runningBalance).reduce(min);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 500) {
-          return Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: _InsightCard(
-                      icon: Icons.trending_up_rounded,
-                      label: 'Period change',
-                      value: '${change >= 0 ? '+' : '-'}${_peso(change.abs())}',
-                      color: change >= 0 ? Colors.green.shade700 : colors.error,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _InsightCard(
-                      icon: Icons.arrow_upward_rounded,
-                      label: 'Highest',
-                      value: _peso(highest),
-                      color: colors.primary,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _InsightCard(
-                icon: Icons.arrow_downward_rounded,
-                label: 'Lowest',
-                value: _peso(lowest),
-                color: colors.secondary,
-              ),
-            ],
-          );
-        }
-
-        return Row(
-          children: [
-            Expanded(
-              child: _InsightCard(
-                icon: Icons.trending_up_rounded,
-                label: 'Period change',
-                value: '${change >= 0 ? '+' : '-'}${_peso(change.abs())}',
-                color: change >= 0 ? Colors.green.shade700 : colors.error,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _InsightCard(
-                icon: Icons.arrow_upward_rounded,
-                label: 'Highest',
-                value: _peso(highest),
-                color: colors.primary,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _InsightCard(
-                icon: Icons.arrow_downward_rounded,
-                label: 'Lowest',
-                value: _peso(lowest),
-                color: colors.secondary,
-              ),
-            ),
-          ],
-        );
-      },
+    return _AdaptiveWrap(
+      minTileWidth: 125,
+      spacing: 10,
+      maxColumns: 3,
+      children: [
+        _InsightCard(
+          icon: Icons.swap_vert_rounded,
+          label: 'Period change',
+          value: '${change >= 0 ? '+' : '-'}${_peso(change.abs())}',
+          color: change >= 0 ? _positive(context) : colors.error,
+        ),
+        _InsightCard(
+          icon: Icons.arrow_upward_rounded,
+          label: 'Highest',
+          value: _peso(highest),
+          color: colors.primary,
+        ),
+        _InsightCard(
+          icon: Icons.arrow_downward_rounded,
+          label: 'Lowest',
+          value: _peso(lowest),
+          color: colors.secondary,
+        ),
+      ],
     );
   }
 }
@@ -1938,9 +2214,142 @@ class _InsightCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               value,
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontFeatures: _tabular,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Latest ledger activity for a payment account, shown under the chart.
+class _ActivitySection extends ConsumerWidget {
+  final Account account;
+
+  const _ActivitySection({required this.account});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final entriesAsync = ref.watch(accountLedgerEntriesProvider(account.id));
+
+    return entriesAsync.maybeWhen(
+      data: (entries) {
+        if (entries.isEmpty) return const SizedBox.shrink();
+        final recent = entries.toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
+        final shown = recent.take(8).toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _SectionHeader(title: 'Recent activity'),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Column(
+                children: [
+                  for (var i = 0; i < shown.length; i++) ...[
+                    if (i > 0)
+                      Divider(
+                        height: 1,
+                        color: scheme.outlineVariant.withValues(alpha: 0.4),
+                      ),
+                    _LedgerEntryTile(
+                      entry: shown[i],
+                      accountType: account.type,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+      orElse: () => const SizedBox.shrink(),
+    );
+  }
+}
+
+class _LedgerEntryTile extends StatelessWidget {
+  final LedgerEntryRow entry;
+  final String accountType;
+
+  const _LedgerEntryTile({required this.entry, required this.accountType});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    final isIncrease = entry.debit > 0
+        ? accountType == 'asset'
+        : accountType != 'asset';
+    final amount = entry.debit > 0 ? entry.debit : entry.credit;
+    final color = isIncrease ? _positive(context) : scheme.error;
+    final title = entry.description?.trim().isNotEmpty == true
+        ? entry.description!.trim()
+        : _sourceTypeLabel(entry.sourceType);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isIncrease ? Icons.south_west_rounded : Icons.north_east_rounded,
+              size: 17,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${_sourceTypeLabel(entry.sourceType)} · ${DateFormat('MMM d, yyyy').format(entry.date)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '${isIncrease ? '+' : '-'}${_peso(amount)}',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: color,
+              fontFeatures: _tabular,
             ),
           ),
         ],
@@ -1950,7 +2359,7 @@ class _InsightCard extends StatelessWidget {
 }
 
 // ============================================================
-// EMPTY STATE
+// EMPTY / ERROR / SKELETONS
 // ============================================================
 
 class _EmptyAccountsState extends StatelessWidget {
@@ -1960,106 +2369,123 @@ class _EmptyAccountsState extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 88,
-              height: 88,
-              decoration: BoxDecoration(
-                color: colors.primaryContainer,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.account_balance_wallet_rounded,
-                size: 40,
-                color: colors.onPrimaryContainer,
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 76,
+            height: 76,
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              shape: BoxShape.circle,
             ),
-            const SizedBox(height: 22),
-            Text(
-              'No payment accounts yet',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            child: Icon(
+              Icons.account_balance_wallet_rounded,
+              size: 34,
+              color: colors.onPrimaryContainer,
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Add a transaction and choose a payment account to start tracking your cash.',
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'No payment accounts yet',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Text(
+              'Record a transaction and pick a payment account. It will show up here with its balance and history.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colors.onSurfaceVariant,
                 height: 1.5,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
-
-// ============================================================
-// ERROR STATE
-// ============================================================
 
 class _CashflowErrorState extends StatelessWidget {
   final VoidCallback onRetry;
+  final String message;
 
-  const _CashflowErrorState({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.cloud_off_rounded, size: 44, color: colors.error),
-            const SizedBox(height: 14),
-            Text(
-              'Couldn’t load cashflow',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Try again'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================
-// HERO SKELETON
-// ============================================================
-
-class _HeroSkeleton extends StatelessWidget {
-  const _HeroSkeleton();
+  const _CashflowErrorState({
+    required this.onRetry,
+    this.message = 'Couldn’t load your accounts',
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
     return Container(
-      height: 340,
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(30),
+        color: colors.errorContainer.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off_rounded, size: 40, color: colors.error),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroSkeleton extends StatelessWidget {
+  const _HeroSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 230,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(28),
+      ),
+    );
+  }
+}
+
+class _PanelSkeleton extends StatelessWidget {
+  const _PanelSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 120,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(22),
       ),
     );
   }
@@ -2079,6 +2505,7 @@ class _TransferSheet extends ConsumerStatefulWidget {
 class _TransferSheetState extends ConsumerState<_TransferSheet> {
   String? _fromId;
   String? _toId;
+  String? _error;
 
   final _amountController = TextEditingController();
 
@@ -2090,29 +2517,60 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
     super.dispose();
   }
 
+  InputDecoration _decoration(
+    ColorScheme colors, {
+    required String label,
+    required IconData icon,
+    String? prefixText,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      prefixText: prefixText,
+      prefixIcon: Icon(icon),
+      filled: true,
+      fillColor: colors.surfaceContainerLow,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide.none,
+      ),
+    );
+  }
+
+  void _swap() {
+    setState(() {
+      final tmp = _fromId;
+      _fromId = _toId;
+      _toId = tmp;
+    });
+  }
+
+  void _setAmountCents(int cents) {
+    setState(() {
+      _amountController.text = (cents / 100).toStringAsFixed(2);
+      _error = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-
+    final theme = Theme.of(context);
     final balancesAsync = ref.watch(accountBalancesProvider);
 
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
         right: 20,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        bottom: MediaQuery.viewInsetsOf(context).bottom + 24,
       ),
       child: balancesAsync.when(
         loading: () => const SizedBox(
           height: 180,
           child: Center(child: CircularProgressIndicator()),
         ),
-        error: (error, _) => Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text(
-            'Unable to load accounts.',
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
+        error: (error, _) => const Padding(
+          padding: EdgeInsets.all(20),
+          child: Text('Couldn’t load your accounts. Close this and try again.'),
         ),
         data: (balances) {
           if (balances.length < 2) {
@@ -2125,205 +2583,246 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
             );
           }
 
-          final fromAccount = _fromId == null
+          AccountBalance? find(String? id) => id == null
               ? null
-              : balances.firstWhere(
-                  (b) => b.account.id == _fromId,
-                  orElse: () => balances.first,
-                );
+              : balances.where((b) => b.account.id == id).firstOrNull;
 
-          final toAccount = _toId == null
-              ? null
-              : balances.firstWhere(
-                  (b) => b.account.id == _toId,
-                  orElse: () => balances.first,
-                );
+          final fromAccount = find(_fromId);
+          final toAccount = find(_toId);
 
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: colors.primaryContainer,
-                      borderRadius: BorderRadius.circular(15),
+          final entered = double.tryParse(
+            _amountController.text.replaceAll(',', '').trim(),
+          );
+          final enteredCents = entered == null ? null : (entered * 100).round();
+          final exceeds =
+              fromAccount != null &&
+              enteredCents != null &&
+              enteredCents > fromAccount.balance;
+
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      child: Icon(
+                        Icons.swap_horiz_rounded,
+                        color: colors.onPrimaryContainer,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.swap_horiz_rounded,
-                      color: colors.onPrimaryContainer,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Transfer money',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Text(
+                            'Move money between your accounts.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 22),
+
+                // FROM / swap / TO
+                DropdownButtonFormField<String>(
+                  key: ValueKey('from-$_fromId'),
+                  initialValue: _fromId,
+                  isExpanded: true,
+                  decoration: _decoration(
+                    colors,
+                    label: 'From account',
+                    icon: Icons.north_east_rounded,
+                  ),
+                  items: balances
+                      .map(
+                        (b) => DropdownMenuItem(
+                          value: b.account.id,
+                          child: Text(
+                            b.account.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() {
+                    _fromId = value;
+                    if (_toId == value) _toId = null;
+                    _error = null;
+                  }),
+                ),
+                if (fromAccount != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 16),
+                    child: Text(
+                      'Available: ${_peso(fromAccount.balance)}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Transfer money',
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.w800),
+                Align(
+                  alignment: Alignment.center,
+                  child: IconButton.filledTonal(
+                    tooltip: 'Swap accounts',
+                    onPressed: (_fromId != null || _toId != null)
+                        ? _swap
+                        : null,
+                    icon: const Icon(Icons.swap_vert_rounded),
+                  ),
+                ),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('to-$_toId-$_fromId'),
+                  initialValue: _toId,
+                  isExpanded: true,
+                  decoration: _decoration(
+                    colors,
+                    label: 'To account',
+                    icon: Icons.south_west_rounded,
+                  ),
+                  items: balances
+                      .where((b) => b.account.id != _fromId)
+                      .map(
+                        (b) => DropdownMenuItem(
+                          value: b.account.id,
+                          child: Text(
+                            b.account.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Move money between your accounts.',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: colors.onSurfaceVariant),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() {
+                    _toId = value;
+                    _error = null;
+                  }),
+                ),
+                if (toAccount != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 16),
+                    child: Text(
+                      'Current balance: ${_peso(toAccount.balance)}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+
+                const SizedBox(height: 16),
+
+                // AMOUNT
+                TextField(
+                  controller: _amountController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  onChanged: (_) => setState(() => _error = null),
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                  decoration: _decoration(
+                    colors,
+                    label: 'Amount',
+                    icon: Icons.payments_outlined,
+                    prefixText: '₱ ',
+                  ),
+                ),
+                if (fromAccount != null && fromAccount.balance > 0) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ActionChip(
+                        label: const Text('25%'),
+                        onPressed: () => _setAmountCents(
+                          (fromAccount.balance * 0.25).round(),
+                        ),
+                      ),
+                      ActionChip(
+                        label: const Text('50%'),
+                        onPressed: () => _setAmountCents(
+                          (fromAccount.balance * 0.5).round(),
+                        ),
+                      ),
+                      ActionChip(
+                        label: const Text('All'),
+                        onPressed: () => _setAmountCents(fromAccount.balance),
+                      ),
+                    ],
+                  ),
+                ],
+                if (exceeds)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10, left: 4),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 16,
+                          color: colors.error,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '${fromAccount.account.name} will go below zero.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.error,
+                            ),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                ],
-              ),
-
-              const SizedBox(height: 22),
-
-              // ------------------------------------------
-              // FROM
-              // ------------------------------------------
-              DropdownButtonFormField<String>(
-                initialValue: _fromId,
-                decoration: InputDecoration(
-                  labelText: 'From account',
-                  prefixIcon: const Icon(Icons.north_east_rounded),
-                  filled: true,
-                  fillColor: colors.surfaceContainerLow,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-                items: balances
-                    .map(
-                      (b) => DropdownMenuItem(
-                        value: b.account.id,
-                        child: Text(
-                          b.account.name,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10, left: 4),
+                    child: Text(
+                      _error!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.error,
+                        fontWeight: FontWeight.w600,
                       ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _fromId = value;
-
-                    if (_toId == value) {
-                      _toId = null;
-                    }
-                  });
-                },
-              ),
-
-              if (fromAccount != null) ...[
-                const SizedBox(height: 6),
-                Padding(
-                  padding: const EdgeInsets.only(left: 16),
-                  child: Text(
-                    'Available: ${_peso(fromAccount.balance)}',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colors.onSurfaceVariant,
                     ),
+                  ),
+
+                const SizedBox(height: 20),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: FilledButton.icon(
+                    onPressed: _saving ? null : _submit,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.swap_horiz_rounded),
+                    label: Text(_saving ? 'Transferring…' : 'Transfer money'),
                   ),
                 ),
               ],
-
-              const SizedBox(height: 12),
-
-              // ------------------------------------------
-              // TO
-              // ------------------------------------------
-              DropdownButtonFormField<String>(
-                initialValue: _toId,
-                decoration: InputDecoration(
-                  labelText: 'To account',
-                  prefixIcon: const Icon(Icons.south_west_rounded),
-                  filled: true,
-                  fillColor: colors.surfaceContainerLow,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-                items: balances
-                    .where((b) => b.account.id != _fromId)
-                    .map(
-                      (b) => DropdownMenuItem(
-                        value: b.account.id,
-                        child: Text(
-                          b.account.name,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _toId = value;
-                  });
-                },
-              ),
-
-              if (toAccount != null) ...[
-                const SizedBox(height: 6),
-                Padding(
-                  padding: const EdgeInsets.only(left: 16),
-                  child: Text(
-                    'Current balance: ${_peso(toAccount.balance)}',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 12),
-
-              // ------------------------------------------
-              // AMOUNT
-              // ------------------------------------------
-              TextField(
-                controller: _amountController,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: '₱ ',
-                  prefixIcon: const Icon(Icons.payments_outlined),
-                  filled: true,
-                  fillColor: colors.surfaceContainerLow,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
-              // ------------------------------------------
-              // SUBMIT
-              // ------------------------------------------
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: FilledButton.icon(
-                  onPressed: _saving ? null : _submit,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.swap_horiz_rounded),
-                  label: Text(_saving ? 'Transferring…' : 'Transfer money'),
-                ),
-              ),
-            ],
+            ),
           );
         },
       ),
@@ -2331,7 +2830,12 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
   }
 
   Future<void> _submit() async {
-    if (_fromId == null || _toId == null || _fromId == _toId) {
+    if (_fromId == null || _toId == null) {
+      setState(() => _error = 'Choose both accounts.');
+      return;
+    }
+    if (_fromId == _toId) {
+      setState(() => _error = 'Pick two different accounts.');
       return;
     }
 
@@ -2340,20 +2844,35 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
     );
 
     if (amount == null || amount <= 0) {
+      setState(() => _error = 'Enter an amount greater than zero.');
       return;
     }
 
     setState(() {
       _saving = true;
+      _error = null;
     });
 
     try {
       final db = ref.read(databaseProvider);
+      final audit = ref.read(auditLogServiceProvider);
 
       final amountCents = (amount * 100).round();
+      final transferDate = DateTime.now();
 
       await db.transaction(() async {
-        final entryId = _generateId();
+        final ledger = LedgerService(db);
+        final from = await ledger.requirePaymentAccount(
+          _fromId!,
+          kCurrentBusinessId,
+        );
+        final to = await ledger.requirePaymentAccount(
+          _toId!,
+          kCurrentBusinessId,
+        );
+
+        final transferId = const Uuid().v4();
+        final entryId = const Uuid().v4();
 
         await db
             .into(db.journalEntries)
@@ -2361,8 +2880,9 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
               JournalEntriesCompanion.insert(
                 id: entryId,
                 businessId: kCurrentBusinessId,
-                entryDate: DateTime.now(),
+                entryDate: transferDate,
                 sourceType: 'transfer',
+                sourceId: Value(transferId),
                 description: const Value('Account transfer'),
               ),
             );
@@ -2371,9 +2891,9 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
             .into(db.ledgerLines)
             .insert(
               LedgerLinesCompanion.insert(
-                id: _generateId(),
+                id: const Uuid().v4(),
                 journalEntryId: entryId,
-                accountId: _toId!,
+                accountId: to.id,
                 debit: Value(amountCents),
               ),
             );
@@ -2382,9 +2902,9 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
             .into(db.ledgerLines)
             .insert(
               LedgerLinesCompanion.insert(
-                id: _generateId(),
+                id: const Uuid().v4(),
                 journalEntryId: entryId,
-                accountId: _fromId!,
+                accountId: from.id,
                 credit: Value(amountCents),
               ),
             );
@@ -2393,14 +2913,33 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
             .into(db.accountTransfers)
             .insert(
               AccountTransfersCompanion.insert(
-                id: _generateId(),
+                id: transferId,
                 businessId: kCurrentBusinessId,
-                fromAccountId: _fromId!,
-                toAccountId: _toId!,
+                fromAccountId: from.id,
+                toAccountId: to.id,
                 amount: amountCents,
-                transferDate: DateTime.now(),
+                transferDate: transferDate,
               ),
             );
+
+        await audit.record(
+          AuditEvent(
+            businessId: kCurrentBusinessId,
+            module: AuditModule.finance,
+            actionType: AuditActionType.create,
+            action: 'finance.transfer_recorded',
+            entityType: 'account_transfers',
+            entityId: transferId,
+            entityLabel: '${from.name} → ${to.name}',
+            after: {
+              'amount': amountCents,
+              'fromAccountId': from.id,
+              'toAccountId': to.id,
+              'date': transferDate,
+            },
+            details: {'journalEntryId': entryId},
+          ),
+        );
       });
 
       ref.read(ledgerVersionProvider.notifier).state++;
@@ -2410,9 +2949,9 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
       Navigator.pop(context);
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           behavior: SnackBarBehavior.floating,
-          content: Text('Transfer completed'),
+          content: Text('Transferred ${_peso(amountCents)}'),
         ),
       );
     } catch (error) {
@@ -2420,104 +2959,118 @@ class _TransferSheetState extends ConsumerState<_TransferSheet> {
 
       setState(() {
         _saving = false;
+        _error = 'Transfer failed: $error';
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text('Transfer failed: $error'),
-        ),
-      );
     }
-  }
-
-  String _generateId() {
-    return DateTime.now().microsecondsSinceEpoch.toString() +
-        Random().nextInt(9999).toString();
   }
 }
 
 // ============================================================
-// ASSETS SECTION
+// ASSETS & LIABILITIES SECTIONS
 // ============================================================
 
 const _assetSubtypeLabels = {
-  'current_asset': 'Current Assets',
-  'non_current_asset': 'Non-current Assets',
+  'current_asset': 'Current assets',
+  'non_current_asset': 'Non-current assets',
 };
 
-class _AssetsSection extends StatelessWidget {
-  final List<AccountBalanceEntry> assets;
-  const _AssetsSection({required this.assets});
+const _liabilitySubtypeLabels = {
+  'trade_payable': 'Trade payables',
+  'loan_payable': 'Loans payable',
+  'other_payable': 'Other payables',
+};
+
+class _BalancePanel extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final int total;
+  final String emptyText;
+  final Map<String, List<AccountBalanceEntry>> grouped;
+
+  const _BalancePanel({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.total,
+    required this.emptyText,
+    required this.grouped,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final total = assets.fold<int>(0, (sum, a) => sum + a.balance);
-
-    final grouped = <String, List<AccountBalanceEntry>>{};
-    for (final entry in assets) {
-      final label =
-          _assetSubtypeLabels[entry.account.subtype] ?? 'Other Assets';
-      grouped.putIfAbsent(label, () => []).add(entry);
-    }
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: scheme.surface,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.inventory_2_outlined,
-                size: 18,
-                color: scheme.onSurfaceVariant,
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 19, color: color),
               ),
-              const SizedBox(width: 8),
-              const Expanded(
+              const SizedBox(width: 12),
+              Expanded(
                 child: Text(
-                  'Assets',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  title,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-              Text(
-                _peso(total),
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: scheme.primary,
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    _peso(total),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      color: color,
+                      fontFeatures: _tabular,
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
-          if (assets.isEmpty)
+          if (grouped.isEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 12),
               child: Text(
-                'No non-cash assets recorded yet.',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                emptyText,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             )
           else
             for (final group in grouped.entries) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Text(
                 group.key,
-                style: TextStyle(
+                style: theme.textTheme.labelLarge?.copyWith(
                   fontWeight: FontWeight.w700,
-                  fontSize: 12,
                   color: scheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               for (final item in group.value)
                 _BalanceRow(account: item.account, amount: item.balance),
-              const SizedBox(height: 4),
+              const Divider(height: 14),
               _SubtotalRow(
                 amount: group.value.fold<int>(0, (sum, e) => sum + e.balance),
               ),
@@ -2528,15 +3081,30 @@ class _AssetsSection extends StatelessWidget {
   }
 }
 
-// ============================================================
-// LIABILITIES SECTION
-// ============================================================
+class _AssetsSection extends StatelessWidget {
+  final List<AccountBalanceEntry> assets;
+  const _AssetsSection({required this.assets});
 
-const _liabilitySubtypeLabels = {
-  'trade_payable': 'Trade Payables',
-  'loan_payable': 'Loans Payable',
-  'other_payable': 'Other Payables',
-};
+  @override
+  Widget build(BuildContext context) {
+    final grouped = <String, List<AccountBalanceEntry>>{};
+    for (final entry in assets) {
+      final label =
+          _assetSubtypeLabels[entry.account.subtype] ?? 'Other assets';
+      grouped.putIfAbsent(label, () => []).add(entry);
+    }
+
+    return _BalancePanel(
+      title: 'Assets',
+      icon: Icons.inventory_2_outlined,
+      color: _positive(context),
+      total: assets.fold<int>(0, (sum, a) => sum + a.balance),
+      emptyText:
+          'No non-cash assets yet. Add equipment, a vehicle or stock from the Journal Entry page.',
+      grouped: grouped,
+    );
+  }
+}
 
 class _LiabilitiesSection extends StatelessWidget {
   final List<AccountBalanceEntry> liabilities;
@@ -2544,78 +3112,20 @@ class _LiabilitiesSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final total = liabilities.fold<int>(0, (sum, a) => sum + a.balance);
-
     final grouped = <String, List<AccountBalanceEntry>>{};
     for (final entry in liabilities) {
       final label =
-          _liabilitySubtypeLabels[entry.account.subtype] ?? 'Other Liabilities';
+          _liabilitySubtypeLabels[entry.account.subtype] ?? 'Other liabilities';
       grouped.putIfAbsent(label, () => []).add(entry);
     }
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.request_quote_outlined,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Liabilities',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                ),
-              ),
-              Text(
-                _peso(total),
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: scheme.error,
-                ),
-              ),
-            ],
-          ),
-          if (liabilities.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'No liabilities (payables, loans) recorded yet.',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-              ),
-            )
-          else
-            for (final group in grouped.entries) ...[
-              const SizedBox(height: 12),
-              Text(
-                group.key,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 6),
-              for (final item in group.value)
-                _BalanceRow(account: item.account, amount: item.balance),
-              const SizedBox(height: 4),
-              _SubtotalRow(
-                amount: group.value.fold<int>(0, (sum, e) => sum + e.balance),
-              ),
-            ],
-        ],
-      ),
+    return _BalancePanel(
+      title: 'Liabilities',
+      icon: Icons.request_quote_outlined,
+      color: Theme.of(context).colorScheme.error,
+      total: liabilities.fold<int>(0, (sum, a) => sum + a.balance),
+      emptyText: 'Nothing owed right now. Payables and loans will show here.',
+      grouped: grouped,
     );
   }
 }
@@ -2627,38 +3137,48 @@ class _BalanceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
     return InkWell(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(10),
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => AccountLedgerPage(account: account, balance: amount),
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                account.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13),
+      child: ConstrainedBox(
+        // 48dp minimum touch target.
+        constraints: const BoxConstraints(minHeight: 44),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  account.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium,
+                ),
               ),
-            ),
-            Text(
-              _peso(amount),
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: scheme.onSurface,
+              const SizedBox(width: 8),
+              Text(
+                _peso(amount),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: _tabular,
+                ),
               ),
-            ),
-            const SizedBox(width: 4),
-            Icon(Icons.chevron_right_rounded, size: 16, color: scheme.outline),
-          ],
+              const SizedBox(width: 2),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: scheme.outline,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2671,14 +3191,14 @@ class _SubtotalRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Row(
       children: [
         Expanded(
           child: Text(
             'Subtotal',
-            style: TextStyle(
-              fontSize: 11,
+            style: theme.textTheme.labelMedium?.copyWith(
               fontWeight: FontWeight.w700,
               color: scheme.onSurfaceVariant,
             ),
@@ -2686,10 +3206,10 @@ class _SubtotalRow extends StatelessWidget {
         ),
         Text(
           _peso(amount),
-          style: TextStyle(
-            fontSize: 12,
+          style: theme.textTheme.labelLarge?.copyWith(
             fontWeight: FontWeight.w800,
             color: scheme.onSurfaceVariant,
+            fontFeatures: _tabular,
           ),
         ),
       ],
@@ -2698,11 +3218,10 @@ class _SubtotalRow extends StatelessWidget {
 }
 
 // ============================================================
-// ACCOUNT LEDGER PAGE — read-only, dated transaction history for an
-// asset/liability account. Assets/liabilities can't have transactions
-// added directly here (same as e-wallet/bank accounts) — new ones are
-// only ever recorded through the Journal Entry page or through
-// Suppliers/Customers.
+// ACCOUNT LEDGER PAGE — read-only, dated history for an
+// asset/liability account, grouped by month.
+// New entries are only recorded via the Journal Entry page or
+// through Suppliers/Customers.
 // ============================================================
 
 class AccountLedgerPage extends ConsumerWidget {
@@ -2717,145 +3236,451 @@ class AccountLedgerPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final entriesAsync = ref.watch(accountLedgerEntriesProvider(account.id));
+    final isAsset = account.type == 'asset';
+    final accent = isAsset ? _positive(context) : scheme.error;
 
-    return Scaffold(
-      backgroundColor: scheme.surfaceContainerLowest,
-      appBar: AppBar(
-        title: Text(
-          account.name,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-      ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Current balance',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _peso(balance),
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
-                    color: scheme.onSurface,
-                  ),
-                ),
-              ],
-            ),
+    return MediaQuery.withClampedTextScaling(
+      minScaleFactor: 1.0,
+      maxScaleFactor: 1.3,
+      child: Scaffold(
+        backgroundColor: scheme.surfaceContainerLowest,
+        appBar: AppBar(
+          title: Text(
+            account.name,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: entriesAsync.when(
-              data: (entries) {
-                if (entries.isEmpty) {
-                  return Center(
-                    child: Text(
-                      'No transactions recorded yet.',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  );
-                }
+        ),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final pad = constraints.maxWidth >= 720 ? 28.0 : 16.0;
 
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-                  itemCount: entries.length,
-                  separatorBuilder: (_, __) => const Divider(height: 20),
-                  itemBuilder: (context, index) {
-                    final entry = entries[index];
-                    final isIncrease = entry.debit > 0
-                        ? account.type == 'asset'
-                        : account.type != 'asset';
-                    final amount = entry.debit > 0 ? entry.debit : entry.credit;
-
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                entry.description?.trim().isNotEmpty == true
-                                    ? entry.description!.trim()
-                                    : _sourceTypeLabel(entry.sourceType),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
-                                ),
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 820),
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(pad, 8, pad, 40),
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: accent.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isAsset ? 'Current value' : 'Amount owed',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              _peso(balance),
+                              style: theme.textTheme.displaySmall?.copyWith(
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -1.2,
+                                color: scheme.onSurface,
+                                fontFeatures: _tabular,
                               ),
-                              const SizedBox(height: 3),
-                              Text(
-                                DateFormat('MMM d, yyyy').format(entry.date),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    entriesAsync.when(
+                      data: (entries) {
+                        if (entries.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 48),
+                            child: Center(
+                              child: Text(
+                                'No transactions recorded yet.',
                                 style: TextStyle(
-                                  fontSize: 12,
                                   color: scheme.onSurfaceVariant,
                                 ),
                               ),
+                            ),
+                          );
+                        }
+
+                        final sorted = entries.toList()
+                          ..sort((a, b) => b.date.compareTo(a.date));
+                        final byMonth = <String, List<LedgerEntryRow>>{};
+                        for (final e in sorted) {
+                          byMonth
+                              .putIfAbsent(
+                                DateFormat('MMMM yyyy').format(e.date),
+                                () => [],
+                              )
+                              .add(e);
+                        }
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final month in byMonth.entries) ...[
+                              _SectionHeader(title: month.key),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: scheme.surface,
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(
+                                    color: scheme.outlineVariant.withValues(
+                                      alpha: 0.5,
+                                    ),
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    for (
+                                      var i = 0;
+                                      i < month.value.length;
+                                      i++
+                                    ) ...[
+                                      if (i > 0)
+                                        Divider(
+                                          height: 1,
+                                          color: scheme.outlineVariant
+                                              .withValues(alpha: 0.4),
+                                        ),
+                                      _LedgerEntryTile(
+                                        entry: month.value[i],
+                                        accountType: account.type,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
                             ],
+                          ],
+                        );
+                      },
+                      loading: () => const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                      error: (_, __) => Padding(
+                        padding: const EdgeInsets.only(top: 24),
+                        child: _CashflowErrorState(
+                          message: 'Couldn’t load transactions',
+                          onRetry: () => ref.invalidate(
+                            accountLedgerEntriesProvider(account.id),
                           ),
                         ),
-                        Text(
-                          '${isIncrease ? '+' : '-'}${_peso(amount)}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 13,
-                            color: isIncrease
-                                ? Colors.green.shade700
-                                : scheme.error,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => Center(
-                child: Text(
-                  'Unable to load transactions.',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ),
-        ],
+            );
+          },
+        ),
       ),
     );
   }
+}
 
-  String _sourceTypeLabel(String sourceType) {
-    switch (sourceType) {
-      case 'capital':
-        return 'Capital contribution';
-      case 'asset':
-        return 'Asset acquisition';
-      case 'liability':
-        return 'Liability incurred';
-      case 'supplier_purchase':
-        return 'Supplier purchase';
-      case 'payable_payment':
-        return 'Payment to supplier';
-      case 'income':
-        return 'Sale';
-      case 'receivable_payment':
-        return 'Payment from customer';
-      case 'transfer':
-        return 'Account transfer';
-      default:
-        return 'Transaction';
+// ============================================================
+// ADD CAPITAL / ASSET / LIABILITY SHEETS — preserved from the original file
+// ============================================================
+
+class AddCapitalWithdrawalSheet extends ConsumerStatefulWidget {
+  /// When set, edits this existing withdrawal journal entry instead
+  /// of recording a new one.
+  final String? journalEntryId;
+
+  const AddCapitalWithdrawalSheet({super.key, this.journalEntryId});
+
+  @override
+  ConsumerState<AddCapitalWithdrawalSheet> createState() =>
+      _AddCapitalWithdrawalSheetState();
+}
+
+class _AddCapitalWithdrawalSheetState
+    extends ConsumerState<AddCapitalWithdrawalSheet> {
+  final _amountController = TextEditingController();
+  final _noteController = TextEditingController();
+  String? _paymentAccountId;
+  DateTime _date = DateTime.now();
+  bool _saving = false;
+  bool _loading = false;
+  int? _availableCapital;
+
+  bool get _isEditing => widget.journalEntryId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAvailableCapital();
+    if (_isEditing) _loadExisting();
+  }
+
+  Future<void> _loadAvailableCapital() async {
+    final balance = await ref.read(capitalBalanceProvider.future);
+    if (!mounted) return;
+    setState(() => _availableCapital = balance);
+  }
+
+  Future<void> _loadExisting() async {
+    setState(() => _loading = true);
+    final detail = await ref
+        .read(capitalAssetLiabilityServiceProvider)
+        .getCapitalWithdrawalDetail(widget.journalEntryId!);
+    if (!mounted) return;
+    setState(() {
+      _amountController.text = (detail.amount / 100).toStringAsFixed(2);
+      _noteController.text = detail.description ?? '';
+      _paymentAccountId = detail.paymentAccountId;
+      _date = detail.date;
+      _loading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final amount = double.tryParse(
+      _amountController.text.replaceAll(',', '').trim(),
+    );
+
+    if (amount == null || amount <= 0 || _paymentAccountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid amount and choose an account.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
     }
+
+    setState(() => _saving = true);
+
+    try {
+      final service = ref.read(capitalAssetLiabilityServiceProvider);
+      final description = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
+
+      if (_isEditing) {
+        await service.updateCapitalWithdrawal(
+          journalEntryId: widget.journalEntryId!,
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      } else {
+        await service.recordCapitalWithdrawal(
+          businessId: kCurrentBusinessId,
+          date: _date,
+          amount: (amount * 100).round(),
+          paymentAccountId: _paymentAccountId!,
+          description: description,
+        );
+      }
+
+      ref.invalidate(capitalBalanceProvider);
+      ref.invalidate(accountBalancesProvider);
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+
+    final enteredAmount = double.tryParse(
+      _amountController.text.replaceAll(',', '').trim(),
+    );
+    final remaining = (_availableCapital != null && enteredAmount != null)
+        ? _availableCapital! - (enteredAmount * 100).round()
+        : null;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _isEditing
+                                ? 'Edit Capital Withdrawal'
+                                : 'Capital Withdrawal',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Money the owner takes out of the business.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (_availableCapital != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Current capital: ${_peso(_availableCapital!)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _amountController,
+                      autofocus: true,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Amount',
+                        prefixText: '₱ ',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    if (remaining != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color:
+                              (remaining < 0
+                                      ? Colors.redAccent
+                                      : scheme.primary)
+                                  .withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          remaining < 0
+                              ? 'This is more than the recorded capital.'
+                              : 'Capital remaining after this: ${_peso(remaining)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: remaining < 0
+                                ? Colors.redAccent
+                                : scheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    accountsAsync.when(
+                      data: (accounts) => DropdownButtonFormField<String>(
+                        initialValue: _paymentAccountId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Taken from',
+                        ),
+                        items: accounts
+                            .map(
+                              (a) => DropdownMenuItem(
+                                value: a.id,
+                                child: Text(
+                                  a.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => _paymentAccountId = v),
+                      ),
+                      loading: () => const LinearProgressIndicator(),
+                      error: (_, __) => const Text('Unable to load accounts'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _noteController,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        hintText: 'Optional',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.deepOrange.shade700,
+                        ),
+                        onPressed: _saving ? null : _submit,
+                        child: _saving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _isEditing
+                                    ? 'Save Changes'
+                                    : 'Withdraw Capital',
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
   }
 }
 
@@ -3125,9 +3950,7 @@ class _AddAssetSheetState extends ConsumerState<AddAssetSheet> {
         .read(capitalAssetLiabilityServiceProvider)
         .getAssetDetail(widget.journalEntryId!);
     if (!mounted) return;
-    final onCredit =
-        detail.paymentAccountId ==
-        CapitalAssetLiabilityService.payableAccountId(kCurrentBusinessId);
+    final onCredit = detail.isOnCredit;
     setState(() {
       _nameController.text = detail.accountName;
       _amountController.text = (detail.amount / 100).toStringAsFixed(2);

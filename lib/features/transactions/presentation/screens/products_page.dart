@@ -1,9 +1,25 @@
 // lib/features/production/presentation/screens/products_page.dart
 //
 // Products list (with live "how many can I make" badges) + recipe
-// editor (supports nested product components) + Record Production,
-// which deducts real stock via ProductionService.
+// editor (supports nested product components).
+//
+// Selling now happens only through the POS page — "Record Sale / Production"
+// has been removed from here to avoid two different places doing the same
+// stock deduction. Every product's sell price is required, so POS always has
+// a real price to show and total.
 
+import 'package:bos_application/core/audit/audit_enums.dart';
+import 'package:bos_application/core/audit/audit_log_service.dart';
+import 'package:bos_application/core/auth/authorization_providers.dart'
+    show authorizationServiceProvider, canProvider, selectedBusinessIdProvider;
+import 'package:bos_application/core/auth/authorization_service.dart'
+    show PermissionDeniedException;
+import 'package:bos_application/core/auth/bos_access.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
+import 'package:bos_application/features/transactions/domain/product_catalog_service.dart';
+import 'package:bos_application/features/transactions/presentation/providers/product_catalog_providers.dart';
+import 'package:bos_application/features/transactions/presentation/widgets/product_catalog_widgets.dart';
+import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -12,38 +28,111 @@ import 'package:drift/drift.dart' hide Column, Table;
 import '../../../../core/branding/branding.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
-import '../../../transactions/presentation/screens/transaction_page.dart'
-    show ledgerVersionProvider, kCurrentBusinessId;
 import '../../domain/production_service.dart';
 import '../../domain/costing_service.dart';
 import '../../domain/unit_options.dart';
+import '../../../transactions/presentation/screens/transaction_page.dart'
+    show ledgerVersionProvider, kCurrentBusinessId, ledgerServiceProvider;
+
+// ============================================================
+// PERMISSION HELPERS
+// ============================================================
+
+/// UI guard. Every write handler also checks the relevant permission so a
+/// hidden/disabled control is not the only protection.
+bool _allowed(BuildContext context, WidgetRef ref, BosPermission permission) {
+  try {
+    ref
+        .read(authorizationServiceProvider)
+        .require(permission, businessId: kCurrentBusinessId);
+    return true;
+  } on PermissionDeniedException catch (e) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(behavior: SnackBarBehavior.floating, content: Text(e.message)),
+      );
+    return false;
+  }
+}
+
+class _InventoryNoAccessView extends StatelessWidget {
+  const _InventoryNoAccessView();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_outline_rounded,
+                size: 44,
+                color: theme.colorScheme.outline,
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Products are restricted',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Your role cannot view inventory. Ask the business owner for access.',
+                style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 // ============================================================
 // PROVIDERS
 // ============================================================
 
 final productionServiceProvider = Provider<ProductionService>((ref) {
-  return ProductionService(ref.watch(databaseProvider));
+  return ProductionService(
+    ref.watch(databaseProvider),
+    ref.watch(ledgerServiceProvider),
+    branchId: ref.watch(selectedBranchIdProvider),
+  );
 });
 
 final costingServiceProvider = Provider<CostingService>((ref) {
-  return CostingService(ref.watch(databaseProvider));
+  return CostingService(
+    ref.watch(databaseProvider),
+    branchId: ref.watch(selectedBranchIdProvider),
+    guard: (permission) => ref
+        .read(authorizationServiceProvider)
+        .require(permission, businessId: kCurrentBusinessId),
+  );
 });
 
 final profitabilityProvider =
     FutureProvider.family<ProfitabilityResult, String>((ref, productId) {
-      ref.watch(
-        ledgerVersionProvider,
-      ); // recompute whenever supply cost/recipe/price changes
+      ref.watch(ledgerVersionProvider);
       return ref.watch(costingServiceProvider).computeProfitability(productId);
     });
 
+/// Raw unfiltered stream — still used by the sub-recipe picker inside
+/// _AddComponentSheet and by producibilityProvider.
 final productsProvider = StreamProvider<List<Product>>((ref) {
   final db = ref.watch(databaseProvider);
+  final businessId = ref.watch(selectedBusinessIdProvider);
   return (db.select(db.products)
         ..where(
-          (p) =>
-              p.businessId.equals(kCurrentBusinessId) & p.isActive.equals(true),
+          (p) => p.businessId.equals(businessId) & p.isActive.equals(true),
         )
         ..orderBy([(p) => OrderingTerm.asc(p.name)]))
       .watch();
@@ -51,9 +140,7 @@ final productsProvider = StreamProvider<List<Product>>((ref) {
 
 final producibilityProvider =
     FutureProvider.family<ProducibilityResult, String>((ref, productId) {
-      ref.watch(
-        ledgerVersionProvider,
-      ); // re-check whenever stock changes anywhere
+      ref.watch(ledgerVersionProvider);
       return ref
           .watch(productionServiceProvider)
           .computeMaxProducible(productId);
@@ -61,10 +148,10 @@ final producibilityProvider =
 
 final suppliesForPickerProvider = StreamProvider<List<Supply>>((ref) {
   final db = ref.watch(databaseProvider);
+  final businessId = ref.watch(selectedBusinessIdProvider);
   return (db.select(db.supplies)
         ..where(
-          (s) =>
-              s.businessId.equals(kCurrentBusinessId) & s.isActive.equals(true),
+          (s) => s.businessId.equals(businessId) & s.isActive.equals(true),
         )
         ..orderBy([(s) => OrderingTerm.asc(s.name)]))
       .watch();
@@ -74,33 +161,22 @@ final suppliesForPickerProvider = StreamProvider<List<Supply>>((ref) {
 // PAGE — Products list
 // ============================================================
 
-class ProductsPage extends ConsumerStatefulWidget {
+class ProductsPage extends ConsumerWidget {
   const ProductsPage({super.key});
 
   @override
-  ConsumerState<ProductsPage> createState() => _ProductsPageState();
-}
-
-class _ProductsPageState extends ConsumerState<ProductsPage> {
-  final _searchController = TextEditingController();
-  String _query = '';
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  List<Product> _filter(List<Product> products) {
-    final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return products;
-    return products.where((p) => p.name.toLowerCase().contains(q)).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!ref.watch(canProvider(BosPermission.inventoryView))) {
+      return const _InventoryNoAccessView();
+    }
+    final canCreate = ref.watch(canProvider(BosPermission.inventoryCreate));
     final scheme = Theme.of(context).colorScheme;
-    final productsAsync = ref.watch(productsProvider);
+
+    // productListingsProvider respects productQueryProvider (search +
+    // filters set by ProductFilterBar). productsProvider is kept for
+    // the recipe picker and producibility — it is NOT watched here.
+    final listingsAsync = ref.watch(productListingsProvider);
+    final totalAsync = ref.watch(productTotalCountProvider);
 
     return Scaffold(
       backgroundColor: scheme.surface,
@@ -122,72 +198,68 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
           ],
         ),
       ),
-      body: productsAsync.when(
+      body: listingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
-        data: (products) {
-          if (products.isEmpty) {
-            return _EmptyState(onAdd: () => _openAddProductSheet(context));
+        data: (listings) {
+          // True when zero products exist in the database at all.
+          final totalCount = totalAsync.maybeWhen(
+            data: (n) => n,
+            orElse: () => listings.length,
+          );
+
+          if (totalCount == 0) {
+            return _EmptyState(
+              canAdd: canCreate,
+              onAdd: () => _openAddProductSheet(context, ref),
+            );
           }
-          final filtered = _filter(products);
+
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
             children: [
-              TextField(
-                controller: _searchController,
-                onChanged: (v) => setState(() => _query = v),
-                decoration: InputDecoration(
-                  hintText: 'Search products...',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() => _query = '');
-                          },
-                          icon: const Icon(Icons.close_rounded),
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: scheme.surfaceContainerLow,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
+              // Search box + category chips + filter/sort button.
+              ProductFilterBar(
+                onScan: () => Navigator.of(context).push<String>(
+                  MaterialPageRoute(builder: (_) => const BarcodeScannerPage()),
                 ),
               ),
               const SizedBox(height: 14),
-              if (filtered.isEmpty)
+
+              if (listings.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 32),
                   child: Center(
                     child: Text(
-                      'No products match "$_query".',
+                      'No products match your filters.',
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ),
                 )
               else
-                ...filtered.map(
-                  (p) => Padding(
+                ...listings.map(
+                  (listing) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: _ProductCard(product: p),
+                    child: _ProductCard(product: listing.product),
                   ),
                 ),
             ],
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'add_product',
-        backgroundColor: AppColors.primary,
-        onPressed: () => _openAddProductSheet(context),
-        child: const Icon(Icons.add_rounded, color: Colors.white),
-      ),
+      floatingActionButton: canCreate
+          ? FloatingActionButton(
+              heroTag: 'add_product',
+              backgroundColor: AppColors.primary,
+              onPressed: () => _openAddProductSheet(context, ref),
+              child: const Icon(Icons.add_rounded, color: Colors.white),
+            )
+          : null,
     );
   }
 
-  void _openAddProductSheet(BuildContext context) {
+  void _openAddProductSheet(BuildContext context, WidgetRef ref) {
+    if (!_allowed(context, ref, BosPermission.inventoryCreate)) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -200,7 +272,8 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
 
 class _EmptyState extends StatelessWidget {
   final VoidCallback onAdd;
-  const _EmptyState({required this.onAdd});
+  final bool canAdd;
+  const _EmptyState({required this.onAdd, required this.canAdd});
 
   @override
   Widget build(BuildContext context) {
@@ -235,13 +308,17 @@ class _EmptyState extends StatelessWidget {
               'Add a product and its recipe to start tracking production.',
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: onAdd,
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Add product'),
-            ),
+            if (canAdd) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: onAdd,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                ),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Add product'),
+              ),
+            ],
           ],
         ),
       ),
@@ -419,7 +496,7 @@ class _ProducibilityBadge extends StatelessWidget {
 }
 
 // ============================================================
-// ADD PRODUCT FORM
+// ADD / EDIT PRODUCT FORM
 // ============================================================
 
 class _ProductForm extends ConsumerStatefulWidget {
@@ -439,8 +516,21 @@ class _ProductFormState extends ConsumerState<_ProductForm> {
         ? (widget.existing!.sellPrice! / 100).toStringAsFixed(2)
         : '',
   );
+  late final _skuController = TextEditingController(
+    text: widget.existing?.sku ?? '',
+  );
+  late final _barcodeController = TextEditingController(
+    text: widget.existing?.barcode ?? '',
+  );
+  late final _descriptionController = TextEditingController(
+    text: widget.existing?.description ?? '',
+  );
+
   String? _unit;
   bool _isSellable = true;
+  String? _categoryId;
+  ProductType _productType = ProductType.finished;
+  TrackingType _trackingType = TrackingType.recipe;
   bool _saving = false;
 
   static const _units = ['cup', 'serving', 'piece', 'bottle', 'box', 'pack'];
@@ -450,172 +540,428 @@ class _ProductFormState extends ConsumerState<_ProductForm> {
     super.initState();
     _unit = widget.existing?.unit;
     _isSellable = widget.existing?.isSellable ?? true;
+
+    if (widget.existing != null) {
+      final p = widget.existing!;
+      _categoryId = p.categoryId;
+      _productType = ProductTypeX.parse(p.productType);
+      _trackingType = TrackingTypeX.parse(p.trackingType);
+    }
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _priceController.dispose();
+    _skuController.dispose();
+    _barcodeController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
+  Future<String?> _scanBarcode() async {
+    final barcode = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const BarcodeScannerPage()),
+    );
+    if (!mounted || barcode == null || barcode.trim().isEmpty) return null;
+    return ProductCatalogService.normalizeBarcode(barcode);
+  }
+
   Future<void> _save() async {
-    if (_nameController.text.trim().isEmpty || _unit == null) return;
+    final name = _nameController.text.trim();
+    if (name.isEmpty || _unit == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a product name and choose a unit.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // A sell price is required for anything sold directly to customers, so
+    // POS always has a real price to show and total. Components (not sold
+    // directly, e.g. "Espresso Base") are exempt — nobody buys them on their
+    // own — and never appear on the POS menu regardless of price.
+    final priceText = _priceController.text.trim();
+    final price = priceText.isEmpty ? null : double.tryParse(priceText);
+
+    if (_isSellable && (price == null || price <= 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a sell price greater than ₱0.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (!_isSellable && price != null && price <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sell price must be greater than ₱0, or left blank.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final writePermission = widget.existing == null
+        ? BosPermission.inventoryCreate
+        : BosPermission.inventoryEdit;
+    if (!_allowed(context, ref, writePermission)) return;
+
     setState(() => _saving = true);
-    final db = ref.read(databaseProvider);
-    final price = double.tryParse(_priceController.text);
+
+    final sellPriceCents = price == null ? null : (price * 100).round();
 
     try {
+      if (!_allowed(context, ref, writePermission)) return;
+      final service = ref.read(productCatalogServiceProvider);
+      final audit = ref.read(auditLogServiceProvider);
+
       if (widget.existing == null) {
-        await db
-            .into(db.products)
-            .insert(
-              ProductsCompanion.insert(
-                id: const Uuid().v4(),
-                businessId: kCurrentBusinessId,
-                name: _nameController.text.trim(),
-                unit: _unit!,
-                sellPrice: Value(price == null ? null : (price * 100).round()),
-                isSellable: Value(_isSellable),
-              ),
-            );
+        await service.createProduct(
+          name: name,
+          unit: _unit!,
+          sku: _skuController.text.trim().isEmpty
+              ? null
+              : _skuController.text.trim(),
+          barcode: _barcodeController.text.trim().isEmpty
+              ? null
+              : _barcodeController.text.trim(),
+          categoryId: _categoryId,
+          description: _descriptionController.text.trim().isEmpty
+              ? null
+              : _descriptionController.text.trim(),
+          type: _productType,
+          tracking: _trackingType,
+          sellPrice: sellPriceCents,
+          isSellable: _productType == ProductType.intermediate
+              ? false
+              : _isSellable,
+        );
+        await audit.tryRecord(
+          AuditEvent(
+            module: AuditModule.inventory,
+            actionType: AuditActionType.create,
+            action: 'inventory.product_created',
+            entityType: 'products',
+            entityLabel: name,
+            after: {
+              'name': name,
+              'unit': _unit,
+              'sellPrice': sellPriceCents,
+              'isSellable': _productType == ProductType.intermediate
+                  ? false
+                  : _isSellable,
+              'productType': _productType.name,
+              'trackingType': _trackingType.name,
+              'sku': _skuController.text.trim(),
+              'barcode': _barcodeController.text.trim(),
+            },
+          ),
+        );
       } else {
-        await (db.update(
-          db.products,
-        )..where((p) => p.id.equals(widget.existing!.id))).write(
-          ProductsCompanion(
-            name: Value(_nameController.text.trim()),
-            unit: Value(_unit!),
-            sellPrice: Value(price == null ? null : (price * 100).round()),
-            isSellable: Value(_isSellable),
+        final before = widget.existing!;
+        await service.updateProduct(
+          widget.existing!.id,
+          name: name,
+          unit: _unit,
+          sku: _skuController.text.trim().isEmpty
+              ? null
+              : _skuController.text.trim(),
+          barcode: _barcodeController.text.trim().isEmpty
+              ? null
+              : _barcodeController.text.trim(),
+          categoryId: _categoryId,
+          description: _descriptionController.text.trim().isEmpty
+              ? null
+              : _descriptionController.text.trim(),
+          type: _productType,
+          tracking: _trackingType,
+          sellPrice: sellPriceCents,
+          isSellable: _productType == ProductType.intermediate
+              ? false
+              : _isSellable,
+        );
+        await audit.tryRecord(
+          AuditEvent(
+            module: AuditModule.inventory,
+            actionType: AuditActionType.update,
+            action: 'inventory.product_updated',
+            entityType: 'products',
+            entityId: before.id,
+            entityLabel: name,
+            before: {
+              'name': before.name,
+              'unit': before.unit,
+              'sellPrice': before.sellPrice,
+              'isSellable': before.isSellable,
+              'productType': ProductTypeX.parse(before.productType).name,
+              'trackingType': TrackingTypeX.parse(before.trackingType).name,
+              'sku': before.sku ?? '',
+              'barcode': before.barcode ?? '',
+            },
+            after: {
+              'name': name,
+              'unit': _unit,
+              'sellPrice': sellPriceCents,
+              'isSellable': _productType == ProductType.intermediate
+                  ? false
+                  : _isSellable,
+              'productType': _productType.name,
+              'trackingType': _trackingType.name,
+              'sku': _skuController.text.trim(),
+              'barcode': _barcodeController.text.trim(),
+            },
           ),
         );
       }
+
       ref.invalidate(productsProvider);
-      if (mounted) Navigator.pop(context);
+      ref.invalidate(productListingsProvider);
+      ref.read(ledgerVersionProvider.notifier).state++;
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pop();
+    } on DuplicateProductCodeException catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      final messenger = ScaffoldMessenger.of(context);
+      final errorColor = Theme.of(context).colorScheme.error;
+
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(e.toString()),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: errorColor,
+          ),
+        );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Unable to save: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Container(
-        decoration: BoxDecoration(
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 16),
+        // Material (not a plain decorated Container) so ListTile-based
+        // children — SwitchListTile included — paint their background and
+        // ink splashes correctly instead of being hidden underneath.
+        child: Material(
           color: scheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      widget.existing == null ? 'Add Product' : 'Edit Product',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
+          clipBehavior: Clip.antiAlias,
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: scheme.outlineVariant,
+                      borderRadius: BorderRadius.circular(4),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _nameController,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  labelText: 'Product name',
-                  hintText: 'e.g. Spanish Latte, Espresso Base',
-                  prefixIcon: Icon(Icons.restaurant_menu_outlined),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Unit',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _units
-                    .map(
-                      (u) => ChoiceChip(
-                        label: Text(u),
-                        selected: _unit == u,
-                        onSelected: (_) => setState(() => _unit = u),
-                        selectedColor: AppColors.primary.withValues(
-                          alpha: 0.16,
+                const SizedBox(height: 16),
+
+                // Header
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.existing == null
+                            ? 'Add Product'
+                            : 'Edit Product',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _priceController,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+                    ),
+                    IconButton(
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                 ),
-                decoration: const InputDecoration(
-                  labelText: 'Sell price (optional)',
-                  prefixText: '₱ ',
-                  prefixIcon: Icon(Icons.sell_outlined),
+                const SizedBox(height: 20),
+
+                // ── SECTION 1: Basic info ──────────────────────────
+                _FormSectionLabel(
+                  icon: Icons.restaurant_menu_outlined,
+                  title: 'Basic info',
                 ),
-              ),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Sold directly to customers'),
-                subtitle: const Text(
-                  'Turn off for an intermediate component (e.g. Espresso Base)',
-                ),
-                value: _isSellable,
-                activeThumbColor: AppColors.primary,
-                onChanged: (v) => setState(() => _isSellable = v),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
+                const SizedBox(height: 12),
+
+                TextField(
+                  controller: _nameController,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Product name *',
+                    hintText: 'e.g. Spanish Latte, Espresso Base',
+                    prefixIcon: Icon(Icons.restaurant_menu_outlined),
                   ),
-                  child: _saving
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          widget.existing == null
-                              ? 'Save Product'
-                              : 'Update Product',
-                        ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+
+                Text(
+                  'Sold / produced in *',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _units
+                      .map(
+                        (u) => ChoiceChip(
+                          label: Text(u),
+                          selected: _unit == u,
+                          onSelected: (_) => setState(() => _unit = u),
+                          selectedColor: AppColors.primary.withValues(
+                            alpha: 0.16,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 16),
+
+                TextField(
+                  controller: _priceController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: _isSellable ? 'Sell price *' : 'Sell price',
+                    hintText: _isSellable
+                        ? 'Required for items sold directly'
+                        : 'Optional — components aren\'t sold on their own',
+                    prefixText: '₱ ',
+                    prefixIcon: const Icon(Icons.sell_outlined),
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                if (_productType != ProductType.intermediate)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Sold directly to customers'),
+                    subtitle: const Text(
+                      'Turn off for intermediate components (e.g. Espresso Base)',
+                    ),
+                    value: _isSellable,
+                    activeThumbColor: AppColors.primary,
+                    onChanged: (v) => setState(() => _isSellable = v),
+                  ),
+
+                const SizedBox(height: 24),
+
+                // ── SECTION 2: Product identity ────────────────────
+                _FormSectionLabel(
+                  icon: Icons.badge_outlined,
+                  title: 'Product identity',
+                ),
+                const SizedBox(height: 12),
+
+                // SKU, barcode, category, type, tracking, description.
+                ProductIdentityFields(
+                  skuController: _skuController,
+                  barcodeController: _barcodeController,
+                  descriptionController: _descriptionController,
+                  categoryId: _categoryId,
+                  productType: _productType,
+                  trackingType: _trackingType,
+                  editingProductId: widget.existing?.id,
+                  onCategoryChanged: (id) => setState(() => _categoryId = id),
+                  onScan: _saving ? null : _scanBarcode,
+                  onTypeChanged: (type) => setState(() {
+                    _productType = type;
+                    _trackingType = type.defaultTracking;
+                    if (type == ProductType.intermediate) _isSellable = false;
+                  }),
+                  onTrackingChanged: (tracking) =>
+                      setState(() => _trackingType = tracking),
+                ),
+
+                const SizedBox(height: 28),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: FilledButton(
+                    onPressed: _saving ? null : _save,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                    ),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            widget.existing == null
+                                ? 'Save Product'
+                                : 'Update Product',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                  ),
+                ),
+
+                // This keeps the button visibly away from the bottom edge.
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
       ),
@@ -623,8 +969,37 @@ class _ProductFormState extends ConsumerState<_ProductForm> {
   }
 }
 
+class _FormSectionLabel extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  const _FormSectionLabel({required this.icon, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(icon, size: 17, color: scheme.primary),
+        const SizedBox(width: 7),
+        Text(
+          title,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+            color: scheme.onSurface,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Divider(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+        ),
+      ],
+    );
+  }
+}
+
 // ============================================================
-// PRODUCT DETAIL — recipe editor + producibility + record production
+// PRODUCT DETAIL — recipe editor + producibility
 // ============================================================
 
 class ProductDetailPage extends ConsumerWidget {
@@ -633,6 +1008,11 @@ class ProductDetailPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (!ref.watch(canProvider(BosPermission.inventoryView))) {
+      return const _InventoryNoAccessView();
+    }
+    final canEdit = ref.watch(canProvider(BosPermission.inventoryEdit));
+    final canCreate = ref.watch(canProvider(BosPermission.inventoryCreate));
     final scheme = Theme.of(context).colorScheme;
     final producibilityAsync = ref.watch(producibilityProvider(product.id));
     final recipeAsync = ref.watch(_recipeWithComponentsProvider(product.id));
@@ -642,21 +1022,23 @@ class ProductDetailPage extends ConsumerWidget {
       appBar: AppBar(
         title: Text(product.name, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              useSafeArea: true,
-              backgroundColor: Colors.transparent,
-              builder: (_) => _ProductForm(existing: product),
+          if (canEdit)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                useSafeArea: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) => _ProductForm(existing: product),
+              ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded),
-            tooltip: 'Delete product',
-            onPressed: () => _confirmDeleteProduct(context, ref),
-          ),
+          if (canEdit)
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded),
+              tooltip: 'Delete product',
+              onPressed: () => _confirmDeleteProduct(context, ref),
+            ),
         ],
       ),
       body: ListView(
@@ -685,20 +1067,6 @@ class ProductDetailPage extends ConsumerWidget {
               );
             },
           ),
-          const SizedBox(height: 16),
-          if (product.isSellable)
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => _openRecordProductionSheet(context),
-                icon: const Icon(Icons.point_of_sale_outlined),
-                label: const Text('Record Sale / Production'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-              ),
-            ),
           const SizedBox(height: 24),
           Row(
             children: [
@@ -710,22 +1078,32 @@ class ProductDetailPage extends ConsumerWidget {
                   ),
                 ),
               ),
-              TextButton.icon(
-                onPressed: () => _openAddComponentSheet(context, ref),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add Ingredient'),
-              ),
+              if (canCreate)
+                TextButton.icon(
+                  onPressed: () => _openAddComponentSheet(context, ref),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Ingredient'),
+                ),
             ],
           ),
           const SizedBox(height: 8),
           recipeAsync.when(
             data: (data) {
-              if (data.components.isEmpty) {
+              final recipe = data.recipe;
+              if (recipe == null || data.components.isEmpty) {
+                final message = recipe == null
+                    ? (canCreate
+                          ? 'No recipe defined yet — add ingredients above.'
+                          : 'No recipe defined yet.')
+                    : (canCreate
+                          ? 'No ingredients yet — add ingredients above.'
+                          : 'No ingredients have been added to this recipe.');
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Center(
                     child: Text(
-                      'No recipe defined yet — add ingredients above.',
+                      message,
+                      textAlign: TextAlign.center,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ),
@@ -733,11 +1111,11 @@ class ProductDetailPage extends ConsumerWidget {
               }
               return Column(
                 children: [
-                  if (data.recipe.yieldQuantity != 1)
+                  if (recipe.yieldQuantity != 1)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Yields ${data.recipe.yieldQuantity} ${product.unit} per batch',
+                        'Yields ${recipe.yieldQuantity} ${product.unit} per batch',
                         style: TextStyle(
                           color: scheme.onSurfaceVariant,
                           fontSize: 12,
@@ -749,7 +1127,8 @@ class ProductDetailPage extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: _ComponentTile(
                         component: c,
-                        recipeId: data.recipe.id,
+                        recipeId: recipe.id,
+                        productName: product.name,
                       ),
                     ),
                   ),
@@ -764,17 +1143,8 @@ class ProductDetailPage extends ConsumerWidget {
     );
   }
 
-  void _openRecordProductionSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _RecordProductionSheet(product: product),
-    );
-  }
-
   void _openAddComponentSheet(BuildContext context, WidgetRef ref) {
+    if (!_allowed(context, ref, BosPermission.inventoryCreate)) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -784,19 +1154,14 @@ class ProductDetailPage extends ConsumerWidget {
     );
   }
 
-  // ------------------------------------------------------------
-  // DELETE PRODUCT / RECIPE — checks whether this product is used
-  // as a sub-recipe ingredient elsewhere first, since deleting it
-  // out from under another recipe would silently break that
-  // recipe's cost/producibility calculation.
-  // ------------------------------------------------------------
   Future<void> _confirmDeleteProduct(
     BuildContext context,
     WidgetRef ref,
   ) async {
+    if (!_allowed(context, ref, BosPermission.inventoryEdit)) return;
     final db = ref.read(databaseProvider);
+    final audit = ref.read(auditLogServiceProvider);
 
-    // Find any OTHER recipe that uses this product as a component.
     final referencingComponents = await (db.select(
       db.recipeComponents,
     )..where((c) => c.componentProductId.equals(product.id))).get();
@@ -856,9 +1221,9 @@ class ProductDetailPage extends ConsumerWidget {
 
     if (confirmed != true) return;
     if (!context.mounted) return;
+    if (!_allowed(context, ref, BosPermission.inventoryEdit)) return;
 
     await db.transaction(() async {
-      // Remove this product's own recipe (and its components).
       final ownRecipe = await (db.select(
         db.recipes,
       )..where((r) => r.productId.equals(product.id))).getSingleOrNull();
@@ -871,8 +1236,6 @@ class ProductDetailPage extends ConsumerWidget {
         )..where((r) => r.id.equals(ownRecipe.id))).go();
       }
 
-      // Remove any OTHER recipe's line that used this product as an
-      // ingredient, so nothing is left pointing at a deleted product.
       await (db.delete(
         db.recipeComponents,
       )..where((c) => c.componentProductId.equals(product.id))).go();
@@ -880,12 +1243,38 @@ class ProductDetailPage extends ConsumerWidget {
       await (db.delete(
         db.products,
       )..where((p) => p.id.equals(product.id))).go();
+
+      await audit.record(
+        AuditEvent(
+          module: AuditModule.inventory,
+          actionType: AuditActionType.delete,
+          action: 'inventory.product_deleted',
+          entityType: 'products',
+          entityId: product.id,
+          entityLabel: product.name,
+          before: {
+            'name': product.name,
+            'unit': product.unit,
+            'sellPrice': product.sellPrice,
+            'isSellable': product.isSellable,
+            'sku': product.sku,
+            'barcode': product.barcode,
+          },
+          details: {
+            'hadOwnRecipe': ownRecipe != null,
+            'usedAsIngredientIn': parentProductNames.toList(),
+            'ingredientRowsRemovedFromOtherRecipes':
+                referencingComponents.length,
+          },
+        ),
+      );
     });
 
     ref.invalidate(productsProvider);
+    ref.invalidate(productListingsProvider);
     ref.read(ledgerVersionProvider.notifier).state++;
 
-    if (context.mounted) Navigator.pop(context); // back to the Products list
+    if (context.mounted) Navigator.pop(context);
   }
 }
 
@@ -976,8 +1365,7 @@ class _ProducibilityHero extends StatelessWidget {
 }
 
 // ============================================================
-// PROFITABILITY CARD — cost, sell price, gross profit & margin,
-// with a per-ingredient cost breakdown (spec sections 15-17).
+// PROFITABILITY CARD
 // ============================================================
 
 class _ProfitabilityCard extends ConsumerWidget {
@@ -1112,7 +1500,7 @@ class _StatColumn extends StatelessWidget {
 // ============================================================
 
 class _RecipeWithComponents {
-  final Recipe recipe;
+  final Recipe? recipe;
   final List<_ComponentDisplay> components;
   _RecipeWithComponents({required this.recipe, required this.components});
 }
@@ -1128,16 +1516,28 @@ final _recipeWithComponentsProvider =
       ref,
       productId,
     ) async {
+      // Recipe data is affected by catalog changes too. In particular, when
+      // a supply is archived/deleted from the Supplies catalog, its
+      // recipe-component rows are removed by the catalog deletion flow.
+      // Watching ledgerVersionProvider makes any already-open Product Detail
+      // page immediately reload its recipe instead of keeping stale cached
+      // ingredient data on screen.
+      ref.watch(ledgerVersionProvider);
+
       final db = ref.watch(databaseProvider);
 
-      var recipe = await (db.select(
+      final recipe = await (db.select(
         db.recipes,
       )..where((r) => r.productId.equals(productId))).getSingleOrNull();
-      recipe ??= await _ensureRecipeExists(db, productId);
+      if (recipe == null) {
+        // Reading a product must not create a recipe as a side effect.
+        // The recipe is created when an authorized user adds its first item.
+        return _RecipeWithComponents(recipe: null, components: const []);
+      }
 
       final rawComponents = await (db.select(
         db.recipeComponents,
-      )..where((c) => c.recipeId.equals(recipe!.id))).get();
+      )..where((c) => c.recipeId.equals(recipe.id))).get();
 
       final displayed = <_ComponentDisplay>[];
       for (final c in rawComponents) {
@@ -1166,15 +1566,23 @@ Future<Recipe> _ensureRecipeExists(AppDatabase db, String productId) async {
 }
 
 // ============================================================
-// COMPONENT TILE (with remove)
+// COMPONENT TILE
 // ============================================================
 
 class _ComponentTile extends ConsumerWidget {
   final _ComponentDisplay component;
   final String recipeId;
-  const _ComponentTile({required this.component, required this.recipeId});
+  final String productName;
+
+  const _ComponentTile({
+    required this.component,
+    required this.recipeId,
+    required this.productName,
+  });
 
   Future<void> _editQuantity(BuildContext context, WidgetRef ref) async {
+    if (!_allowed(context, ref, BosPermission.inventoryEdit)) return;
+    final audit = ref.read(auditLogServiceProvider);
     final db = ref.read(databaseProvider);
     final c = component.raw;
 
@@ -1187,16 +1595,35 @@ class _ComponentTile extends ConsumerWidget {
       ),
     );
 
-    if (result == null) return;
+    if (result == null || !context.mounted) return;
+    if (result.quantity == c.quantityRequired && result.unit == c.unit) {
+      return;
+    }
+    if (!_allowed(context, ref, BosPermission.inventoryEdit)) return;
 
-    await (db.update(
-      db.recipeComponents,
-    )..where((rc) => rc.id.equals(c.id))).write(
-      RecipeComponentsCompanion(
-        quantityRequired: Value(result.quantity),
-        unit: Value(result.unit),
-      ),
-    );
+    await db.transaction(() async {
+      await (db.update(
+        db.recipeComponents,
+      )..where((rc) => rc.id.equals(c.id))).write(
+        RecipeComponentsCompanion(
+          quantityRequired: Value(result.quantity),
+          unit: Value(result.unit),
+        ),
+      );
+      await audit.record(
+        AuditEvent(
+          module: AuditModule.inventory,
+          actionType: AuditActionType.update,
+          action: 'inventory.recipe_ingredient_updated',
+          entityType: 'recipe_components',
+          entityId: c.id,
+          entityLabel: '$productName → ${component.name}',
+          before: {'quantity': c.quantityRequired, 'unit': c.unit},
+          after: {'quantity': result.quantity, 'unit': result.unit},
+          details: {'recipeId': recipeId},
+        ),
+      );
+    });
 
     ref.invalidate(_recipeWithComponentsProvider);
     ref.read(ledgerVersionProvider.notifier).state++;
@@ -1205,6 +1632,7 @@ class _ComponentTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final canEdit = ref.watch(canProvider(BosPermission.inventoryEdit));
     final c = component.raw;
     return Container(
       padding: const EdgeInsets.all(13),
@@ -1230,43 +1658,75 @@ class _ComponentTile extends ConsumerWidget {
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
           ),
-          InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => _editQuantity(context, ref),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${c.quantityRequired} ${c.unit}',
-                    style: TextStyle(
-                      fontSize: 12,
+          if (canEdit)
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _editQuantity(context, ref),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${c.quantityRequired} ${c.unit}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.edit_outlined,
+                      size: 13,
                       color: scheme.onSurfaceVariant,
                     ),
-                  ),
-                  const SizedBox(width: 2),
-                  Icon(
-                    Icons.edit_outlined,
-                    size: 13,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Text(
+                '${c.quantityRequired} ${c.unit}',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close_rounded, size: 18),
-            visualDensity: VisualDensity.compact,
-            onPressed: () async {
-              final db = ref.read(databaseProvider);
-              await (db.delete(
-                db.recipeComponents,
-              )..where((rc) => rc.id.equals(c.id))).go();
-              ref.invalidate(_recipeWithComponentsProvider);
-              ref.read(ledgerVersionProvider.notifier).state++;
-            },
-          ),
+          if (canEdit)
+            IconButton(
+              icon: const Icon(Icons.close_rounded, size: 18),
+              visualDensity: VisualDensity.compact,
+              onPressed: () async {
+                if (!_allowed(context, ref, BosPermission.inventoryEdit)) {
+                  return;
+                }
+                final db = ref.read(databaseProvider);
+                final audit = ref.read(auditLogServiceProvider);
+                await db.transaction(() async {
+                  await (db.delete(
+                    db.recipeComponents,
+                  )..where((rc) => rc.id.equals(c.id))).go();
+                  await audit.record(
+                    AuditEvent(
+                      module: AuditModule.inventory,
+                      actionType: AuditActionType.delete,
+                      action: 'inventory.recipe_ingredient_removed',
+                      entityType: 'recipe_components',
+                      entityId: c.id,
+                      entityLabel: '$productName → ${component.name}',
+                      before: {
+                        'quantity': c.quantityRequired,
+                        'unit': c.unit,
+                        'type': c.componentType,
+                      },
+                      details: {'recipeId': recipeId},
+                    ),
+                  );
+                });
+                ref.invalidate(_recipeWithComponentsProvider);
+                ref.read(ledgerVersionProvider.notifier).state++;
+              },
+            ),
         ],
       ),
     );
@@ -1274,11 +1734,7 @@ class _ComponentTile extends ConsumerWidget {
 }
 
 // ============================================================
-// EDIT COMPONENT QUANTITY/UNIT DIALOG — lets an already-added
-// ingredient's amount be corrected without removing and re-adding
-// it. Saved changes bump ledgerVersionProvider, so producibility,
-// profitability, and the Supplies "Used in products" section all
-// recompute against the new quantity automatically.
+// EDIT COMPONENT QUANTITY/UNIT DIALOG
 // ============================================================
 
 class _QuantityUnitResult {
@@ -1387,7 +1843,7 @@ class _EditComponentQuantityDialogState
 }
 
 // ============================================================
-// ADD COMPONENT SHEET — pick a Supply OR another Product (nesting)
+// ADD COMPONENT SHEET
 // ============================================================
 
 class _AddComponentSheet extends ConsumerStatefulWidget {
@@ -1418,254 +1874,279 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
     final suppliesAsync = ref.watch(suppliesForPickerProvider);
     final productsAsync = ref.watch(productsProvider);
     final qty = double.tryParse(_qtyController.text);
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Container(
-        decoration: BoxDecoration(
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 16),
+        // Material (not a plain decorated Container), same reasoning as in
+        // _ProductForm above — keeps ink/background effects visible.
+        child: Material(
           color: scheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Add Ingredient',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _saving ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              Text(
-                'For every ${widget.product.unit} of ${widget.product.name}, how much of something does it use?',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-              ),
-              const SizedBox(height: 18),
-
-              _StepLabel(number: 1, text: 'What kind of ingredient is this?'),
-              const SizedBox(height: 8),
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(
-                    value: true,
-                    label: Text('Raw Supply'),
-                    icon: Icon(Icons.inventory_2_outlined, size: 16),
-                  ),
-                  ButtonSegment(
-                    value: false,
-                    label: Text('Sub-recipe'),
-                    icon: Icon(Icons.account_tree_outlined, size: 16),
-                  ),
-                ],
-                selected: {_isSupply},
-                onSelectionChanged: (s) => setState(() {
-                  _isSupply = s.first;
-                  _selectedId = null;
-                  _selectedUnit = null;
-                  _selectedStock = null;
-                }),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  _isSupply
-                      ? 'A raw material tracked in Supplies — flour, milk, cups, etc.'
-                      : 'Another product with its own recipe — e.g. an Espresso Base used inside this one.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-
-              _StepLabel(
-                number: 2,
-                text: _isSupply ? 'Which supply?' : 'Which product?',
-              ),
-              const SizedBox(height: 8),
-              if (_isSupply)
-                suppliesAsync.when(
-                  data: (supplies) => DropdownButtonFormField<String>(
-                    initialValue: _selectedId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Supply',
-                      prefixIcon: Icon(Icons.inventory_2_outlined),
-                    ),
-                    items: supplies
-                        .map(
-                          (s) => DropdownMenuItem(
-                            value: s.id,
-                            child: Text(
-                              '${s.name} — ${s.currentStock} ${s.stockUnit} in stock',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      final chosen = supplies.firstWhere((s) => s.id == v);
-                      setState(() {
-                        _selectedId = v;
-                        _selectedUnit = chosen
-                            .stockUnit; // default to the supply's own unit
-                        _selectedStock = chosen.currentStock;
-                      });
-                    },
-                  ),
-                  loading: () => const LinearProgressIndicator(),
-                  error: (_, __) => const Text('Unable to load supplies'),
-                )
-              else
-                productsAsync.when(
-                  data: (products) {
-                    final options = products
-                        .where((p) => p.id != widget.product.id)
-                        .toList();
-                    return DropdownButtonFormField<String>(
-                      initialValue: _selectedId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Product / Sub-recipe',
-                        prefixIcon: Icon(Icons.account_tree_outlined),
-                      ),
-                      items: options
-                          .map(
-                            (p) => DropdownMenuItem(
-                              value: p.id,
-                              child: Text(
-                                p.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        final chosen = options.firstWhere((p) => p.id == v);
-                        setState(() {
-                          _selectedId = v;
-                          _selectedUnit = chosen.unit;
-                          _selectedStock = null;
-                        });
-                      },
-                    );
-                  },
-                  loading: () => const LinearProgressIndicator(),
-                  error: (_, __) => const Text('Unable to load products'),
-                ),
-              const SizedBox(height: 18),
-
-              _StepLabel(number: 3, text: 'How much is needed?'),
-              const SizedBox(height: 8),
-              Row(
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      controller: _qtyController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Add Ingredient',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
-                      decoration: const InputDecoration(labelText: 'Quantity'),
-                      onChanged: (_) => setState(() {}),
+                      IconButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'For every ${widget.product.unit} of ${widget.product.name}, how much of something does it use?',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _selectedUnit,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: 'Unit'),
-                      items:
-                          (_selectedUnit == null
-                                  ? kStockUnitOptions
-                                  : compatibleStockUnits(_selectedUnit!))
+                  const SizedBox(height: 18),
+                  _StepLabel(
+                    number: 1,
+                    text: 'What kind of ingredient is this?',
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Raw Supply'),
+                        icon: Icon(Icons.inventory_2_outlined, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Sub-recipe'),
+                        icon: Icon(Icons.account_tree_outlined, size: 16),
+                      ),
+                    ],
+                    selected: {_isSupply},
+                    onSelectionChanged: (s) => setState(() {
+                      _isSupply = s.first;
+                      _selectedId = null;
+                      _selectedUnit = null;
+                      _selectedStock = null;
+                    }),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      _isSupply
+                          ? 'A raw material tracked in Supplies — flour, milk, cups, etc.'
+                          : 'Another product with its own recipe — e.g. an Espresso Base used inside this one.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _StepLabel(
+                    number: 2,
+                    text: _isSupply ? 'Which supply?' : 'Which product?',
+                  ),
+                  const SizedBox(height: 8),
+                  if (_isSupply)
+                    suppliesAsync.when(
+                      data: (supplies) => DropdownButtonFormField<String>(
+                        initialValue: _selectedId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Supply',
+                          prefixIcon: Icon(Icons.inventory_2_outlined),
+                        ),
+                        items: supplies
+                            .map(
+                              (s) => DropdownMenuItem(
+                                value: s.id,
+                                child: Text(
+                                  '${s.name} — ${s.currentStock} ${s.stockUnit} in stock',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          final chosen = supplies.firstWhere((s) => s.id == v);
+                          setState(() {
+                            _selectedId = v;
+                            _selectedUnit = chosen.stockUnit;
+                            _selectedStock = chosen.currentStock;
+                          });
+                        },
+                      ),
+                      loading: () => const LinearProgressIndicator(),
+                      error: (_, __) => const Text('Unable to load supplies'),
+                    )
+                  else
+                    productsAsync.when(
+                      data: (products) {
+                        final options = products
+                            .where((p) => p.id != widget.product.id)
+                            .toList();
+                        return DropdownButtonFormField<String>(
+                          initialValue: _selectedId,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Product / Sub-recipe',
+                            prefixIcon: Icon(Icons.account_tree_outlined),
+                          ),
+                          items: options
                               .map(
-                                (u) => DropdownMenuItem(
-                                  value: u,
+                                (p) => DropdownMenuItem(
+                                  value: p.id,
                                   child: Text(
-                                    kStockUnitLabels[u] ?? u,
+                                    p.name,
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                               )
                               .toList(),
-                      onChanged: _selectedId == null
-                          ? null
-                          : (v) => setState(() => _selectedUnit = v),
+                          onChanged: (v) {
+                            final chosen = options.firstWhere((p) => p.id == v);
+                            setState(() {
+                              _selectedId = v;
+                              _selectedUnit = chosen.unit;
+                              _selectedStock = null;
+                            });
+                          },
+                        );
+                      },
+                      loading: () => const LinearProgressIndicator(),
+                      error: (_, __) => const Text('Unable to load products'),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline_rounded,
-                      size: 14,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        qty != null && _selectedUnit != null
-                            ? (_selectedStock != null
-                                  ? 'You have ${_selectedStock!.toStringAsFixed(_selectedStock! % 1 == 0 ? 0 : 1)} ${_selectedUnit!} available; this recipe needs $qty $_selectedUnit for each ${widget.product.unit}.'
-                                  : 'This means: making 1 ${widget.product.unit} of ${widget.product.name} uses $qty $_selectedUnit of this.')
-                            : 'Quantity is needed per single ${widget.product.unit} — if a batch makes more than one, set that on the recipe\'s yield, not here.',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: scheme.onSurfaceVariant,
+                  const SizedBox(height: 18),
+                  _StepLabel(number: 3, text: 'How much is needed?'),
+                  const SizedBox(height: 8),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: _qtyController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Quantity',
+                          ),
+                          onChanged: (_) => setState(() {}),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _selectedUnit,
+                          isExpanded: true,
+                          decoration: const InputDecoration(labelText: 'Unit'),
+                          items:
+                              (_selectedUnit == null
+                                      ? kStockUnitOptions
+                                      : compatibleStockUnits(_selectedUnit!))
+                                  .map(
+                                    (u) => DropdownMenuItem(
+                                      value: u,
+                                      child: Text(
+                                        kStockUnitLabels[u] ?? u,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                          onChanged: _selectedId == null
+                              ? null
+                              : (v) => setState(() => _selectedUnit = v),
+                        ),
+                      ),
+                    ],
                   ),
-                  child: _saving
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          size: 14,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            qty != null && _selectedUnit != null
+                                ? (_selectedStock != null
+                                      ? 'You have ${_selectedStock!.toStringAsFixed(_selectedStock! % 1 == 0 ? 0 : 1)} ${_selectedUnit!} available; this recipe needs $qty $_selectedUnit for each ${widget.product.unit}.'
+                                      : 'This means: making 1 ${widget.product.unit} of ${widget.product.name} uses $qty $_selectedUnit of this.')
+                                : 'Quantity is needed per single ${widget.product.unit} — if a batch makes more than one, set that on the recipe\'s yield, not here.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: scheme.onSurfaceVariant,
+                            ),
                           ),
-                        )
-                      : const Text('Add to Recipe'),
-                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: FilledButton(
+                      onPressed: _saving ? null : _save,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                      ),
+                      child: _saving
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              'Add to Recipe',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -1681,28 +2162,63 @@ class _AddComponentSheetState extends ConsumerState<_AddComponentSheet> {
       return;
     }
 
+    if (!_allowed(context, ref, BosPermission.inventoryCreate)) return;
     setState(() => _saving = true);
     final db = ref.read(databaseProvider);
+    final audit = ref.read(auditLogServiceProvider);
 
     try {
-      var recipe = await (db.select(
-        db.recipes,
-      )..where((r) => r.productId.equals(widget.product.id))).getSingleOrNull();
-      recipe ??= await _ensureRecipeExists(db, widget.product.id);
+      if (!_allowed(context, ref, BosPermission.inventoryCreate)) return;
+      final componentId = const Uuid().v4();
+      await db.transaction(() async {
+        var recipe =
+            await (db.select(db.recipes)
+                  ..where((r) => r.productId.equals(widget.product.id)))
+                .getSingleOrNull();
+        recipe ??= await _ensureRecipeExists(db, widget.product.id);
 
-      await db
-          .into(db.recipeComponents)
-          .insert(
-            RecipeComponentsCompanion.insert(
-              id: const Uuid().v4(),
-              recipeId: recipe.id,
-              componentType: _isSupply ? 'supply' : 'product',
-              supplyId: Value(_isSupply ? _selectedId : null),
-              componentProductId: Value(_isSupply ? null : _selectedId),
-              quantityRequired: qty,
-              unit: _selectedUnit!.trim(),
-            ),
-          );
+        final ingredientName = _isSupply
+            ? (await (db.select(
+                    db.supplies,
+                  )..where((s) => s.id.equals(_selectedId!))).getSingleOrNull())
+                  ?.name
+            : (await (db.select(
+                    db.products,
+                  )..where((p) => p.id.equals(_selectedId!))).getSingleOrNull())
+                  ?.name;
+
+        await db
+            .into(db.recipeComponents)
+            .insert(
+              RecipeComponentsCompanion.insert(
+                id: componentId,
+                recipeId: recipe.id,
+                componentType: _isSupply ? 'supply' : 'product',
+                supplyId: Value(_isSupply ? _selectedId : null),
+                componentProductId: Value(_isSupply ? null : _selectedId),
+                quantityRequired: qty,
+                unit: _selectedUnit!.trim(),
+              ),
+            );
+
+        await audit.record(
+          AuditEvent(
+            module: AuditModule.inventory,
+            actionType: AuditActionType.create,
+            action: 'inventory.recipe_ingredient_added',
+            entityType: 'recipe_components',
+            entityId: componentId,
+            entityLabel:
+                '${widget.product.name} → ${ingredientName ?? _selectedId}',
+            after: {
+              'type': _isSupply ? 'supply' : 'product',
+              'quantity': qty,
+              'unit': _selectedUnit!.trim(),
+            },
+            details: {'recipeId': recipe.id},
+          ),
+        );
+      });
 
       ref.invalidate(_recipeWithComponentsProvider);
       ref.read(ledgerVersionProvider.notifier).state++;
@@ -1746,298 +2262,5 @@ class _StepLabel extends StatelessWidget {
         ),
       ],
     );
-  }
-}
-
-// ============================================================
-// RECORD PRODUCTION SHEET
-// ============================================================
-
-final _productionPaymentAccountsProvider = FutureProvider<List<Account>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return (db.select(db.accounts)..where(
-        (a) =>
-            a.businessId.equals(kCurrentBusinessId) &
-            a.isPaymentAccount.equals(true) &
-            a.isActive.equals(true),
-      ))
-      .get();
-});
-
-class _RecordProductionSheet extends ConsumerStatefulWidget {
-  final Product product;
-  const _RecordProductionSheet({required this.product});
-
-  @override
-  ConsumerState<_RecordProductionSheet> createState() =>
-      _RecordProductionSheetState();
-}
-
-class _RecordProductionSheetState
-    extends ConsumerState<_RecordProductionSheet> {
-  final _qtyController = TextEditingController(text: '1');
-  String? _paymentAccountId;
-  bool _stockOnly = false; // when true, skip the income/ledger side entirely
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _qtyController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final producibilityAsync = ref.watch(
-      producibilityProvider(widget.product.id),
-    );
-    final accountsAsync = ref.watch(_productionPaymentAccountsProvider);
-    final hasSellPrice = widget.product.sellPrice != null;
-    final qty = double.tryParse(_qtyController.text);
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Record Sale — ${widget.product.name}',
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _saving ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              producibilityAsync.when(
-                data: (r) => Text(
-                  'Currently makeable: ${r.maxUnits} ${widget.product.unit}',
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                ),
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _qtyController,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'Quantity sold',
-                  suffixText: widget.product.unit,
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-
-              if (!hasSellPrice) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.info_outline_rounded,
-                        size: 16,
-                        color: Colors.orange,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'No sell price is set on this product, so only ingredient stock will be deducted — no income will be recorded. Set a price (edit the product) to record real sales here.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ] else ...[
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Stock deduction only'),
-                  subtitle: const Text(
-                    'Skip recording income — e.g. for a free sample or staff consumption',
-                  ),
-                  value: _stockOnly,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: (v) => setState(() => _stockOnly = v),
-                ),
-                if (!_stockOnly) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Paid via',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  accountsAsync.when(
-                    data: (accounts) => Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: accounts
-                          .map(
-                            (a) => ChoiceChip(
-                              label: Text(a.name),
-                              selected: _paymentAccountId == a.id,
-                              onSelected: (_) =>
-                                  setState(() => _paymentAccountId = a.id),
-                              selectedColor: AppColors.primary.withValues(
-                                alpha: 0.16,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                    loading: () => const LinearProgressIndicator(),
-                    error: (_, __) => const SizedBox.shrink(),
-                  ),
-                  if (qty != null && qty > 0) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        'Will record ₱${((widget.product.sellPrice! * qty) / 100).toStringAsFixed(2)} in income',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ],
-
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: const TextStyle(
-                      color: Colors.redAccent,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                  ),
-                  child: _saving
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          hasSellPrice && !_stockOnly
-                              ? 'Record Sale'
-                              : 'Deduct Ingredients',
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _save() async {
-    final qty = double.tryParse(_qtyController.text);
-    if (qty == null || qty <= 0) {
-      setState(() => _error = 'Enter a valid quantity.');
-      return;
-    }
-
-    final recordIncome = widget.product.sellPrice != null && !_stockOnly;
-    if (recordIncome && _paymentAccountId == null) {
-      setState(
-        () => _error =
-            'Choose a payment account, or turn on "Stock deduction only".',
-      );
-      return;
-    }
-
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-
-    try {
-      final service = ref.read(productionServiceProvider);
-      if (recordIncome) {
-        await service.sellProduct(
-          productId: widget.product.id,
-          quantity: qty,
-          paymentAccountId: _paymentAccountId!,
-        );
-      } else {
-        await service.recordProduction(
-          productId: widget.product.id,
-          quantity: qty,
-          referenceType: 'product_sale',
-        );
-      }
-      ref.read(ledgerVersionProvider.notifier).state++;
-      ref.invalidate(producibilityProvider);
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
   }
 }

@@ -13,6 +13,10 @@
 // Same invisible-ledger principle as everywhere else: the owner
 // just taps "Record Sale" or "Record Payment" and enters an amount.
 
+import 'package:bos_application/core/audit/audit_enums.dart';
+import 'package:bos_application/core/audit/audit_writer.dart';
+import 'package:bos_application/features/transactions/domain/receipt_text.dart';
+import 'package:bos_application/features/transactions/presentation/screens/pos_history_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -22,6 +26,8 @@ import 'package:drift/drift.dart' hide Column, Table;
 import '../../../../core/branding/branding.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
+import '../../../../core/ledger/ledger_service.dart';
+import '../../../../core/sync/sync_tracker.dart';
 import '../../../transactions/presentation/screens/transaction_page.dart'
     show ledgerVersionProvider, kCurrentBusinessId;
 
@@ -56,9 +62,12 @@ final customerBalanceProvider = FutureProvider.family<int, String>((
       .customSelect(
         '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM income_transactions
-    WHERE customer_id = ? AND payment_account_id IS NULL
+    WHERE customer_id = ? AND business_id = ? AND payment_account_id IS NULL
     ''',
-        variables: [Variable.withString(customerId)],
+        variables: [
+          Variable.withString(customerId),
+          Variable.withString(kCurrentBusinessId),
+        ],
       )
       .getSingle();
 
@@ -66,9 +75,12 @@ final customerBalanceProvider = FutureProvider.family<int, String>((
       .customSelect(
         '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM receivable_payments
-    WHERE customer_id = ? AND status = 'completed'
+    WHERE customer_id = ? AND business_id = ? AND status = 'completed'
     ''',
-        variables: [Variable.withString(customerId)],
+        variables: [
+          Variable.withString(customerId),
+          Variable.withString(kCurrentBusinessId),
+        ],
       )
       .getSingle();
 
@@ -114,13 +126,21 @@ final customerActivityProvider =
 
       final sales =
           await (db.select(db.incomeTransactions)
-                ..where((i) => i.customerId.equals(customerId))
+                ..where(
+                  (i) =>
+                      i.customerId.equals(customerId) &
+                      i.businessId.equals(kCurrentBusinessId),
+                )
                 ..orderBy([(i) => OrderingTerm.desc(i.txnDate)]))
               .get();
 
       final payments =
           await (db.select(db.receivablePayments)
-                ..where((p) => p.customerId.equals(customerId))
+                ..where(
+                  (p) =>
+                      p.customerId.equals(customerId) &
+                      p.businessId.equals(kCurrentBusinessId),
+                )
                 ..orderBy([(p) => OrderingTerm.desc(p.paymentDate)]))
               .get();
 
@@ -150,6 +170,60 @@ final customerActivityProvider =
       return items;
     });
 
+/// Every POS order linked to one customer, newest first (voided ones included,
+/// shown with a VOID tag).
+final customerOrdersProvider = StreamProvider.family<List<PosSale>, String>((
+  ref,
+  customerId,
+) {
+  final db = ref.watch(databaseProvider);
+  return (db.select(db.posSales)
+        ..where(
+          (s) =>
+              s.businessId.equals(kCurrentBusinessId) &
+              s.customerId.equals(customerId),
+        )
+        ..orderBy([(s) => OrderingTerm.desc(s.saleDate)]))
+      .watch();
+});
+
+class CustomerOrderStats {
+  CustomerOrderStats();
+  int count = 0;
+  int totalCents = 0;
+  DateTime? last;
+}
+
+/// Order count / total spent / last order for every customer (voided sales
+/// are not counted).
+final customerOrderStatsProvider =
+    StreamProvider<Map<String, CustomerOrderStats>>((ref) {
+      final db = ref.watch(databaseProvider);
+      return (db.select(db.posSales)..where(
+            (s) =>
+                s.businessId.equals(kCurrentBusinessId) &
+                s.customerId.isNotNull() &
+                s.isVoided.equals(false) &
+                s.isStockOnly.equals(false),
+          ))
+          .watch()
+          .map((rows) {
+            final out = <String, CustomerOrderStats>{};
+            for (final s in rows) {
+              final stats = out.putIfAbsent(
+                s.customerId!,
+                () => CustomerOrderStats(),
+              );
+              stats.count++;
+              stats.totalCents += s.totalAmount;
+              if (stats.last == null || s.saleDate.isAfter(stats.last!)) {
+                stats.last = s.saleDate;
+              }
+            }
+            return out;
+          });
+    });
+
 class _ActivityItem {
   final bool isSale; // false = a payment received
   final int amount;
@@ -175,27 +249,44 @@ class CustomerService {
   final AppDatabase db;
   CustomerService(this.db);
 
-  Future<void> addCustomer({
+  Future<String> addCustomer({
     required String name,
+    String? address,
+    String? tin,
     String? phone,
     String? notes,
   }) async {
-    await db
-        .into(db.customers)
-        .insert(
-          CustomersCompanion.insert(
-            id: const Uuid().v4(),
-            businessId: kCurrentBusinessId,
-            name: name,
-            phone: Value(phone),
-            notes: Value(notes),
-          ),
-        );
+    final id = const Uuid().v4();
+    await db.transaction(() async {
+      await db
+          .into(db.customers)
+          .insert(
+            CustomersCompanion.insert(
+              id: id,
+              businessId: kCurrentBusinessId,
+              name: name,
+              phone: Value(phone),
+              address: Value(address),
+              tin: Value(tin),
+              notes: Value(notes),
+            ),
+          );
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'customers',
+        entityId: id,
+        operation: SyncOp.create,
+      );
+    });
+    return id;
   }
 
   Future<void> updateCustomer(
     Customer customer, {
     required String name,
+    String? address,
+    String? tin,
     String? phone,
     String? notes,
   }) async {
@@ -205,19 +296,56 @@ class CustomerService {
       CustomersCompanion(
         name: Value(name),
         phone: Value(phone),
+        address: Value(address),
+        tin: Value(tin),
         notes: Value(notes),
       ),
     );
   }
 
   Future<void> deleteCustomer(String customerId) async {
-    await (db.delete(
-      db.receivablePayments,
-    )..where((p) => p.customerId.equals(customerId))).go();
-    await (db.update(db.incomeTransactions)
-          ..where((i) => i.customerId.equals(customerId)))
-        .write(const IncomeTransactionsCompanion(customerId: Value(null)));
-    await (db.delete(db.customers)..where((c) => c.id.equals(customerId))).go();
+    await db.transaction(() async {
+      final customer = await (db.select(
+        db.customers,
+      )..where((c) => c.id.equals(customerId))).getSingleOrNull();
+      if (customer == null) return;
+
+      final payments = await (db.select(
+        db.receivablePayments,
+      )..where((p) => p.customerId.equals(customerId))).get();
+      final sales = await (db.select(
+        db.incomeTransactions,
+      )..where((i) => i.customerId.equals(customerId))).get();
+
+      await (db.delete(
+        db.receivablePayments,
+      )..where((p) => p.customerId.equals(customerId))).go();
+      await (db.update(db.incomeTransactions)
+            ..where((i) => i.customerId.equals(customerId)))
+          .write(const IncomeTransactionsCompanion(customerId: Value(null)));
+      await (db.delete(
+        db.customers,
+      )..where((c) => c.id.equals(customerId))).go();
+
+      await AuditWriter.write(
+        db,
+        businessId: customer.businessId,
+        userId: null,
+        action: 'finance.customer_deleted',
+        module: AuditModule.finance,
+        actionType: AuditActionType.delete,
+        entityType: 'customers',
+        entityId: customerId,
+        entityLabel: customer.name,
+        before: {'name': customer.name, 'phone': customer.phone},
+        details: {
+          'paymentCount': payments.length,
+          'paymentTotal': payments.fold<int>(0, (s, p) => s + p.amount),
+          'unlinkedSaleCount': sales.length,
+          'unlinkedSaleTotal': sales.fold<int>(0, (s, i) => s + i.amount),
+        },
+      );
+    });
   }
 
   Future<void> recordSale({
@@ -228,52 +356,58 @@ class CustomerService {
     String? paymentAccountId,
     String? notes,
   }) async {
-    await db.transaction(() async {
-      final entryId = const Uuid().v4();
-      final debitAccountId = isOnCredit
-          ? 'acc_ar_$kCurrentBusinessId'
-          : (paymentAccountId ?? 'acc_ar_$kCurrentBusinessId');
+    if (amount <= 0) {
+      throw ArgumentError('Sale amount must be greater than zero.');
+    }
 
-      await db
-          .into(db.journalEntries)
-          .insert(
-            JournalEntriesCompanion.insert(
-              id: entryId,
-              businessId: kCurrentBusinessId,
-              entryDate: date,
-              sourceType: 'income',
-              description: Value(notes),
-            ),
-          );
-      await db
-          .into(db.ledgerLines)
-          .insert(
-            LedgerLinesCompanion.insert(
-              id: const Uuid().v4(),
-              journalEntryId: entryId,
-              accountId: debitAccountId,
-              debit: Value(amount),
-            ),
-          );
-      await db
-          .into(db.ledgerLines)
-          .insert(
-            LedgerLinesCompanion.insert(
-              id: const Uuid().v4(),
-              journalEntryId: entryId,
-              accountId: 'acc_sales_$kCurrentBusinessId',
-              credit: Value(amount),
-            ),
-          );
+    await db.transaction(() async {
+      final customer =
+          await (db.select(db.customers)..where(
+                (c) =>
+                    c.id.equals(customerId) &
+                    c.businessId.equals(kCurrentBusinessId),
+              ))
+              .getSingleOrNull();
+      if (customer == null) {
+        throw StateError('That customer does not belong to this business.');
+      }
+
+      final ledger = LedgerService(db);
+      final salesIncome = await ledger.requireAccount(
+        'acc_sales_$kCurrentBusinessId',
+        kCurrentBusinessId,
+      );
+      final debitAccountId = isOnCredit
+          ? (await ledger.receivableAccount(kCurrentBusinessId)).id
+          : (await ledger.requirePaymentAccount(
+              paymentAccountId!,
+              kCurrentBusinessId,
+            )).id;
+
+      final saleId = const Uuid().v4();
+
+      await ledger.postSimpleEntry(
+        businessId: kCurrentBusinessId,
+        date: date,
+        amount: amount,
+        debitAccountId: debitAccountId,
+        creditAccountId: salesIncome.id,
+        sourceType: 'income',
+        sourceId: saleId,
+        description: notes,
+      );
 
       await db
           .into(db.incomeTransactions)
           .insert(
             IncomeTransactionsCompanion.insert(
-              id: const Uuid().v4(),
+              id: saleId,
               businessId: kCurrentBusinessId,
               txnDate: date,
-              categoryId: 'sale_$kCurrentBusinessId',
+              categoryId: AppDatabase.cloudCompatibleDefaultId(
+                'categories',
+                'Sale_$kCurrentBusinessId',
+              ),
               amount: amount,
               customerId: Value(customerId),
               paymentAccountId: Value(isOnCredit ? null : paymentAccountId),
@@ -281,62 +415,120 @@ class CustomerService {
               status: const Value('completed'),
             ),
           );
+      await AuditWriter.write(
+        db,
+        businessId: kCurrentBusinessId,
+        userId: null,
+        action: 'sales.customer_sale_recorded',
+        module: AuditModule.sales,
+        actionType: AuditActionType.create,
+        entityType: 'income_transactions',
+        entityId: saleId,
+        entityLabel: customer.name,
+        after: {
+          'amount': amount,
+          'isOnCredit': isOnCredit,
+          'paymentAccountId': isOnCredit ? null : paymentAccountId,
+          'date': date,
+        },
+        details: {'notes': notes},
+      );
     });
   }
 
   Future<void> recordPayment({
     required String customerId,
     required int amount,
-    String? paymentAccountId,
+    required String paymentAccountId,
     required DateTime date,
-    required bool isOnCredit,
     String? notes,
   }) async {
-    if (!isOnCredit && paymentAccountId == null) {
-      throw ArgumentError('paymentAccountId is required unless on credit.');
+    if (amount <= 0) {
+      throw ArgumentError('Payment amount must be greater than zero.');
     }
 
     await db.transaction(() async {
+      final customer =
+          await (db.select(db.customers)..where(
+                (c) =>
+                    c.id.equals(customerId) &
+                    c.businessId.equals(kCurrentBusinessId),
+              ))
+              .getSingleOrNull();
+      if (customer == null) {
+        throw StateError('That customer does not belong to this business.');
+      }
+
+      // Same outstanding-balance rule as supplier payments: credit sales
+      // increase what is owed, completed payments decrease it. Never allow
+      // a payment above what this customer actually owes.
+      final salesRow = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM income_transactions
+        WHERE customer_id = ?
+          AND business_id = ?
+          AND payment_account_id IS NULL
+        ''',
+            variables: [
+              Variable.withString(customerId),
+              Variable.withString(kCurrentBusinessId),
+            ],
+          )
+          .getSingle();
+
+      final paymentsRow = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM receivable_payments
+        WHERE customer_id = ?
+          AND business_id = ?
+          AND status = 'completed'
+        ''',
+            variables: [
+              Variable.withString(customerId),
+              Variable.withString(kCurrentBusinessId),
+            ],
+          )
+          .getSingle();
+
+      final totalSales = salesRow.read<int>('total');
+      final totalPayments = paymentsRow.read<int>('total');
+
+      final outstandingBalance = totalSales - totalPayments;
+
+      if (outstandingBalance <= 0) {
+        throw StateError('This customer has no outstanding balance to pay.');
+      }
+
+      if (amount > outstandingBalance) {
+        throw StateError(
+          'Payment cannot exceed the outstanding balance of '
+          '${_peso(outstandingBalance)}.',
+        );
+      }
+
       final paymentId = const Uuid().v4();
 
-      // An on-credit payment is just a pending promise — no cash moved,
-      // so nothing gets posted to the ledger until it's actually received.
-      if (!isOnCredit) {
-        final entryId = const Uuid().v4();
+      // Customer payment:
+      // Dr Payment Account
+      // Cr Accounts Receivable
+      final ledger = LedgerService(db);
+      final receivable = await ledger.receivableAccount(kCurrentBusinessId);
+      await ledger.requirePaymentAccount(paymentAccountId, kCurrentBusinessId);
 
-        await db
-            .into(db.journalEntries)
-            .insert(
-              JournalEntriesCompanion.insert(
-                id: entryId,
-                businessId: kCurrentBusinessId,
-                entryDate: date,
-                sourceType: 'receivable_payment',
-                sourceId: Value(paymentId),
-                description: Value(notes),
-              ),
-            );
-        await db
-            .into(db.ledgerLines)
-            .insert(
-              LedgerLinesCompanion.insert(
-                id: const Uuid().v4(),
-                journalEntryId: entryId,
-                accountId: paymentAccountId!,
-                debit: Value(amount),
-              ),
-            );
-        await db
-            .into(db.ledgerLines)
-            .insert(
-              LedgerLinesCompanion.insert(
-                id: const Uuid().v4(),
-                journalEntryId: entryId,
-                accountId: 'acc_ar_$kCurrentBusinessId',
-                credit: Value(amount),
-              ),
-            );
-      }
+      await ledger.postSimpleEntry(
+        businessId: kCurrentBusinessId,
+        date: date,
+        amount: amount,
+        debitAccountId: paymentAccountId,
+        creditAccountId: receivable.id,
+        sourceType: 'receivable_payment',
+        sourceId: paymentId,
+        description: notes,
+      );
 
       await db
           .into(db.receivablePayments)
@@ -346,19 +538,54 @@ class CustomerService {
               businessId: kCurrentBusinessId,
               customerId: customerId,
               amount: amount,
-              paymentAccountId: Value(isOnCredit ? null : paymentAccountId),
-              isOnCredit: Value(isOnCredit),
-              status: Value(isOnCredit ? 'pending' : 'completed'),
+              paymentAccountId: Value(paymentAccountId),
+              isOnCredit: const Value(false),
+              status: const Value('completed'),
               paymentDate: date,
               notes: Value(notes),
             ),
           );
+
+      await AuditWriter.write(
+        db,
+        businessId: kCurrentBusinessId,
+        userId: null,
+        action: 'finance.customer_payment_recorded',
+        module: AuditModule.finance,
+        actionType: AuditActionType.create,
+        entityType: 'receivable_payments',
+        entityId: paymentId,
+        entityLabel: customer.name,
+        after: {
+          'amount': amount,
+          'paymentAccountId': paymentAccountId,
+          'date': date,
+        },
+        details: {'outstandingBefore': outstandingBalance, 'notes': notes},
+      );
+
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'receivable_payments',
+        entityId: paymentId,
+        operation: SyncOp.create,
+      );
     });
   }
 
   /// Removes a payment and its matching ledger posting together.
   Future<void> deleteReceivablePayment(String paymentId) async {
     await db.transaction(() async {
+      final payment = await (db.select(
+        db.receivablePayments,
+      )..where((p) => p.id.equals(paymentId))).getSingleOrNull();
+      if (payment == null) return;
+
+      final customer = await (db.select(
+        db.customers,
+      )..where((c) => c.id.equals(payment.customerId))).getSingleOrNull();
+
       await (db.delete(db.journalEntries)..where(
             (j) =>
                 j.sourceType.equals('receivable_payment') &
@@ -368,6 +595,32 @@ class CustomerService {
       await (db.delete(
         db.receivablePayments,
       )..where((p) => p.id.equals(paymentId))).go();
+
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'receivable_payments',
+        entityId: paymentId,
+        operation: SyncOp.delete,
+      );
+
+      await AuditWriter.write(
+        db,
+        businessId: payment.businessId,
+        userId: null,
+        action: 'finance.customer_payment_deleted',
+        module: AuditModule.finance,
+        actionType: AuditActionType.delete,
+        entityType: 'receivable_payments',
+        entityId: paymentId,
+        entityLabel: customer?.name ?? 'Customer payment',
+        before: {
+          'amount': payment.amount,
+          'paymentAccountId': payment.paymentAccountId,
+          'date': payment.paymentDate,
+          'notes': payment.notes,
+        },
+      );
     });
   }
 }
@@ -727,6 +980,9 @@ class _CustomerCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final balanceAsync = ref.watch(customerBalanceProvider(customer.id));
+    final orderStats = ref
+        .watch(customerOrderStatsProvider)
+        .value?[customer.id];
 
     return Material(
       color: scheme.surfaceContainerLow,
@@ -798,6 +1054,21 @@ class _CustomerCard extends ConsumerWidget {
                             ),
                           ),
                         ],
+                      ),
+                    ],
+                    if (orderStats != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        '${orderStats.count} order'
+                        '${orderStats.count == 1 ? '' : 's'} · '
+                        '${_peso(orderStats.totalCents)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.primary,
+                        ),
                       ),
                     ],
                   ],
@@ -959,6 +1230,12 @@ class _CustomerFormState extends ConsumerState<_CustomerForm> {
   late final _phoneController = TextEditingController(
     text: widget.existing?.phone ?? '',
   );
+  late final _addressController = TextEditingController(
+    text: widget.existing?.address ?? '',
+  );
+  late final _tinController = TextEditingController(
+    text: widget.existing?.tin ?? '',
+  );
   late final _notesController = TextEditingController(
     text: widget.existing?.notes ?? '',
   );
@@ -967,6 +1244,8 @@ class _CustomerFormState extends ConsumerState<_CustomerForm> {
   @override
   void dispose() {
     _nameController.dispose();
+    _addressController.dispose();
+    _tinController.dispose();
     _phoneController.dispose();
     _notesController.dispose();
     super.dispose();
@@ -984,6 +1263,12 @@ class _CustomerFormState extends ConsumerState<_CustomerForm> {
           phone: _phoneController.text.trim().isEmpty
               ? null
               : _phoneController.text.trim(),
+          address: _addressController.text.trim().isEmpty
+              ? null
+              : _addressController.text.trim(),
+          tin: _tinController.text.trim().isEmpty
+              ? null
+              : _tinController.text.trim(),
           notes: _notesController.text.trim().isEmpty
               ? null
               : _notesController.text.trim(),
@@ -1028,7 +1313,7 @@ class _CustomerFormState extends ConsumerState<_CustomerForm> {
                 horizontalPadding,
                 10,
                 horizontalPadding,
-                24,
+                62,
               ),
               child: Form(
                 key: _formKey,
@@ -1098,6 +1383,26 @@ class _CustomerFormState extends ConsumerState<_CustomerForm> {
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
+                      controller: _addressController,
+                      maxLines: 2,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Address (optional)',
+                        prefixIcon: Icon(Icons.home_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _tinController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'TIN (optional)',
+                        hintText: '000-000-000-000',
+                        prefixIcon: Icon(Icons.badge_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
                       controller: _notesController,
                       maxLines: 2,
                       decoration: const InputDecoration(
@@ -1157,6 +1462,7 @@ class CustomerDetailPage extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final balanceAsync = ref.watch(customerBalanceProvider(customer.id));
     final activityAsync = ref.watch(customerActivityProvider(customer.id));
+    final ordersAsync = ref.watch(customerOrdersProvider(customer.id));
 
     return Scaffold(
       backgroundColor: scheme.surface,
@@ -1238,10 +1544,72 @@ class CustomerDetailPage extends ConsumerWidget {
             },
           ),
           const SizedBox(height: 24),
-          if (customer.phone != null) ...[
+          if (customer.phone != null ||
+              (customer.address ?? '').isNotEmpty ||
+              (customer.tin ?? '').isNotEmpty) ...[
             _InfoCard(customer: customer),
             const SizedBox(height: 24),
           ],
+          ordersAsync.when(
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+            data: (orders) {
+              final live = orders.where((o) => !o.isVoided).toList();
+              final spent = live.fold<int>(0, (s, o) => s + o.totalAmount);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Orders',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      if (live.isNotEmpty)
+                        Text(
+                          '${live.length} · ${_peso(spent)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: scheme.primary,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (orders.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No POS orders yet. Choose this customer at checkout '
+                        'and their orders will show here.',
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    )
+                  else
+                    for (final o in orders.take(30))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _OrderTile(sale: o),
+                      ),
+                  if (orders.length > 30)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Showing the latest 30 of ${orders.length} orders.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                ],
+              );
+            },
+          ),
           Text(
             'Activity',
             style: Theme.of(
@@ -1393,19 +1761,33 @@ class _InfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    Widget row(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Flexible(child: Text(text)),
+        ],
+      ),
+    );
+
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(18),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.call_outlined, size: 16, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(customer.phone ?? '', overflow: TextOverflow.ellipsis),
-          ),
+          if (customer.phone != null) row(Icons.call_outlined, customer.phone!),
+          if ((customer.address ?? '').isNotEmpty)
+            row(Icons.home_outlined, customer.address!),
+          if ((customer.tin ?? '').isNotEmpty)
+            row(Icons.badge_outlined, 'TIN ${customer.tin}'),
         ],
       ),
     );
@@ -1680,8 +2062,8 @@ class _RecordPaymentSheet extends ConsumerStatefulWidget {
 class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
+
   String? _paymentAccountId;
-  bool _isOnCredit = false;
   bool _saving = false;
 
   @override
@@ -1720,11 +2102,14 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                   ),
                 ),
               ),
+
               const SizedBox(height: 16),
+
               const Text(
                 'Record Payment',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
+
               balanceAsync.when(
                 data: (balance) => Text(
                   balance > 0
@@ -1738,7 +2123,9 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
               ),
+
               const SizedBox(height: 20),
+
               TextField(
                 controller: _amountController,
                 keyboardType: const TextInputType.numberWithOptions(
@@ -1750,51 +2137,47 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                   prefixIcon: Icon(Icons.payments_outlined),
                 ),
               ),
+
               const SizedBox(height: 16),
-              Material(
-                child: SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('On credit'),
-                  subtitle: const Text('Pending — not actually received yet'),
-                  value: _isOnCredit,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: (v) => setState(() => _isOnCredit = v),
+
+              Text(
+                'Received via',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12,
                 ),
               ),
-              if (!_isOnCredit) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Received via',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                accountsAsync.when(
-                  data: (accounts) => Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: accounts
-                        .map(
-                          (a) => ChoiceChip(
-                            label: Text(a.name),
-                            selected: _paymentAccountId == a.id,
-                            onSelected: (_) =>
-                                setState(() => _paymentAccountId = a.id),
-                            selectedColor: AppColors.primary.withValues(
-                              alpha: 0.16,
-                            ),
+
+              const SizedBox(height: 8),
+
+              accountsAsync.when(
+                data: (accounts) => Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: accounts
+                      .map(
+                        (a) => ChoiceChip(
+                          label: Text(a.name),
+                          selected: _paymentAccountId == a.id,
+                          onSelected: (_) {
+                            setState(() {
+                              _paymentAccountId = a.id;
+                            });
+                          },
+                          selectedColor: AppColors.primary.withValues(
+                            alpha: 0.16,
                           ),
-                        )
-                        .toList(),
-                  ),
-                  loading: () => const LinearProgressIndicator(),
-                  error: (_, __) => const SizedBox.shrink(),
+                        ),
+                      )
+                      .toList(),
                 ),
-              ],
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => const SizedBox.shrink(),
+              ),
+
               const SizedBox(height: 16),
+
               TextField(
                 controller: _notesController,
                 decoration: const InputDecoration(
@@ -1802,7 +2185,9 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                   prefixIcon: Icon(Icons.notes_outlined),
                 ),
               ),
+
               const SizedBox(height: 22),
+
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -1835,26 +2220,159 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
 
   Future<void> _save() async {
     final amount = double.tryParse(_amountController.text);
+
     if (amount == null || amount <= 0) return;
-    if (!_isOnCredit && _paymentAccountId == null) return;
+
+    if (_paymentAccountId == null) return;
 
     setState(() => _saving = true);
+
     final service = ref.read(customerServiceProvider);
+
     try {
       await service.recordPayment(
         customerId: widget.customer.id,
         amount: (amount * 100).round(),
-        paymentAccountId: _isOnCredit ? null : _paymentAccountId,
+        paymentAccountId: _paymentAccountId!,
         date: DateTime.now(),
-        isOnCredit: _isOnCredit,
         notes: _notesController.text.trim().isEmpty
             ? null
             : _notesController.text.trim(),
       );
+
       ref.read(ledgerVersionProvider.notifier).state++;
-      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
+  }
+}
+
+class _OrderTile extends ConsumerWidget {
+  final PosSale sale;
+  const _OrderTile({required this.sale});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final items = ref.watch(posSaleItemsProvider(sale.id)).value ?? const [];
+    final names = items
+        .take(3)
+        .map((i) {
+          final q = i.quantity == i.quantity.roundToDouble()
+              ? i.quantity.toInt().toString()
+              : i.quantity.toStringAsFixed(1);
+          return '${i.productName} ×$q';
+        })
+        .join(', ');
+    final more = items.length > 3 ? ' +${items.length - 3} more' : '';
+
+    return Material(
+      color: scheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => POSSaleDetailPage(sale: sale)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(13),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_rounded,
+                  size: 17,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            receiptLabel(sale),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        if (sale.isVoided) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.errorContainer,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'VOID',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: scheme.onErrorContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      DateFormat('MMM d, yyyy · h:mm a').format(sale.saleDate),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (names.isNotEmpty)
+                      Text(
+                        '$names$more',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _peso(sale.totalAmount),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  decoration: sale.isVoided ? TextDecoration.lineThrough : null,
+                  color: sale.isVoided ? scheme.onSurfaceVariant : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

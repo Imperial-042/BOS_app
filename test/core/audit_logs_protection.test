@@ -1,0 +1,33 @@
+-- supabase/tests/audit_logs_protection.test.sql  (run: supabase test db)
+-- Structural checks only; they need no business/user fixtures.
+-- Behavioural RLS checks (cross-tenant insert denied, forged user_id denied,
+-- non-admin SELECT returns 0 rows) need fixtures for your businesses /
+-- business_memberships tables and are listed in INTEGRATION_PATCHES.md.
+begin;
+select plan(9);
+
+select has_table('public', 'audit_logs', 'audit_logs exists');
+
+select ok(
+  (select relrowsecurity and relforcerowsecurity
+     from pg_class where oid = 'public.audit_logs'::regclass),
+  'RLS enabled and forced');
+
+select is(has_table_privilege('authenticated', 'public.audit_logs', 'UPDATE'),
+  false, 'authenticated cannot UPDATE');
+select is(has_table_privilege('authenticated', 'public.audit_logs', 'DELETE'),
+  false, 'authenticated cannot DELETE');
+select is(has_table_privilege('authenticated', 'public.audit_logs', 'TRUNCATE'),
+  false, 'authenticated cannot TRUNCATE');
+select is(has_table_privilege('anon', 'public.audit_logs', 'SELECT'),
+  false, 'anon cannot SELECT');
+select is(has_table_privilege('authenticated', 'public.audit_logs', 'INSERT'),
+  true, 'authenticated can INSERT');
+
+select has_trigger('public', 'audit_logs', 'audit_logs_no_update_delete',
+  'update/delete blocker trigger present');
+select has_trigger('public', 'audit_logs', 'audit_logs_no_truncate',
+  'truncate blocker trigger present');
+
+select * from finish();
+rollback;

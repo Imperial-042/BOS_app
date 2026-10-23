@@ -14,6 +14,8 @@
 // All of this happens invisibly — the owner only ever taps
 // "Record Purchase" or "Record Payment" and fills in an amount.
 
+import 'package:bos_application/core/audit/audit_enums.dart';
+import 'package:bos_application/core/audit/audit_writer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -23,6 +25,8 @@ import 'package:drift/drift.dart' hide Column, Table;
 import '../../../../core/branding/branding.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
+import '../../../../core/ledger/ledger_service.dart';
+import '../../../../core/sync/sync_tracker.dart';
 import '../../../transactions/presentation/screens/transaction_page.dart'
     show ledgerVersionProvider, kCurrentBusinessId;
 
@@ -57,9 +61,12 @@ final supplierBalanceProvider = FutureProvider.family<int, String>((
       .customSelect(
         '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM supplier_purchases
-    WHERE supplier_id = ? AND is_on_credit = 1
+    WHERE supplier_id = ? AND business_id = ? AND is_on_credit = 1
     ''',
-        variables: [Variable.withString(supplierId)],
+        variables: [
+          Variable.withString(supplierId),
+          Variable.withString(kCurrentBusinessId),
+        ],
       )
       .getSingle();
 
@@ -67,9 +74,12 @@ final supplierBalanceProvider = FutureProvider.family<int, String>((
       .customSelect(
         '''
     SELECT COALESCE(SUM(amount), 0) AS total FROM payable_payments
-    WHERE supplier_id = ? AND status = 'completed'
+    WHERE supplier_id = ? AND business_id = ? AND status = 'completed'
     ''',
-        variables: [Variable.withString(supplierId)],
+        variables: [
+          Variable.withString(supplierId),
+          Variable.withString(kCurrentBusinessId),
+        ],
       )
       .getSingle();
 
@@ -115,13 +125,21 @@ final supplierActivityProvider =
 
       final purchases =
           await (db.select(db.supplierPurchases)
-                ..where((p) => p.supplierId.equals(supplierId))
+                ..where(
+                  (p) =>
+                      p.supplierId.equals(supplierId) &
+                      p.businessId.equals(kCurrentBusinessId),
+                )
                 ..orderBy([(p) => OrderingTerm.desc(p.purchaseDate)]))
               .get();
 
       final payments =
           await (db.select(db.payablePayments)
-                ..where((p) => p.supplierId.equals(supplierId))
+                ..where(
+                  (p) =>
+                      p.supplierId.equals(supplierId) &
+                      p.businessId.equals(kCurrentBusinessId),
+                )
                 ..orderBy([(p) => OrderingTerm.desc(p.paymentDate)]))
               .get();
 
@@ -183,18 +201,28 @@ class SupplierService {
     String? address,
     String? notes,
   }) async {
-    await db
-        .into(db.suppliers)
-        .insert(
-          SuppliersCompanion.insert(
-            id: const Uuid().v4(),
-            businessId: kCurrentBusinessId,
-            name: name,
-            phone: Value(phone),
-            address: Value(address),
-            notes: Value(notes),
-          ),
-        );
+    final id = const Uuid().v4();
+    await db.transaction(() async {
+      await db
+          .into(db.suppliers)
+          .insert(
+            SuppliersCompanion.insert(
+              id: id,
+              businessId: kCurrentBusinessId,
+              name: name,
+              phone: Value(phone),
+              address: Value(address),
+              notes: Value(notes),
+            ),
+          );
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'suppliers',
+        entityId: id,
+        operation: SyncOp.create,
+      );
+    });
   }
 
   Future<void> updateSupplier(
@@ -217,13 +245,52 @@ class SupplierService {
   }
 
   Future<void> deleteSupplier(String supplierId) async {
-    await (db.delete(
-      db.payablePayments,
-    )..where((p) => p.supplierId.equals(supplierId))).go();
-    await (db.delete(
-      db.supplierPurchases,
-    )..where((p) => p.supplierId.equals(supplierId))).go();
-    await (db.delete(db.suppliers)..where((s) => s.id.equals(supplierId))).go();
+    await db.transaction(() async {
+      final supplier = await (db.select(
+        db.suppliers,
+      )..where((s) => s.id.equals(supplierId))).getSingleOrNull();
+      if (supplier == null) return;
+
+      final purchases = await (db.select(
+        db.supplierPurchases,
+      )..where((p) => p.supplierId.equals(supplierId))).get();
+      final payments = await (db.select(
+        db.payablePayments,
+      )..where((p) => p.supplierId.equals(supplierId))).get();
+
+      await (db.delete(
+        db.payablePayments,
+      )..where((p) => p.supplierId.equals(supplierId))).go();
+      await (db.delete(
+        db.supplierPurchases,
+      )..where((p) => p.supplierId.equals(supplierId))).go();
+      await (db.delete(
+        db.suppliers,
+      )..where((s) => s.id.equals(supplierId))).go();
+
+      await AuditWriter.write(
+        db,
+        businessId: supplier.businessId,
+        userId: null,
+        action: 'finance.supplier_deleted',
+        module: AuditModule.finance,
+        actionType: AuditActionType.delete,
+        entityType: 'suppliers',
+        entityId: supplierId,
+        entityLabel: supplier.name,
+        before: {
+          'name': supplier.name,
+          'phone': supplier.phone,
+          'address': supplier.address,
+        },
+        details: {
+          'purchaseCount': purchases.length,
+          'purchaseTotal': purchases.fold<int>(0, (s, p) => s + p.amount),
+          'paymentCount': payments.length,
+          'paymentTotal': payments.fold<int>(0, (s, p) => s + p.amount),
+        },
+      );
+    });
   }
 
   Future<void> recordPurchase({
@@ -234,12 +301,41 @@ class SupplierService {
     String? paymentAccountId,
     String? notes,
   }) async {
+    if (amount <= 0) {
+      throw ArgumentError('Purchase amount must be greater than zero.');
+    }
+    if (!isOnCredit && paymentAccountId == null) {
+      throw ArgumentError('A paid purchase needs a payment account.');
+    }
+
     await db.transaction(() async {
+      // Resolve every derived GL account before writing anything, so a
+      // missing/mismatched account rolls the purchase back instead of
+      // silently corrupting the ledger.
+      final ledger = LedgerService(db);
+      final supplier =
+          await (db.select(db.suppliers)..where(
+                (s) =>
+                    s.id.equals(supplierId) &
+                    s.businessId.equals(kCurrentBusinessId),
+              ))
+              .getSingleOrNull();
+      if (supplier == null) {
+        throw StateError('That supplier does not belong to this business.');
+      }
+      final inventoryExpense = await ledger.requireAccount(
+        'acc_inv_exp_$kCurrentBusinessId',
+        kCurrentBusinessId,
+      );
+      final creditAccountId = isOnCredit
+          ? (await ledger.payableAccount(kCurrentBusinessId)).id
+          : (await ledger.requirePaymentAccount(
+              paymentAccountId!,
+              kCurrentBusinessId,
+            )).id;
+
       final entryId = const Uuid().v4();
       final purchaseId = const Uuid().v4();
-      final creditAccountId = isOnCredit
-          ? 'acc_ap_$kCurrentBusinessId'
-          : (paymentAccountId ?? 'acc_ap_$kCurrentBusinessId');
 
       await db
           .into(db.journalEntries)
@@ -259,7 +355,7 @@ class SupplierService {
             LedgerLinesCompanion.insert(
               id: const Uuid().v4(),
               journalEntryId: entryId,
-              accountId: 'acc_inv_exp_$kCurrentBusinessId',
+              accountId: inventoryExpense.id,
               debit: Value(amount),
             ),
           );
@@ -289,6 +385,24 @@ class SupplierService {
               status: const Value('completed'),
             ),
           );
+      await AuditWriter.write(
+        db,
+        businessId: kCurrentBusinessId,
+        userId: null,
+        action: 'finance.supplier_purchase_recorded',
+        module: AuditModule.finance,
+        actionType: AuditActionType.create,
+        entityType: 'supplier_purchases',
+        entityId: purchaseId,
+        entityLabel: supplier.name,
+        after: {
+          'amount': amount,
+          'isOnCredit': isOnCredit,
+          'paymentAccountId': isOnCredit ? null : paymentAccountId,
+          'date': date,
+        },
+        details: {'journalEntryId': entryId, 'notes': notes},
+      );
     });
   }
 
@@ -296,6 +410,15 @@ class SupplierService {
   /// the supplier's balance and Cashflow/Journal Entry stay in sync.
   Future<void> deleteSupplierPurchase(String purchaseId) async {
     await db.transaction(() async {
+      final purchase = await (db.select(
+        db.supplierPurchases,
+      )..where((p) => p.id.equals(purchaseId))).getSingleOrNull();
+      if (purchase == null) return;
+
+      final supplier = await (db.select(
+        db.suppliers,
+      )..where((s) => s.id.equals(purchase.supplierId))).getSingleOrNull();
+
       await (db.delete(db.journalEntries)..where(
             (j) =>
                 j.sourceType.equals('supplier_purchase') &
@@ -305,62 +428,147 @@ class SupplierService {
       await (db.delete(
         db.supplierPurchases,
       )..where((p) => p.id.equals(purchaseId))).go();
+
+      await AuditWriter.write(
+        db,
+        businessId: purchase.businessId,
+        userId: null,
+        action: 'finance.supplier_purchase_deleted',
+        module: AuditModule.finance,
+        actionType: AuditActionType.delete,
+        entityType: 'supplier_purchases',
+        entityId: purchaseId,
+        entityLabel: supplier?.name ?? 'Supplier purchase',
+        before: {
+          'amount': purchase.amount,
+          'isOnCredit': purchase.isOnCredit,
+          'paymentAccountId': purchase.paymentAccountId,
+          'date': purchase.purchaseDate,
+          'notes': purchase.notes,
+        },
+      );
     });
   }
 
   Future<void> recordPayment({
     required String supplierId,
     required int amount,
-    String? paymentAccountId,
+    required String paymentAccountId,
     required DateTime date,
-    required bool isOnCredit,
     String? notes,
   }) async {
-    if (!isOnCredit && paymentAccountId == null) {
-      throw ArgumentError('paymentAccountId is required unless on credit.');
+    if (amount <= 0) {
+      throw ArgumentError('Payment amount must be greater than zero.');
     }
 
     await db.transaction(() async {
-      final paymentId = const Uuid().v4();
-
-      // An on-credit payment is just a pending promise — no cash moved,
-      // so nothing gets posted to the ledger until it's actually paid.
-      if (!isOnCredit) {
-        final entryId = const Uuid().v4();
-
-        await db
-            .into(db.journalEntries)
-            .insert(
-              JournalEntriesCompanion.insert(
-                id: entryId,
-                businessId: kCurrentBusinessId,
-                entryDate: date,
-                sourceType: 'payable_payment',
-                sourceId: Value(paymentId),
-                description: Value(notes),
-              ),
-            );
-        await db
-            .into(db.ledgerLines)
-            .insert(
-              LedgerLinesCompanion.insert(
-                id: const Uuid().v4(),
-                journalEntryId: entryId,
-                accountId: 'acc_ap_$kCurrentBusinessId',
-                debit: Value(amount),
-              ),
-            );
-        await db
-            .into(db.ledgerLines)
-            .insert(
-              LedgerLinesCompanion.insert(
-                id: const Uuid().v4(),
-                journalEntryId: entryId,
-                accountId: paymentAccountId!,
-                credit: Value(amount),
-              ),
-            );
+      final supplier =
+          await (db.select(db.suppliers)..where(
+                (s) =>
+                    s.id.equals(supplierId) &
+                    s.businessId.equals(kCurrentBusinessId),
+              ))
+              .getSingleOrNull();
+      if (supplier == null) {
+        throw StateError('That supplier does not belong to this business.');
       }
+
+      // ----------------------------------------------------------
+      // Get the supplier's CURRENT outstanding balance.
+      //
+      // Credit purchases increase what is owed.
+      // Completed payments decrease what is owed.
+      // ----------------------------------------------------------
+      final purchasesRow = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM supplier_purchases
+        WHERE supplier_id = ?
+          AND is_on_credit = 1
+          AND status = 'completed'
+        ''',
+            variables: [Variable.withString(supplierId)],
+          )
+          .getSingle();
+
+      final paymentsRow = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM payable_payments
+        WHERE supplier_id = ?
+          AND status = 'completed'
+        ''',
+            variables: [Variable.withString(supplierId)],
+          )
+          .getSingle();
+
+      final totalPurchases = purchasesRow.read<int>('total');
+      final totalPayments = paymentsRow.read<int>('total');
+
+      final outstandingBalance = totalPurchases - totalPayments;
+
+      // ----------------------------------------------------------
+      // Never allow payment above what is actually owed.
+      // ----------------------------------------------------------
+      if (outstandingBalance <= 0) {
+        throw StateError('This supplier has no outstanding balance to pay.');
+      }
+
+      if (amount > outstandingBalance) {
+        throw StateError(
+          'Payment cannot exceed the outstanding balance of '
+          '₱${NumberFormat('#,##0.00').format(outstandingBalance / 100)}.',
+        );
+      }
+
+      // ----------------------------------------------------------
+      // Create payment + journal entry atomically.
+      // ----------------------------------------------------------
+      final ledger = LedgerService(db);
+      final payable = await ledger.payableAccount(kCurrentBusinessId);
+      await ledger.requirePaymentAccount(paymentAccountId, kCurrentBusinessId);
+
+      final paymentId = const Uuid().v4();
+      final entryId = const Uuid().v4();
+
+      // Debit Accounts Payable
+      // Credit the actual payment account.
+      await db
+          .into(db.journalEntries)
+          .insert(
+            JournalEntriesCompanion.insert(
+              id: entryId,
+              businessId: kCurrentBusinessId,
+              entryDate: date,
+              sourceType: 'payable_payment',
+              sourceId: Value(paymentId),
+              description: Value(notes),
+            ),
+          );
+
+      await db
+          .into(db.ledgerLines)
+          .insert(
+            LedgerLinesCompanion.insert(
+              id: const Uuid().v4(),
+              journalEntryId: entryId,
+              accountId: payable.id,
+              debit: Value(amount),
+            ),
+          );
+
+      await db
+          .into(db.ledgerLines)
+          .insert(
+            LedgerLinesCompanion.insert(
+              id: const Uuid().v4(),
+              journalEntryId: entryId,
+              accountId: paymentAccountId,
+              credit: Value(amount),
+            ),
+          );
 
       await db
           .into(db.payablePayments)
@@ -370,19 +578,58 @@ class SupplierService {
               businessId: kCurrentBusinessId,
               supplierId: supplierId,
               amount: amount,
-              paymentAccountId: Value(isOnCredit ? null : paymentAccountId),
-              isOnCredit: Value(isOnCredit),
-              status: Value(isOnCredit ? 'pending' : 'completed'),
+              paymentAccountId: Value(paymentAccountId),
+              isOnCredit: const Value(false),
+              status: const Value('completed'),
               paymentDate: date,
               notes: Value(notes),
             ),
           );
+
+      await AuditWriter.write(
+        db,
+        businessId: kCurrentBusinessId,
+        userId: null,
+        action: 'finance.supplier_payment_recorded',
+        module: AuditModule.finance,
+        actionType: AuditActionType.create,
+        entityType: 'payable_payments',
+        entityId: paymentId,
+        entityLabel: supplier.name,
+        after: {
+          'amount': amount,
+          'paymentAccountId': paymentAccountId,
+          'date': date,
+        },
+        details: {
+          'outstandingBefore': outstandingBalance,
+          'journalEntryId': entryId,
+          'notes': notes,
+        },
+      );
+
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'payable_payments',
+        entityId: paymentId,
+        operation: SyncOp.create,
+      );
     });
   }
 
   /// Removes a payment and its matching ledger posting together.
   Future<void> deletePayablePayment(String paymentId) async {
     await db.transaction(() async {
+      final payment = await (db.select(
+        db.payablePayments,
+      )..where((p) => p.id.equals(paymentId))).getSingleOrNull();
+      if (payment == null) return;
+
+      final supplier = await (db.select(
+        db.suppliers,
+      )..where((s) => s.id.equals(payment.supplierId))).getSingleOrNull();
+
       await (db.delete(db.journalEntries)..where(
             (j) =>
                 j.sourceType.equals('payable_payment') &
@@ -392,6 +639,32 @@ class SupplierService {
       await (db.delete(
         db.payablePayments,
       )..where((p) => p.id.equals(paymentId))).go();
+
+      await SyncTracker.record(
+        db,
+        businessId: kCurrentBusinessId,
+        entityType: 'payable_payments',
+        entityId: paymentId,
+        operation: SyncOp.delete,
+      );
+
+      await AuditWriter.write(
+        db,
+        businessId: payment.businessId,
+        userId: null,
+        action: 'finance.supplier_payment_deleted',
+        module: AuditModule.finance,
+        actionType: AuditActionType.delete,
+        entityType: 'payable_payments',
+        entityId: paymentId,
+        entityLabel: supplier?.name ?? 'Supplier payment',
+        before: {
+          'amount': payment.amount,
+          'paymentAccountId': payment.paymentAccountId,
+          'date': payment.paymentDate,
+          'notes': payment.notes,
+        },
+      );
     });
   }
 }
@@ -1051,7 +1324,7 @@ class _SupplierFormState extends ConsumerState<_SupplierForm> {
                 horizontalPadding,
                 10,
                 horizontalPadding,
-                24,
+                62,
               ),
               child: Form(
                 key: _formKey,
@@ -1758,8 +2031,8 @@ class _RecordPaymentSheet extends ConsumerStatefulWidget {
 class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
+
   String? _paymentAccountId;
-  bool _isOnCredit = false;
   bool _saving = false;
 
   @override
@@ -1798,14 +2071,14 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                   ),
                 ),
               ),
+
               const SizedBox(height: 16),
-              Text(
+
+              const Text(
                 'Record Payment',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
+
               balanceAsync.when(
                 data: (balance) => Text(
                   balance > 0
@@ -1819,42 +2092,50 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
               ),
+
               const SizedBox(height: 20),
+
               TextField(
                 controller: _amountController,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Amount',
                   prefixText: '₱ ',
-                  prefixIcon: Icon(Icons.payments_outlined),
+                  prefixIcon: const Icon(Icons.payments_outlined),
+                  helperText: balanceAsync.when(
+                    data: (balance) => balance > 0
+                        ? 'Maximum payment: ${_peso(balance)}'
+                        : 'Nothing is currently owed.',
+                    loading: () => 'Checking outstanding balance...',
+                    error: (_, __) => null,
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
-              Material(
-                child: SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('On credit'),
-                  subtitle: const Text('Pending — not actually paid out yet'),
-                  value: _isOnCredit,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: (v) => setState(() => _isOnCredit = v),
+
+              Text(
+                'Paid via',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12,
                 ),
               ),
-              if (!_isOnCredit) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Paid via',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                accountsAsync.when(
-                  data: (accounts) => Wrap(
+
+              const SizedBox(height: 8),
+
+              accountsAsync.when(
+                data: (accounts) {
+                  if (accounts.isEmpty) {
+                    return Text(
+                      'No payment accounts available.',
+                      style: TextStyle(color: scheme.error, fontSize: 13),
+                    );
+                  }
+
+                  return Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: accounts
@@ -1862,20 +2143,28 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                           (a) => ChoiceChip(
                             label: Text(a.name),
                             selected: _paymentAccountId == a.id,
-                            onSelected: (_) =>
-                                setState(() => _paymentAccountId = a.id),
+                            onSelected: (_) {
+                              setState(() {
+                                _paymentAccountId = a.id;
+                              });
+                            },
                             selectedColor: AppColors.primary.withValues(
                               alpha: 0.16,
                             ),
                           ),
                         )
                         .toList(),
-                  ),
-                  loading: () => const LinearProgressIndicator(),
-                  error: (_, __) => const SizedBox.shrink(),
+                  );
+                },
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => Text(
+                  'Unable to load payment accounts.',
+                  style: TextStyle(color: scheme.error, fontSize: 13),
                 ),
-              ],
+              ),
+
               const SizedBox(height: 16),
+
               TextField(
                 controller: _notesController,
                 decoration: const InputDecoration(
@@ -1883,7 +2172,9 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
                   prefixIcon: Icon(Icons.notes_outlined),
                 ),
               ),
+
               const SizedBox(height: 22),
+
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -1916,26 +2207,73 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
 
   Future<void> _save() async {
     final amount = double.tryParse(_amountController.text);
-    if (amount == null || amount <= 0) return;
-    if (!_isOnCredit && _paymentAccountId == null) return;
+
+    if (amount == null || amount <= 0) {
+      return;
+    }
+
+    if (_paymentAccountId == null) {
+      return;
+    }
+
+    final paymentAmount = (amount * 100).round();
 
     setState(() => _saving = true);
+
     final service = ref.read(supplierServiceProvider);
+
     try {
+      // Get the latest amount owed before recording the payment.
+      final balance = await ref.read(
+        supplierBalanceProvider(widget.supplier.id).future,
+      );
+
+      // Do not allow payment greater than the supplier balance.
+      if (paymentAmount > balance) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Payment cannot exceed the amount owed '
+                '(${_peso(balance)}).',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      // No outstanding balance.
+      if (balance <= 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('This supplier has no outstanding balance.'),
+            ),
+          );
+        }
+        return;
+      }
+
       await service.recordPayment(
         supplierId: widget.supplier.id,
-        amount: (amount * 100).round(),
-        paymentAccountId: _isOnCredit ? null : _paymentAccountId,
+        amount: paymentAmount,
+        paymentAccountId: _paymentAccountId!,
         date: DateTime.now(),
-        isOnCredit: _isOnCredit,
         notes: _notesController.text.trim().isEmpty
             ? null
             : _notesController.text.trim(),
       );
+
       ref.read(ledgerVersionProvider.notifier).state++;
-      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 }

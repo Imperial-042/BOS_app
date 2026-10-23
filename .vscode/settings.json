@@ -1,3 +1,11 @@
 {
-    "cmake.sourceDirectory": "C:/Users/RYZEN/OneDrive/Documents/FlutterMinasMobileApp/MinasFinancialMobileApp/Bos/bos_application/windows"
-}
+    "cmake.sourceDirectory": "C:/Users/RYZEN/OneDrive/Documents/FlutterMinasMobileApp/MinasFinancialMobileApp/Bos/bos_application/windows",
+     "cmake.configureOnOpen": false,
+    "cmake.configureOnEdit": false,
+    "chat.tools.terminal.autoApprove": {
+        "/^supabase migration new user_device_registry$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}  

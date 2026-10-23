@@ -48,6 +48,10 @@ class AppColors {
   static const danger = Color(0xFFE0524B);
   static const warning = Color(0xFFF2A93B);
 
+  /// Text-safe (darker) shades for badges and labels on light backgrounds.
+  static const successDark = Color(0xFF237A47);
+  static const warningDark = Color(0xFFC77700);
+
   /// The gradient used on hero/summary cards (Dashboard, Cashflow
   /// total balance). Kept as a named pair so every "big number"
   /// card in the app looks like it belongs to the same product.
