@@ -51,6 +51,7 @@ import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
 import 'package:bos_application/core/supabase/employee_profile_service.dart';
 import 'package:bos_application/core/sync/legacy_data_bootstrap.dart';
 import 'package:bos_application/core/sync/sync_change_log.dart';
+import 'package:bos_application/core/sync/transfer_repair.dart';
 import 'package:bos_application/features/branches/branch_widgets.dart';
 import 'package:bos_application/features/branches/branches_screen.dart';
 import 'package:bos_application/features/inventory/stock_transfers_page.dart';
@@ -1182,6 +1183,11 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
         ref.read(authenticatedUserIdProvider.notifier).state = userId;
 
         await _repairTextTimestamps(db);
+        unawaited(
+          repairBranchTransfers(
+            db,
+          ).then((_) => ref.read(syncTriggerServiceProvider).syncNow()),
+        );
 
         if (current.ownerUserId == userId) {
           unawaited(_backfillCashiers(db, userId));
@@ -1777,6 +1783,10 @@ class _AccessGate extends ConsumerWidget {
           ref.watch(stockProjectionProvider);
           // A custom role's definition arrives with the first sync.
           if (ref.watch(currentRoleProvider) == null) {
+            return const _StartupLoadingScreen();
+          }
+          final assignments = ref.watch(branchMembershipsProvider);
+          if (assignments.isLoading && !assignments.hasValue) {
             return const _StartupLoadingScreen();
           }
           return NavigationShell(

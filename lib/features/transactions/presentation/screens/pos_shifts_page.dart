@@ -7,8 +7,10 @@
 
 import 'dart:async';
 
+import 'package:bos_application/core/auth/authorization_providers.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/format/money.dart';
-import 'package:drift/drift.dart' show OrderingTerm;
+import 'package:drift/drift.dart' show OrderingTerm, BooleanExpressionOperators;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,13 +18,21 @@ import 'package:intl/intl.dart';
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
-import 'transaction_page.dart' show kCurrentBusinessId;
 import '../../domain/pos_session_service.dart';
 
 final posShiftsProvider = StreamProvider<List<PosSession>>((ref) {
   final db = ref.watch(databaseProvider);
+  final businessId = ref.watch(selectedBusinessIdProvider);
+  final branchId = ref.watch(selectedBranchIdProvider);
+  final isMain = branchId == AppDatabase.mainBranchId(businessId);
   return (db.select(db.posSessions)
-        ..where((s) => s.businessId.equals(kCurrentBusinessId))
+        ..where(
+          (s) =>
+              s.businessId.equals(businessId) &
+              (isMain
+                  ? (s.branchId.equals(branchId) | s.branchId.isNull())
+                  : s.branchId.equals(branchId)),
+        )
         ..orderBy([(s) => OrderingTerm.desc(s.openedAt)]))
       .watch();
 });

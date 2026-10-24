@@ -93,8 +93,14 @@ final branchMembersOfProvider =
 final allowedBranchesProvider = Provider<List<Branch>>((ref) {
   final all = ref.watch(branchesProvider);
   if (ref.watch(authorizationServiceProvider).isOwner) return all;
-  final mine = ref.watch(branchMembershipsProvider).value ?? const [];
-  if (mine.isEmpty) return all;
+
+  final mineAsync = ref.watch(branchMembershipsProvider);
+  // Not loaded yet: "unknown" must not be treated as "unassigned"
+  // (which means every branch). Fail closed.
+  if (!mineAsync.hasValue) return const <Branch>[];
+
+  final mine = mineAsync.requireValue;
+  if (mine.isEmpty) return all; // genuinely unassigned = every branch
   final ids = {for (final m in mine) m.branchId};
   return all.where((b) => ids.contains(b.id)).toList();
 });
@@ -111,9 +117,16 @@ final lockedBranchIdProvider = StateProvider.family<String?, String>(
 final selectedBranchIdProvider = Provider<String>((ref) {
   final businessId = ref.watch(selectedBusinessIdProvider);
   final allowed = ref.watch(allowedBranchesProvider);
-  // Before the first load / pull the Main Branch id is still derivable, and the
-  // same id exists in the cloud.
-  if (allowed.isEmpty) return AppDatabase.mainBranchId(businessId);
+
+  if (allowed.isEmpty) {
+    final isOwner = ref.watch(authorizationServiceProvider).isOwner;
+    final mine =
+        ref.watch(branchMembershipsProvider).value ?? const <BranchMember>[];
+    // Assigned somewhere (e.g. only to a branch that is now deactivated, or
+    // branches haven't loaded yet): never fall back to the Main Branch.
+    if (!isOwner && mine.isNotEmpty) return mine.first.branchId;
+    return AppDatabase.mainBranchId(businessId);
+  }
 
   final locked = ref.watch(lockedBranchIdProvider(businessId));
   if (locked != null && allowed.any((b) => b.id == locked)) return locked;

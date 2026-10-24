@@ -21,6 +21,7 @@ import 'dart:math' as math;
 import 'package:bos_application/core/auth/auth_providers.dart';
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:bos_application/core/auth/bos_access.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/format/money.dart';
 import 'package:bos_application/features/transactions/domain/pos_discount.dart';
@@ -34,10 +35,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import '../../../../core/database/app_database.dart' show Customer;
 import '../../../../core/database/database_provider.dart';
 import '../../../transactions/presentation/screens/transaction_page.dart'
-    show ledgerVersionProvider, paymentAccountsProvider, kCurrentBusinessId;
+    show ledgerVersionProvider, kCurrentBusinessId;
 import '../../domain/payment_proof.dart';
 import '../../domain/pos_session_service.dart';
 import '../../domain/production_service.dart' show SaleLineInput;
@@ -48,6 +48,36 @@ import 'products_page.dart'
     show producibilityProvider, productionServiceProvider;
 
 String _peso(int cents) => formatPeso(cents);
+
+/// Payment accounts the cashier may use at THIS branch: everything except
+/// the cash drawers that belong to other branches.
+final posPaymentAccountsProvider = FutureProvider<List<Account>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final db = ref.watch(databaseProvider);
+  final businessId = ref.watch(selectedBusinessIdProvider);
+  final branchId = ref.watch(selectedBranchIdProvider);
+
+  final branches = await (db.select(
+    db.branches,
+  )..where((b) => b.businessId.equals(businessId))).get();
+  final otherDrawers = {
+    for (final b in branches)
+      if (b.id != branchId && b.cashAccountId != null) b.cashAccountId!,
+  };
+
+  final rows =
+      await (db.select(db.accounts)..where(
+            (a) =>
+                a.businessId.equals(businessId) &
+                a.isPaymentAccount.equals(true) &
+                a.isActive.equals(true),
+          ))
+          .get();
+  return [
+    for (final a in rows)
+      if (!otherDrawers.contains(a.id)) a,
+  ];
+});
 
 /// Opens the payment step. Resolves to true when the sale was recorded.
 Future<bool?> showPosPaymentSheet(BuildContext context) {
@@ -158,7 +188,7 @@ class _PaymentSheetState extends ConsumerState<_PaymentSheet> {
   // ---------- account helpers -------------------------------------------------
 
   String? _nameOf(String? id) {
-    final list = ref.read(paymentAccountsProvider).value;
+    final list = ref.read(posPaymentAccountsProvider).value;
     if (list == null || id == null) return null;
     for (final a in list) {
       if (a.id == id) return a.name;
@@ -1232,7 +1262,7 @@ class _PaymentSheetState extends ConsumerState<_PaymentSheet> {
     final scheme = theme.colorScheme;
     final size = MediaQuery.sizeOf(context);
     final order = ref.watch(posOrderProvider);
-    final accountsAsync = ref.watch(paymentAccountsProvider);
+    final accountsAsync = ref.watch(posPaymentAccountsProvider);
 
     final canDiscount = ref.watch(canProvider(BosPermission.salesDiscount));
     final canCredit = ref.watch(canProvider(BosPermission.salesOnCredit));
