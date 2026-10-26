@@ -41,6 +41,7 @@ Future<void> endSessionLocally(Ref ref, {String? notice}) async {
         // (offline, already revoked) must not block signing out here.
       }
     }
+
     await SessionStore.clear();
     SyncTracker.currentUserId = null;
     ref.read(authenticatedUserIdProvider.notifier).state = null;
@@ -51,6 +52,29 @@ Future<void> endSessionLocally(Ref ref, {String? notice}) async {
         unawaited(showSignedOutDialog(notice));
       });
     }
+  } finally {
+    _ending = false;
+  }
+}
+
+Future<void> endWidgetSessionLocally(WidgetRef ref) async {
+  if (_ending) return;
+  _ending = true;
+  try {
+    resetNavigationToRoot();
+    if (ref.read(supabaseAvailableProvider)) {
+      try {
+        await ref
+            .read(cloudAuthServiceProvider)
+            .signOutWithScope(SignOutScope.local)
+            .timeout(const Duration(seconds: 6));
+      } on Object {
+        // A failed server call must not prevent ending the local session.
+      }
+    }
+    await SessionStore.clear();
+    SyncTracker.currentUserId = null;
+    ref.read(authenticatedUserIdProvider.notifier).state = null;
   } finally {
     _ending = false;
   }

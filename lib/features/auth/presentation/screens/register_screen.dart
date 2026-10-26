@@ -7,6 +7,7 @@
 // for them in Users & Roles, which is how they attach to that business.
 
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
+import 'package:bos_application/features/customer/domain/customer_commerce_service.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,7 +27,9 @@ import '../../../../core/supabase/supabase_auth_service.dart';
 import '../../../../core/supabase/supabase_service.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({super.key, this.customerMode = false});
+
+  final bool customerMode;
 
   @override
   ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
@@ -94,7 +97,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     final cloudAvailable = ref.read(supabaseAvailableProvider);
     final sessionNotifier = ref.read(authenticatedUserIdProvider.notifier);
 
-    final needsCode = _role != BosRole.owner;
+    final needsCode = !widget.customerMode && _role != BosRole.owner;
     final code = _inviteCodeController.text;
 
     try {
@@ -148,6 +151,28 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         userId = user.id;
       }
 
+      if (widget.customerMode) {
+        final email = _emailController.text.trim();
+        if (cloudAvailable && !sessionEstablished) {
+          await CustomerCommerceService(db).ensureCustomerProfile(
+            userId: userId,
+            displayName: _nameController.text,
+          );
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(
+            pendingCustomerProfileKey(email),
+            _nameController.text.trim(),
+          );
+        } else {
+          await ref
+              .read(customerCommerceServiceProvider)
+              .ensureCustomerProfile(
+                userId: userId,
+                displayName: _nameController.text,
+              );
+        }
+      }
+
       // 3) Remember the invite code. Redeeming here fails with "device
       //    authorization required": the device is only registered when
       //    _StartupGate runs. Startup redeems the saved code after it
@@ -168,7 +193,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         }
       } // Owners: remember that this account should get its own business, so
       // startup creates it automatically instead of showing "join or create".
-      if (!needsCode && cloudAvailable) {
+      if (!needsCode && cloudAvailable && !widget.customerMode) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool(
           createBusinessIntentKey(_emailController.text),
@@ -299,27 +324,44 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                                 : null,
                           ),
                           const SizedBox(height: 16),
-                          DropdownButtonFormField<BosRole>(
-                            initialValue: _role,
-                            decoration: InputDecoration(
-                              labelText: 'I am',
-                              prefixIcon: Icon(Icons.badge_outlined),
+                          if (widget.customerMode)
+                            Card(
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Text(
+                                  'Create a customer account to discover '
+                                  'published stores, follow their catalogs, '
+                                  'and place pickup orders. Customer mode does '
+                                  'not provide business access.',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ),
+                            )
+                          else
+                            DropdownButtonFormField<BosRole>(
+                              initialValue: _role,
+                              decoration: InputDecoration(
+                                labelText: 'I am',
+                                prefixIcon: Icon(Icons.badge_outlined),
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: BosRole.owner,
+                                  child: Text('Starting a new business'),
+                                ),
+                                DropdownMenuItem(
+                                  value: BosRole.employee,
+                                  child: Text('Joining with an invite code'),
+                                ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() => _role = value);
+                                }
+                              },
                             ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: BosRole.owner,
-                                child: Text('Starting a new business'),
-                              ),
-                              DropdownMenuItem(
-                                value: BosRole.employee,
-                                child: Text('Joining with an invite code'),
-                              ),
-                            ],
-                            onChanged: (value) {
-                              if (value != null) setState(() => _role = value);
-                            },
-                          ),
-                          if (_role != BosRole.owner) ...[
+                          if (!widget.customerMode &&
+                              _role != BosRole.owner) ...[
                             const SizedBox(height: 16),
                             TextFormField(
                               controller: _inviteCodeController,

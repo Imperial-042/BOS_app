@@ -1253,6 +1253,129 @@ class StockTransferItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+@DataClassName('CustomerProfile')
+class CustomerProfiles extends Table {
+  TextColumn get id => text()();
+  TextColumn get displayName => text()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerStorefront')
+class CustomerStorefronts extends Table {
+  TextColumn get businessId => text()();
+  TextColumn get name => text()();
+  TextColumn get description => text().nullable()();
+  TextColumn get phone => text().nullable()();
+  TextColumn get address => text().nullable()();
+  TextColumn get city => text().nullable()();
+  TextColumn get currencyCode => text().withDefault(const Constant('PHP'))();
+  BoolColumn get isPublished => boolean().withDefault(const Constant(false))();
+  BoolColumn get offlineEnabled =>
+      boolean().withDefault(const Constant(false))();
+  IntColumn get pointsPerCurrencyUnit =>
+      integer().withDefault(const Constant(0))();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {businessId};
+}
+
+@DataClassName('CustomerStoreBranch')
+class CustomerStoreBranches extends Table {
+  TextColumn get id => text()();
+  TextColumn get businessId => text()();
+  TextColumn get name => text()();
+  TextColumn get address => text().nullable()();
+  BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerCatalogItem')
+class CustomerCatalogItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get businessId => text()();
+  TextColumn get name => text()();
+  TextColumn get description => text().nullable()();
+  TextColumn get category => text().nullable()();
+  TextColumn get unit => text()();
+  IntColumn get priceCents => integer().nullable()();
+  TextColumn get imageUrl => text().nullable()();
+  BoolColumn get isAvailable => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerStoreFollow')
+class CustomerStoreFollows extends Table {
+  TextColumn get id => text()();
+  TextColumn get customerUserId => text()();
+  TextColumn get businessId => text()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerOrder')
+class CustomerOrders extends Table {
+  TextColumn get id => text()();
+  TextColumn get businessId => text()();
+  TextColumn get customerUserId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get branchName => text()();
+  TextColumn get currencyCode => text().withDefault(const Constant('PHP'))();
+  TextColumn get status => text()();
+  TextColumn get customerName => text()();
+  TextColumn get customerPhone => text()();
+  BoolColumn get requestsOfficialReceipt =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get customerTin => text().nullable()();
+  TextColumn get notes => text().nullable()();
+  IntColumn get totalCents => integer()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerOrderItem')
+class CustomerOrderItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get orderId => text()();
+  TextColumn get catalogItemId => text()();
+  TextColumn get itemName => text()();
+  TextColumn get unit => text()();
+  RealColumn get quantity => real()();
+  IntColumn get unitPriceCents => integer()();
+  IntColumn get totalCents => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CustomerLoyaltyEntry')
+class CustomerLoyaltyEntries extends Table {
+  TextColumn get id => text()();
+  TextColumn get businessId => text()();
+  TextColumn get customerUserId => text()();
+  TextColumn get orderId => text()();
+  IntColumn get points => integer()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ============================================================
 // DATABASE CLASS
 // ============================================================
@@ -1311,6 +1434,14 @@ class StockTransferItems extends Table {
     ProductStockMovements,
     StockTransfers,
     StockTransferItems,
+    CustomerProfiles,
+    CustomerStorefronts,
+    CustomerStoreBranches,
+    CustomerCatalogItems,
+    CustomerStoreFollows,
+    CustomerOrders,
+    CustomerOrderItems,
+    CustomerLoyaltyEntries,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1319,7 +1450,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 47;
+  int get schemaVersion => 51;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -1338,6 +1469,9 @@ class AppDatabase extends _$AppDatabase {
       await _createModuleConfigIndexes();
       await _createSyncOutboxIndexes();
       await _createBranchIndexes();
+      await _createCustomerIndexes();
+      await _ensureBranchCityColumns();
+      await _ensureBranchAddressColumns();
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -1371,6 +1505,10 @@ class AppDatabase extends _$AppDatabase {
       await _createSyncOutboxIndexes();
       await _createBranchIndexes();
       await _createPosReturnTables();
+      await _createCustomerIndexes();
+      await _ensureCustomerLocationColumns();
+      await _ensureBranchCityColumns();
+      await _ensureBranchAddressColumns();
       await SyncChangeLog.install(this);
       await AuditSchemaGuard.install(this);
     },
@@ -1861,6 +1999,26 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 47) {
         await _createPosReturnTables();
+      }
+      if (from < 48) {
+        await m.createTable(customerProfiles);
+        await m.createTable(customerStorefronts);
+        await m.createTable(customerStoreBranches);
+        await m.createTable(customerCatalogItems);
+        await m.createTable(customerStoreFollows);
+        await m.createTable(customerOrders);
+        await m.createTable(customerOrderItems);
+        await m.createTable(customerLoyaltyEntries);
+        await _createCustomerIndexes();
+      }
+      if (from < 49) {
+        await _ensureCustomerLocationColumns();
+      }
+      if (from < 50) {
+        await _ensureBranchCityColumns();
+      }
+      if (from < 51) {
+        await _ensureBranchAddressColumns();
       }
     },
   );
@@ -2426,6 +2584,84 @@ class AppDatabase extends _$AppDatabase {
         await customStatement(statement);
       } catch (_) {
         // Do not prevent startup if an index cannot be built yet.
+      }
+    }
+  }
+
+  Future<void> _createCustomerIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS customer_catalog_business_idx '
+      'ON customer_catalog_items (business_id, is_available)',
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS customer_store_follows_user_store_idx '
+      'ON customer_store_follows (customer_user_id, business_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS customer_orders_user_created_idx '
+      'ON customer_orders (customer_user_id, created_at DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS customer_orders_business_status_idx '
+      'ON customer_orders (business_id, status, created_at DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS customer_order_items_order_idx '
+      'ON customer_order_items (order_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS customer_loyalty_customer_store_idx '
+      'ON customer_loyalty_entries (customer_user_id, business_id, created_at)',
+    );
+  }
+
+  Future<void> _ensureCustomerLocationColumns() async {
+    for (final (table, column) in [
+      ('customer_profiles', 'city'),
+      ('customer_profiles', 'address'),
+      ('customer_storefronts', 'opening_hours'),
+    ]) {
+      final rows = await customSelect('PRAGMA table_info("$table")').get();
+      final columns = rows.map((row) => row.read<String>('name')).toSet();
+      if (!columns.contains(column)) {
+        final declaration = column == 'opening_hours'
+            ? "TEXT NOT NULL DEFAULT '{}'"
+            : 'TEXT';
+        await customStatement(
+          'ALTER TABLE "$table" ADD COLUMN "$column" $declaration',
+        );
+      }
+    }
+  }
+
+  Future<void> _ensureBranchCityColumns() async {
+    for (final table in ['branches', 'customer_store_branches']) {
+      final rows = await customSelect('PRAGMA table_info("$table")').get();
+      final columns = rows.map((row) => row.read<String>('name')).toSet();
+      if (!columns.contains('city')) {
+        await customStatement('ALTER TABLE "$table" ADD COLUMN city TEXT');
+      }
+      if (table == 'customer_store_branches' &&
+          !columns.contains('storefront_published')) {
+        await customStatement(
+          'ALTER TABLE customer_store_branches '
+          'ADD COLUMN storefront_published INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+    }
+  }
+
+  Future<void> _ensureBranchAddressColumns() async {
+    final rows = await customSelect('PRAGMA table_info("branches")').get();
+    final columns = rows.map((row) => row.read<String>('name')).toSet();
+    for (final column in [
+      'country',
+      'province_state',
+      'street_barangay',
+      'postal_code',
+    ]) {
+      if (!columns.contains(column)) {
+        await customStatement('ALTER TABLE branches ADD COLUMN "$column" TEXT');
       }
     }
   }

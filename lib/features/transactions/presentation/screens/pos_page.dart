@@ -23,8 +23,11 @@ import 'dart:io';
 
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:bos_application/core/auth/bos_access.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/format/money.dart';
 import 'package:bos_application/core/navigation/nav_visibility.dart';
+import 'package:bos_application/features/customer/presentation/customer_storefront_management_screen.dart'
+    show CustomerOrdersInboxScreen;
 import 'package:bos_application/features/transactions/presentation/screens/held_orders_sheet.dart';
 import 'package:bos_application/features/transactions/presentation/screens/pos_sell_limit.dart';
 import 'package:bos_application/features/transactions/presentation/screens/pos_shifts_page.dart';
@@ -408,6 +411,7 @@ class _POSPageState extends ConsumerState<POSPage> {
     final orderCount = order.fold<int>(0, (sum, l) => sum + l.quantity);
 
     final labels = MediaQuery.sizeOf(context).width >= 1100;
+    final canViewSales = ref.watch(canProvider(BosPermission.salesView));
     final canVoid = ref.watch(canProvider(BosPermission.salesVoid));
 
     Future<void> setPin() async {
@@ -430,6 +434,21 @@ class _POSPageState extends ConsumerState<POSPage> {
         },
       ),
       actions: [
+        if (canViewSales)
+          _HeaderAction(
+            icon: Icons.shopping_bag_outlined,
+            label: 'Customer orders',
+            showLabel: labels,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => CustomerOrdersInboxScreen(
+                  businessId: ref.read(selectedBusinessIdProvider),
+                  branchId: ref.read(selectedBranchIdProvider),
+                ),
+              ),
+            ),
+          ),
         _HeaderAction(
           icon: Icons.history_rounded,
           label: 'History',
@@ -533,9 +552,14 @@ class _POSPageState extends ConsumerState<POSPage> {
                   onSelected: (value) => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
-                      builder: (_) => value == 'orders'
-                          ? const OrdersPage()
-                          : const ReturnsPage(),
+                      builder: (_) => switch (value) {
+                        'orders' => const OrdersPage(),
+                        'customer-orders' => CustomerOrdersInboxScreen(
+                          businessId: ref.read(selectedBusinessIdProvider),
+                          branchId: ref.read(selectedBranchIdProvider),
+                        ),
+                        _ => const ReturnsPage(),
+                      },
                     ),
                   ),
                   itemBuilder: (context) => [
@@ -547,6 +571,15 @@ class _POSPageState extends ConsumerState<POSPage> {
                         contentPadding: EdgeInsets.zero,
                       ),
                     ),
+                    if (canViewSales)
+                      const PopupMenuItem(
+                        value: 'customer-orders',
+                        child: ListTile(
+                          leading: Icon(Icons.shopping_bag_outlined),
+                          title: Text('Customer orders'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
                     if (ref.watch(canProvider(BosPermission.salesVoid)))
                       const PopupMenuItem(
                         value: 'returns',

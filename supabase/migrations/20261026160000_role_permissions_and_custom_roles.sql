@@ -72,7 +72,7 @@ select r.business_id, 'custom_roles', r.id, 'create'
 from public.custom_roles r
 where not exists (
   select 1 from public.sync_changes c
-  where c.entity_type = 'custom_roles' and c.entity_id = r.id
+  where c.entity_type = 'custom_roles' and c.entity_id::text = r.id::text
 );
 
 -- The id format is stable and matches c_<uuid>, the app's custom-role ID.
@@ -782,6 +782,18 @@ create policy rbac_stock_transfer_items_delete on public.stock_transfer_items
       where t.id = stock_transfer_items.transfer_id
         and public.has_business_permission(t.business_id, ARRAY['stock.transfer_create']::text[])
     )
+  );
+
+drop policy if exists customer_orders_update_business
+  on public.customer_orders;
+create policy customer_orders_update_business
+  on public.customer_orders
+  for update to authenticated
+  using (
+    public.has_business_permission(business_id, ARRAY['sales.edit']::text[])
+  )
+  with check (
+    public.has_business_permission(business_id, ARRAY['sales.edit']::text[])
   );
 
 notify pgrst, 'reload schema';

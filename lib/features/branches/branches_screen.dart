@@ -10,8 +10,10 @@ import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/branch/branch_service.dart';
 import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/core/database/app_database.dart';
+import 'package:bos_application/core/database/database_provider.dart';
 import 'package:bos_application/features/people/hr_providers.dart'
     show hrNamesProvider;
+import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -59,10 +61,40 @@ class BranchesScreen extends ConsumerWidget {
   Future<void> _edit(BuildContext context, WidgetRef ref, Branch? b) async {
     final businessId = ref.read(selectedBusinessIdProvider);
     final service = ref.read(branchServiceProvider);
+    final db = ref.read(databaseProvider);
+    final existingLocation = b == null
+        ? null
+        : await db
+              .customSelect(
+                'SELECT country, province_state, city, street_barangay, '
+                'postal_code FROM branches WHERE id = ?',
+                variables: [Variable<String>(b.id)],
+              )
+              .getSingleOrNull();
+    if (!context.mounted) return;
     final result =
-        await showDialog<({String name, String address, String phone})>(
+        await showDialog<
+          ({
+            String name,
+            String country,
+            String province,
+            String city,
+            String streetBarangay,
+            String postalCode,
+            String phone,
+          })
+        >(
           context: context,
-          builder: (_) => _BranchDialog(existing: b),
+          builder: (_) => _BranchDialog(
+            existing: b,
+            country: existingLocation?.read<String?>('country'),
+            province: existingLocation?.read<String?>('province_state'),
+            city: existingLocation?.read<String?>('city'),
+            streetBarangay:
+                existingLocation?.read<String?>('street_barangay') ??
+                b?.address,
+            postalCode: existingLocation?.read<String?>('postal_code'),
+          ),
         );
     if (result == null) return;
     try {
@@ -70,14 +102,22 @@ class BranchesScreen extends ConsumerWidget {
         await service.createBranch(
           businessId: businessId,
           name: result.name,
-          address: result.address,
+          country: result.country,
+          province: result.province,
+          city: result.city,
+          streetBarangay: result.streetBarangay,
+          postalCode: result.postalCode,
           phone: result.phone,
         );
       } else {
         await service.updateBranch(
           b.id,
           name: result.name,
-          address: result.address,
+          country: result.country,
+          province: result.province,
+          city: result.city,
+          streetBarangay: result.streetBarangay,
+          postalCode: result.postalCode,
           phone: result.phone,
         );
       }
@@ -186,7 +226,9 @@ class BranchesScreen extends ConsumerWidget {
                       child: Text(
                         'Each branch has its own stock, register, cash drawer '
                         'and team. Suppliers, customers, products and the '
-                        'chart of accounts are shared.',
+                        'chart of accounts are shared. Set each branch address, '
+                        'then save the storefront settings to publish its '
+                        'customer pickup location.',
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.4,
@@ -649,8 +691,21 @@ class _EmptyState extends StatelessWidget {
 // ------------------------------------------------------------- dialog --
 
 class _BranchDialog extends StatefulWidget {
-  const _BranchDialog({this.existing});
+  const _BranchDialog({
+    this.existing,
+    this.country,
+    this.province,
+    this.city,
+    this.streetBarangay,
+    this.postalCode,
+  });
+
   final Branch? existing;
+  final String? country;
+  final String? province;
+  final String? city;
+  final String? streetBarangay;
+  final String? postalCode;
 
   @override
   State<_BranchDialog> createState() => _BranchDialogState();
@@ -658,35 +713,78 @@ class _BranchDialog extends StatefulWidget {
 
 class _BranchDialogState extends State<_BranchDialog> {
   late final _name = TextEditingController(text: widget.existing?.name ?? '');
-  late final _address = TextEditingController(
-    text: widget.existing?.address ?? '',
+  late final _country = TextEditingController(text: widget.country ?? '');
+  late final _province = TextEditingController(text: widget.province ?? '');
+  late final _city = TextEditingController(text: widget.city ?? '');
+  late final _streetBarangay = TextEditingController(
+    text: widget.streetBarangay ?? '',
   );
+  late final _postalCode = TextEditingController(text: widget.postalCode ?? '');
   late final _phone = TextEditingController(text: widget.existing?.phone ?? '');
-  String? _error;
+  String? _nameError;
+  final _locationErrors = <String, String>{};
 
   @override
   void dispose() {
     _name.dispose();
-    _address.dispose();
+    _country.dispose();
+    _province.dispose();
+    _city.dispose();
+    _streetBarangay.dispose();
+    _postalCode.dispose();
     _phone.dispose();
     super.dispose();
   }
 
   void _submit() {
     if (_name.text.trim().isEmpty) {
-      setState(() => _error = 'Enter a branch name');
+      setState(() => _nameError = 'Enter a branch name');
+      return;
+    }
+    final values = {
+      'country': _country.text,
+      'province': _province.text,
+      'city': _city.text,
+      'street': _streetBarangay.text,
+      'postalCode': _postalCode.text,
+    };
+    final errors = <String, String>{};
+    for (final entry in values.entries) {
+      if (entry.value.trim().isEmpty) errors[entry.key] = 'Required';
+    }
+    if (errors.isNotEmpty) {
+      setState(() {
+        _nameError = null;
+        _locationErrors
+          ..clear()
+          ..addAll(errors);
+      });
       return;
     }
     Navigator.pop(context, (
       name: _name.text.trim(),
-      address: _address.text.trim(),
+      country: _country.text.trim(),
+      province: _province.text.trim(),
+      city: _city.text.trim(),
+      streetBarangay: _streetBarangay.text.trim(),
+      postalCode: _postalCode.text.trim(),
       phone: _phone.text.trim(),
     ));
+  }
+
+  void _clearLocationError(String field) {
+    if (_locationErrors.containsKey(field)) {
+      setState(() => _locationErrors.remove(field));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final isNew = widget.existing == null;
+    final isPhilippines = isPhilippinesCountry(_country.text);
+    final selectedProvince = philippineProvinces.contains(_province.text)
+        ? _province.text
+        : null;
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       title: Row(
@@ -711,20 +809,86 @@ class _BranchDialogState extends State<_BranchDialog> {
                 labelText: 'Branch name',
                 hintText: 'e.g. Downtown',
                 prefixIcon: const Icon(Icons.store_mall_directory_outlined),
-                errorText: _error,
+                errorText: _nameError,
               ),
               onChanged: (_) {
-                if (_error != null) setState(() => _error = null);
+                if (_nameError != null) setState(() => _nameError = null);
               },
             ),
             const SizedBox(height: 12),
             TextField(
-              controller: _address,
+              controller: _country,
               textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Address (optional)',
-                prefixIcon: Icon(Icons.place_outlined),
+              decoration: InputDecoration(
+                labelText: 'Country *',
+                prefixIcon: const Icon(Icons.public_outlined),
+                errorText: _locationErrors['country'],
               ),
+              onChanged: (_) {
+                setState(() => _locationErrors.remove('country'));
+              },
+            ),
+            const SizedBox(height: 12),
+            if (isPhilippines)
+              DropdownButtonFormField<String>(
+                initialValue: selectedProvince,
+                decoration: InputDecoration(
+                  labelText: 'Province / state *',
+                  prefixIcon: const Icon(Icons.map_outlined),
+                  errorText: _locationErrors['province'],
+                ),
+                items: [
+                  for (final province in philippineProvinces)
+                    DropdownMenuItem(value: province, child: Text(province)),
+                ],
+                onChanged: (province) {
+                  _province.text = province ?? '';
+                  setState(() => _locationErrors.remove('province'));
+                },
+              )
+            else
+              TextField(
+                controller: _province,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  labelText: 'Province / state *',
+                  prefixIcon: const Icon(Icons.map_outlined),
+                  errorText: _locationErrors['province'],
+                ),
+                onChanged: (_) => _clearLocationError('province'),
+              ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _city,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'City *',
+                prefixIcon: const Icon(Icons.location_city_outlined),
+                errorText: _locationErrors['city'],
+              ),
+              onChanged: (_) => _clearLocationError('city'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _streetBarangay,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Street / barangay *',
+                prefixIcon: const Icon(Icons.place_outlined),
+                errorText: _locationErrors['street'],
+              ),
+              onChanged: (_) => _clearLocationError('street'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _postalCode,
+              keyboardType: TextInputType.text,
+              decoration: InputDecoration(
+                labelText: 'Postal code *',
+                prefixIcon: const Icon(Icons.markunread_mailbox_outlined),
+                errorText: _locationErrors['postalCode'],
+              ),
+              onChanged: (_) => _clearLocationError('postalCode'),
             ),
             const SizedBox(height: 12),
             TextField(

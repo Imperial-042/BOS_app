@@ -47,6 +47,8 @@ import 'package:bos_application/core/device/device_session_watcher.dart';
 import 'package:bos_application/core/navigation/app_navigator.dart';
 import 'package:bos_application/core/navigation/nav_visibility.dart';
 import 'package:bos_application/core/settings/app_settings.dart';
+import 'package:bos_application/features/customer/presentation/customer_mode_gate.dart';
+import 'package:bos_application/features/customer/presentation/customer_storefront_management_screen.dart';
 import 'package:bos_application/core/stock/stock_service.dart';
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
 import 'package:bos_application/core/supabase/employee_profile_service.dart';
@@ -492,7 +494,9 @@ class _AuthGateState extends ConsumerState<_AuthGate> {
   @override
   Widget build(BuildContext context) {
     final userId = ref.watch(authenticatedUserIdProvider);
-    if (userId != null) return const _StartupGate();
+    if (userId != null) {
+      return CustomerModeGate(businessBuilder: (_) => const _StartupGate());
+    }
 
     if (_forcePasswordLogin) return const LoginScreen();
 
@@ -2143,6 +2147,7 @@ abstract final class BosDest {
   static const sales = 'sales.sales';
   static const orders = 'sales.orders';
   static const returns = 'sales.returns';
+  static const storefront = 'sales.storefront';
 
   // People
   static const employees = 'people.employees';
@@ -2458,6 +2463,14 @@ final List<BosDestination> bosDestinations = [
     builder: (_) => const SalesPage(),
   ),
   BosDestination(
+    id: BosDest.storefront,
+    module: BosModule.salesPos,
+    label: 'Storefront',
+    description: 'Manage online storefront settings and customer orders.',
+    icon: Icons.storefront_outlined,
+    builder: (_) => const CustomerStorefrontManagementScreen(),
+  ),
+  BosDestination(
     id: BosDest.orders,
     module: BosModule.salesPos,
     label: 'Orders',
@@ -2684,6 +2697,7 @@ const Map<String, BosPermission> _destPermission = {
   BosDest.stockAdjustments: BosPermission.inventoryView,
 
   BosDest.pos: BosPermission.salesView,
+  BosDest.storefront: BosPermission.salesView,
   BosDest.customers: BosPermission.customersView,
   BosDest.sales: BosPermission.salesView,
   BosDest.orders: BosPermission.salesView,
@@ -3772,6 +3786,19 @@ class _BosDrawer extends ConsumerWidget {
             padding: EdgeInsets.symmetric(horizontal: 28, vertical: 8),
             child: Divider(height: 1),
           ),
+          if (ref.watch(customerAccountAvailableProvider) &&
+              ref.watch(selectedAccountModeProvider) == 'business')
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: ListTile(
+                leading: const Icon(Icons.swap_horiz_rounded),
+                title: const Text('Switch account mode'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  ref.read(selectedAccountModeProvider.notifier).state = null;
+                },
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: ListTile(

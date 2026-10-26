@@ -176,6 +176,12 @@ class HeldOrdersNotifier extends StateNotifier<List<HeldOrder>> {
   }
 
   void discard(String id) => state = state.where((h) => h.id != id).toList();
+
+  void discardByCustomerOrderId(String customerOrderId) {
+    state = state
+        .where((held) => held.details.customerOrderId != customerOrderId)
+        .toList();
+  }
 }
 
 final heldOrdersProvider =
@@ -217,6 +223,7 @@ class OrderDetails {
   final String? contactPhone;
   final String? address;
   final String? orderRef;
+  final String? customerOrderId;
 
   const OrderDetails({
     this.tableId,
@@ -226,6 +233,7 @@ class OrderDetails {
     this.contactPhone,
     this.address,
     this.orderRef,
+    this.customerOrderId,
   });
 
   OrderDetails copyWith({
@@ -236,6 +244,7 @@ class OrderDetails {
     Object? contactPhone = _keep,
     Object? address = _keep,
     Object? orderRef = _keep,
+    Object? customerOrderId = _keep,
   }) {
     return OrderDetails(
       tableId: identical(tableId, _keep) ? this.tableId : tableId as String?,
@@ -253,6 +262,9 @@ class OrderDetails {
       orderRef: identical(orderRef, _keep)
           ? this.orderRef
           : orderRef as String?,
+      customerOrderId: identical(customerOrderId, _keep)
+          ? this.customerOrderId
+          : customerOrderId as String?,
     );
   }
 }

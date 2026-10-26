@@ -22,6 +22,138 @@ import '../database/database_provider.dart';
 
 const _uuid = Uuid();
 
+const philippineProvinces = [
+  'Abra',
+  'Agusan del Norte',
+  'Agusan del Sur',
+  'Aklan',
+  'Albay',
+  'Antique',
+  'Apayao',
+  'Aurora',
+  'Basilan',
+  'Bataan',
+  'Batanes',
+  'Batangas',
+  'Benguet',
+  'Biliran',
+  'Bohol',
+  'Bukidnon',
+  'Bulacan',
+  'Cagayan',
+  'Camarines Norte',
+  'Camarines Sur',
+  'Camiguin',
+  'Capiz',
+  'Catanduanes',
+  'Cavite',
+  'Cebu',
+  'Cotabato',
+  'Davao de Oro',
+  'Davao del Norte',
+  'Davao del Sur',
+  'Davao Occidental',
+  'Davao Oriental',
+  'Dinagat Islands',
+  'Eastern Samar',
+  'Guimaras',
+  'Ifugao',
+  'Ilocos Norte',
+  'Ilocos Sur',
+  'Iloilo',
+  'Isabela',
+  'Kalinga',
+  'La Union',
+  'Laguna',
+  'Lanao del Norte',
+  'Lanao del Sur',
+  'Leyte',
+  'Maguindanao del Norte',
+  'Maguindanao del Sur',
+  'Marinduque',
+  'Masbate',
+  'Metro Manila (NCR)',
+  'Misamis Occidental',
+  'Misamis Oriental',
+  'Mountain Province',
+  'Negros Occidental',
+  'Negros Oriental',
+  'Northern Samar',
+  'Nueva Ecija',
+  'Nueva Vizcaya',
+  'Occidental Mindoro',
+  'Oriental Mindoro',
+  'Palawan',
+  'Pampanga',
+  'Pangasinan',
+  'Quezon',
+  'Quirino',
+  'Rizal',
+  'Romblon',
+  'Samar',
+  'Sarangani',
+  'Siquijor',
+  'Sorsogon',
+  'South Cotabato',
+  'Southern Leyte',
+  'Sultan Kudarat',
+  'Sulu',
+  'Surigao del Norte',
+  'Surigao del Sur',
+  'Tarlac',
+  'Tawi-Tawi',
+  'Zambales',
+  'Zamboanga del Norte',
+  'Zamboanga del Sur',
+  'Zamboanga Sibugay',
+];
+
+bool isPhilippinesCountry(String country) {
+  final normalized = country.trim().toLowerCase();
+  return normalized == 'ph' ||
+      normalized == 'philippines' ||
+      normalized == 'the philippines';
+}
+
+String formatBranchAddress({
+  required String country,
+  required String province,
+  required String city,
+  required String streetBarangay,
+  required String postalCode,
+}) => [
+  streetBarangay.trim(),
+  city.trim(),
+  province.trim(),
+  postalCode.trim(),
+  country.trim(),
+].where((part) => part.isNotEmpty).join(', ');
+
+void validateBranchAddress({
+  required String country,
+  required String province,
+  required String city,
+  required String streetBarangay,
+  required String postalCode,
+}) {
+  final fields = {
+    'country': country,
+    'province/state': province,
+    'city': city,
+    'street/barangay': streetBarangay,
+    'postal code': postalCode,
+  };
+  final missing = fields.entries
+      .where((entry) => entry.value.trim().isEmpty)
+      .map((entry) => entry.key)
+      .toList();
+  if (missing.isNotEmpty) {
+    throw StateError(
+      'Enter the required branch address: ${missing.join(', ')}.',
+    );
+  }
+}
+
 class BranchService {
   BranchService(this.db, this.auth);
   final AppDatabase db;
@@ -61,12 +193,30 @@ class BranchService {
   Future<Branch> createBranch({
     required String businessId,
     required String name,
-    String? address,
+    required String country,
+    required String province,
+    required String city,
+    required String streetBarangay,
+    required String postalCode,
     String? phone,
   }) async {
     auth.require(BosPermission.branchManage, businessId: businessId);
     final clean = name.trim();
     if (clean.isEmpty) throw StateError('Enter a branch name.');
+    validateBranchAddress(
+      country: country,
+      province: province,
+      city: city,
+      streetBarangay: streetBarangay,
+      postalCode: postalCode,
+    );
+    final address = formatBranchAddress(
+      country: country,
+      province: province,
+      city: city,
+      streetBarangay: streetBarangay,
+      postalCode: postalCode,
+    );
 
     final id = _uuid.v4();
     final cashId = _uuid.v4();
@@ -91,11 +241,19 @@ class BranchService {
               businessId: businessId,
               name: clean,
               code: Value(code),
-              address: Value(_blankToNull(address)),
+              address: Value(address),
               phone: Value(_blankToNull(phone)),
               cashAccountId: Value(cashId),
             ),
           );
+      await _writeLocation(
+        branchId: id,
+        country: country,
+        province: province,
+        city: city,
+        streetBarangay: streetBarangay,
+        postalCode: postalCode,
+      );
       await AuditLogger.record(
         db,
         businessId: businessId,
@@ -115,21 +273,47 @@ class BranchService {
   Future<void> updateBranch(
     String branchId, {
     required String name,
-    String? address,
+    required String country,
+    required String province,
+    required String city,
+    required String streetBarangay,
+    required String postalCode,
     String? phone,
   }) async {
     final b = await _get(branchId);
     auth.require(BosPermission.branchManage, businessId: b.businessId);
     final clean = name.trim();
     if (clean.isEmpty) throw StateError('Enter a branch name.');
+    validateBranchAddress(
+      country: country,
+      province: province,
+      city: city,
+      streetBarangay: streetBarangay,
+      postalCode: postalCode,
+    );
+    final address = formatBranchAddress(
+      country: country,
+      province: province,
+      city: city,
+      streetBarangay: streetBarangay,
+      postalCode: postalCode,
+    );
     await db.transaction(() async {
       await (db.update(db.branches)..where((x) => x.id.equals(branchId))).write(
         BranchesCompanion(
           name: Value(clean),
-          address: Value(_blankToNull(address)),
+          address: Value(address),
           phone: Value(_blankToNull(phone)),
           updatedAt: Value(DateTime.now()),
         ),
+      );
+      await _writeLocation(
+        branchId: branchId,
+        country: country,
+        province: province,
+        city: city,
+        streetBarangay: streetBarangay,
+        postalCode: postalCode,
       );
       final cash = b.cashAccountId;
       if (cash != null && !b.isHeadquarters) {
@@ -139,6 +323,26 @@ class BranchService {
       }
     });
   }
+
+  Future<void> _writeLocation({
+    required String branchId,
+    required String country,
+    required String province,
+    required String city,
+    required String streetBarangay,
+    required String postalCode,
+  }) => db.customStatement(
+    'UPDATE branches SET country = ?, province_state = ?, city = ?, '
+    'street_barangay = ?, postal_code = ? WHERE id = ?',
+    [
+      country.trim(),
+      province.trim(),
+      city.trim(),
+      streetBarangay.trim(),
+      postalCode.trim(),
+      branchId,
+    ],
+  );
 
   Future<void> setActive(String branchId, bool active) async {
     await db.transaction(() async {
@@ -185,20 +389,22 @@ class BranchService {
     required bool assigned,
   }) async {
     auth.require(BosPermission.branchManage, businessId: businessId);
-    final branch = await (db.select(db.branches)..where(
-          (b) => b.id.equals(branchId) & b.businessId.equals(businessId),
-        ))
-        .getSingleOrNull();
+    final branch =
+        await (db.select(db.branches)..where(
+              (b) => b.id.equals(branchId) & b.businessId.equals(businessId),
+            ))
+            .getSingleOrNull();
     if (branch == null) {
       throw StateError('That branch does not belong to this business.');
     }
-    final member = await (db.select(db.businessMembers)..where(
-          (m) =>
-              m.businessId.equals(businessId) &
-              m.userId.equals(userId) &
-              m.status.equals('active'),
-        ))
-        .getSingleOrNull();
+    final member =
+        await (db.select(db.businessMembers)..where(
+              (m) =>
+                  m.businessId.equals(businessId) &
+                  m.userId.equals(userId) &
+                  m.status.equals('active'),
+            ))
+            .getSingleOrNull();
     if (member == null) {
       throw StateError('That user is not an active member of this business.');
     }

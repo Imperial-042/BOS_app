@@ -6,6 +6,7 @@
 
 import 'package:bos_application/core/auth/session_end.dart';
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
+import 'package:bos_application/features/customer/domain/customer_commerce_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -64,6 +65,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     } catch (_) {}
   }
 
+  Future<void> _restorePendingCustomerProfile({
+    required String userId,
+    required String email,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = pendingCustomerProfileKey(email);
+    final displayName = prefs.getString(key);
+    if (displayName == null) return;
+    await ref
+        .read(customerCommerceServiceProvider)
+        .ensureCustomerProfile(userId: userId, displayName: displayName);
+    await prefs.remove(key);
+  }
+
   Future<void> _submit() async {
     ref.read(sessionEndedNoticeProvider.notifier).state = null;
     if (!_formKey.currentState!.validate()) return;
@@ -104,6 +119,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         debugPrint('[login] adopting cloud user locally...');
 
         await _adoptCloudUser(user);
+        await _restorePendingCustomerProfile(
+          userId: user.id,
+          email: user.email ?? _emailController.text,
+        );
 
         debugPrint('[login] _adoptCloudUser SUCCESS');
 
@@ -135,6 +154,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         debugPrint('[login] local login SUCCESS');
 
         await _adoptCloudUser(user as User);
+        await _restorePendingCustomerProfile(
+          userId: user.id,
+          email: user.email,
+        );
 
         debugPrint('[login] local _adoptCloudUser SUCCESS');
 
@@ -451,6 +474,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               );
                             },
                       child: const Text("Don't have an account? Create one"),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _submitting
+                          ? null
+                          : () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    const RegisterScreen(customerMode: true),
+                              ),
+                            ),
+                      icon: const Icon(Icons.shopping_bag_outlined),
+                      label: const Text('Create a customer account'),
                     ),
                   ],
                 ),

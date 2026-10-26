@@ -20,6 +20,7 @@ import 'package:bos_application/features/transactions/domain/product_catalog_ser
 import 'package:bos_application/features/transactions/presentation/providers/product_catalog_providers.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/product_catalog_widgets.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
+import 'package:bos_application/features/customer/presentation/customer_storefront_management_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -197,6 +198,18 @@ class ProductsPage extends ConsumerWidget {
             ),
           ],
         ),
+        actions: [
+          if (ref.watch(canProvider(BosPermission.businessSettings)))
+            IconButton(
+              tooltip: 'Customer storefront and orders',
+              icon: const Icon(Icons.storefront_outlined),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const CustomerStorefrontManagementScreen(),
+                ),
+              ),
+            ),
+        ],
       ),
       body: listingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
