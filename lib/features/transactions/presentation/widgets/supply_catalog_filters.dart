@@ -18,7 +18,6 @@ import 'package:bos_application/features/transactions/presentation/widgets/barco
 import 'package:bos_application/features/transactions/presentation/widgets/purchase_line_editor_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:drift/drift.dart' hide Column, Table;

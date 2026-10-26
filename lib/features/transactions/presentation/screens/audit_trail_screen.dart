@@ -1121,6 +1121,17 @@ class _EventCard extends StatelessWidget {
                             icon: _moduleIcon(module),
                             color: scheme.onSurfaceVariant,
                           ),
+                          _Tag(
+                            label: row.source == 'database'
+                                ? 'Database-recorded'
+                                : 'Client-reported',
+                            icon: row.source == 'database'
+                                ? Icons.verified_outlined
+                                : Icons.phone_android_rounded,
+                            color: row.source == 'database'
+                                ? const Color(0xFF2E9E6B)
+                                : scheme.onSurfaceVariant,
+                          ),
                           if (hasReason)
                             _Tag(
                               label: 'Reason given',
@@ -1541,6 +1552,17 @@ class _AuditDetails extends StatelessWidget {
                         label: module?.label ?? row.module ?? 'Other',
                         icon: _moduleIcon(module),
                         color: scheme.onSurfaceVariant,
+                      ),
+                      _Tag(
+                        label: row.source == 'database'
+                            ? 'Database-recorded'
+                            : 'Client-reported',
+                        icon: row.source == 'database'
+                            ? Icons.verified_outlined
+                            : Icons.phone_android_rounded,
+                        color: row.source == 'database'
+                            ? const Color(0xFF2E9E6B)
+                            : scheme.onSurfaceVariant,
                       ),
                     ],
                   ),

@@ -15,6 +15,7 @@
 import 'package:bos_application/core/auth/authorization_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/ledger/ledger_service.dart';
+import 'package:bos_application/core/sync/sync_tracker.dart';
 import 'package:bos_application/features/transactions/domain/capital_asset_liability_service.dart';
 import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart'
     show CustomerService;
@@ -124,6 +125,7 @@ void main() {
 
   setUp(() async {
     db = await _newDb();
+    SyncTracker.currentUserId = 'u_owner';
     ledger = LedgerService(db);
     txns = TransactionService(db, ledger, _ownerAuth());
     customers = CustomerService(db);
@@ -132,6 +134,7 @@ void main() {
   });
 
   tearDown(() async {
+    SyncTracker.currentUserId = null;
     await db.close();
   });
 
@@ -278,6 +281,101 @@ void main() {
       expect(await _balance(db, seededAccountId('acc_rent_exp_$_biz')), 90000);
       await _expectAllEntriesBalanced(db);
     });
+
+    test('receipt photo path is persisted with the expense', () async {
+      final id = await txns.saveExpense(
+        date: date,
+        categoryId: seededCategoryId('Rent_$_biz'),
+        amount: 75000,
+        paymentAccountId: seededAccountId('acc_bank_$_biz'),
+        markAsPending: false,
+        receiptPhotoPath: 'receipts/rent.jpg',
+      );
+
+      final expense = await (db.select(
+        db.expenses,
+      )..where((row) => row.id.equals(id))).getSingle();
+      expect(expense.receiptPhotoPath, 'receipts/rent.jpg');
+    });
+
+    test('income cannot be saved to an expense category', () async {
+      await expectLater(
+        txns.saveIncome(
+          date: date,
+          categoryId: seededCategoryId('Rent_$_biz'),
+          amount: 10000,
+          paymentAccountId: seededAccountId('acc_cash_$_biz'),
+          markAsPending: false,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(await db.select(db.incomeTransactions).get(), isEmpty);
+      expect(await _journalCount(db), 0);
+    });
+
+    test('completed transactions require a payment account', () async {
+      await expectLater(
+        txns.saveExpense(
+          date: date,
+          categoryId: seededCategoryId('Rent_$_biz'),
+          amount: 10000,
+          markAsPending: false,
+        ),
+        throwsArgumentError,
+      );
+      expect(await db.select(db.expenses).get(), isEmpty);
+      expect(await _journalCount(db), 0);
+    });
+
+    test('deleting an expense syncs linked cart unlinking first', () async {
+      final expenseId = await txns.saveExpense(
+        date: date,
+        categoryId: seededCategoryId('Rent_$_biz'),
+        amount: 75000,
+        paymentAccountId: seededAccountId('acc_bank_$_biz'),
+        markAsPending: false,
+      );
+      await db
+          .into(db.shoppingCarts)
+          .insert(
+            ShoppingCartsCompanion.insert(
+              id: 'cart-linked',
+              businessId: _biz,
+              cartDate: date,
+              totalAmount: 75000,
+              expenseId: Value(expenseId),
+            ),
+          );
+
+      await txns.deleteExpense(expenseId);
+
+      final cart = await (db.select(
+        db.shoppingCarts,
+      )..where((row) => row.id.equals('cart-linked'))).getSingle();
+      expect(cart.expenseId, isNull);
+      final queuedCartUpdate = await (db.select(db.syncOutbox)..where(
+            (row) =>
+                row.entityType.equals('shopping_carts') &
+                row.entityId.equals('cart-linked') &
+                row.operation.equals('update'),
+          ))
+          .get();
+      expect(queuedCartUpdate, hasLength(1));
+    });
+  });
+
+  test('new categories are queued for synchronization', () async {
+    final category = await txns.addCategory('Travel costs', isIncome: false);
+
+    final queued =
+        await (db.select(db.syncOutbox)..where(
+              (row) =>
+                  row.entityType.equals('categories') &
+                  row.entityId.equals(category.id),
+            ))
+            .get();
+    expect(queued, hasLength(1));
+    expect(queued.single.operation, 'create');
   });
 
   group('Supplier payables', () {
@@ -632,6 +730,40 @@ void main() {
   });
 
   group('Atomicity', () {
+    test('service rejects users without finance-create permission', () async {
+      final cashierAuth = AuthorizationService(
+        userId: 'u_cashier',
+        businessId: _biz,
+        membership: BusinessMember(
+          id: 'mem_cashier_$_biz',
+          businessId: _biz,
+          userId: 'u_cashier',
+          role: 'cashier',
+          status: 'active',
+          invitedBy: null,
+          joinedAt: date,
+          updatedAt: date,
+        ),
+      );
+      final cashierTransactions = TransactionService(
+        db,
+        ledger,
+        cashierAuth,
+      );
+
+      await expectLater(
+        cashierTransactions.saveIncome(
+          date: date,
+          categoryId: seededCategoryId('Sale_$_biz'),
+          amount: 10000,
+          paymentAccountId: seededAccountId('acc_cash_$_biz'),
+          markAsPending: false,
+        ),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      expect(await db.select(db.incomeTransactions).get(), isEmpty);
+    });
+
     test('a failed posting leaves no journal entry or ledger lines', () async {
       final journalsBefore = await _journalCount(db);
 

@@ -4,7 +4,7 @@
 // has access to the selected business. AccessRevokedListener shows the
 // warning dialog while this is non-null.
 
-import 'package:flutter_riverpod/legacy.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class AccessRevocation {
   const AccessRevocation({

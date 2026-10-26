@@ -141,38 +141,40 @@ class BranchService {
   }
 
   Future<void> setActive(String branchId, bool active) async {
-    final b = await _get(branchId);
-    auth.require(BosPermission.branchManage, businessId: b.businessId);
-    if (!active) {
-      if (b.isHeadquarters) {
-        throw StateError('The main branch can\'t be deactivated.');
+    await db.transaction(() async {
+      final b = await _get(branchId);
+      auth.require(BosPermission.branchManage, businessId: b.businessId);
+      if (!active) {
+        if (b.isHeadquarters) {
+          throw StateError('The main branch can\'t be deactivated.');
+        }
+        final open =
+            await (db.select(db.posSessions)..where(
+                  (s) => s.branchId.equals(branchId) & s.status.equals('open'),
+                ))
+                .get();
+        if (open.isNotEmpty) {
+          throw StateError('Close the open shift at this branch first.');
+        }
+        final moving =
+            await (db.select(db.stockTransfers)..where(
+                  (t) =>
+                      t.status.equals('in_transit') &
+                      (t.fromBranchId.equals(branchId) |
+                          t.toBranchId.equals(branchId)),
+                ))
+                .get();
+        if (moving.isNotEmpty) {
+          throw StateError('Receive or cancel its stock transfers first.');
+        }
       }
-      final open =
-          await (db.select(db.posSessions)..where(
-                (s) => s.branchId.equals(branchId) & s.status.equals('open'),
-              ))
-              .get();
-      if (open.isNotEmpty) {
-        throw StateError('Close the open shift at this branch first.');
-      }
-      final moving =
-          await (db.select(db.stockTransfers)..where(
-                (t) =>
-                    t.status.equals('in_transit') &
-                    (t.fromBranchId.equals(branchId) |
-                        t.toBranchId.equals(branchId)),
-              ))
-              .get();
-      if (moving.isNotEmpty) {
-        throw StateError('Receive or cancel its stock transfers first.');
-      }
-    }
-    await (db.update(db.branches)..where((x) => x.id.equals(branchId))).write(
-      BranchesCompanion(
-        isActive: Value(active),
-        updatedAt: Value(DateTime.now()),
-      ),
-    );
+      await (db.update(db.branches)..where((x) => x.id.equals(branchId))).write(
+        BranchesCompanion(
+          isActive: Value(active),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+    });
   }
 
   /// Assign / unassign a user to a branch.
@@ -183,6 +185,23 @@ class BranchService {
     required bool assigned,
   }) async {
     auth.require(BosPermission.branchManage, businessId: businessId);
+    final branch = await (db.select(db.branches)..where(
+          (b) => b.id.equals(branchId) & b.businessId.equals(businessId),
+        ))
+        .getSingleOrNull();
+    if (branch == null) {
+      throw StateError('That branch does not belong to this business.');
+    }
+    final member = await (db.select(db.businessMembers)..where(
+          (m) =>
+              m.businessId.equals(businessId) &
+              m.userId.equals(userId) &
+              m.status.equals('active'),
+        ))
+        .getSingleOrNull();
+    if (member == null) {
+      throw StateError('That user is not an active member of this business.');
+    }
     final id = AppDatabase.cloudCompatibleDefaultId(
       'branch_members',
       '$branchId:$userId',

@@ -28,7 +28,6 @@ import 'package:bos_application/features/transactions/presentation/widgets/suppl
 import 'package:flutter/material.dart';
 import 'dart:ui' as ui show TextDirection;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:drift/drift.dart' hide Column, Table;
@@ -1797,28 +1796,33 @@ class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-
+ 
     if (!ref.watch(canProvider(BosPermission.purchasingView))) {
       return const _NoAccessView(
         title: 'Purchases are restricted',
         message: 'Your role can\'t view purchase history.',
       );
     }
-
+ 
     final historyAsync = ref.watch(purchaseHistoryProvider);
-
+ 
     return Scaffold(
+      backgroundColor: scheme.surface,
       appBar: AppBar(
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 4,
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'Purchase history',
-              style: TextStyle(fontWeight: FontWeight.w800),
+              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.3),
             ),
             Text(
-              'Receipts & checkout transactions',
-              style: TextStyle(fontSize: 11),
+              'Receipts from every checkout',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
             ),
           ],
         ),
@@ -1831,12 +1835,29 @@ class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
         ),
         data: (records) {
           final filtered = _filter(records);
-
+          final groups = _groupPurchasesByDay(filtered);
+          final isFiltered = _query.trim().isNotEmpty || _selectedDate != null;
+ 
+          void clearFilters() {
+            _searchController.clear();
+            setState(() {
+              _query = '';
+              _selectedDate = null;
+            });
+          }
+ 
           return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
             children: [
+              _PurchaseSummaryHero(
+                all: records,
+                visible: filtered,
+                isFiltered: isFiltered,
+              ),
+              const SizedBox(height: 16),
               _SearchField(
                 controller: _searchController,
+                hintText: 'Search store, item, brand or date',
                 onChanged: (value) => setState(() => _query = value),
                 onClear: () {
                   _searchController.clear();
@@ -1846,27 +1867,31 @@ class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: _pickDate,
-                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                  InputChip(
+                    avatar: Icon(
+                      Icons.calendar_today_rounded,
+                      size: 16,
+                      color: _selectedDate == null
+                          ? scheme.onSurfaceVariant
+                          : scheme.onSecondaryContainer,
+                    ),
                     label: Text(
                       _selectedDate == null
-                          ? 'All dates'
+                          ? 'Any date'
                           : _formatDate(_selectedDate!),
                     ),
+                    selected: _selectedDate != null,
+                    showCheckmark: false,
+                    onPressed: _pickDate,
+                    onDeleted: _selectedDate == null
+                        ? null
+                        : () => setState(() => _selectedDate = null),
+                    deleteButtonTooltipMessage: 'Clear date filter',
                   ),
-                  if (_selectedDate != null) ...[
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'Clear date filter',
-                      onPressed: () => setState(() => _selectedDate = null),
-                      icon: const Icon(Icons.clear_rounded),
-                    ),
-                  ],
                   const Spacer(),
                   Text(
-                    '${filtered.length} receipt${filtered.length == 1 ? '' : 's'}',
-
+                    '${filtered.length} of ${records.length} receipt'
+                    '${records.length == 1 ? '' : 's'}',
                     style: theme.textTheme.labelMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                       fontWeight: FontWeight.w700,
@@ -1874,45 +1899,24 @@ class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 6),
               if (filtered.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(28),
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.receipt_long_outlined,
-
-                        size: 42,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        records.isEmpty
-                            ? 'No purchases recorded yet.'
-                            : 'No purchases match these filters.',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
+                _PurchaseEmptyState(
+                  hasRecords: records.isNotEmpty,
+                  onClear: clearFilters,
                 )
               else
-                ...filtered.map(
-                  (record) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _PurchaseHistoryCard(
-                      checkout: record,
-                      onDelete: () => _deleteCheckout(record),
+                for (final group in groups) ...[
+                  _DayHeader(day: group.key, receipts: group.value),
+                  for (final record in group.value)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _PurchaseHistoryCard(
+                        checkout: record,
+                        onDelete: () => _deleteCheckout(record),
+                      ),
                     ),
-                  ),
-                ),
+                ],
             ],
           );
         },
@@ -2233,341 +2237,682 @@ class _PurchaseHistoryPageState extends ConsumerState<PurchaseHistoryPage> {
   }
 }
 
-class _PurchaseHistoryCard extends ConsumerStatefulWidget {
-  final PurchaseHistoryCheckout checkout;
-  final VoidCallback onDelete;
-
-  const _PurchaseHistoryCard({required this.checkout, required this.onDelete});
-
-  @override
-  ConsumerState<_PurchaseHistoryCard> createState() =>
-      _PurchaseHistoryCardState();
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+ 
+String _dayLabel(DateTime d) {
+  final now = DateTime.now();
+  final today = DateTime.utc(now.year, now.month, now.day);
+  final day = DateTime.utc(d.year, d.month, d.day);
+  final diff = today.difference(day).inDays;
+  if (diff == 0) return 'Today';
+  if (diff == 1) return 'Yesterday';
+  return DateFormat(d.year == now.year ? 'EEEE, MMM d' : 'MMM d, yyyy').format(d);
 }
-
-class _PurchaseHistoryCardState extends ConsumerState<_PurchaseHistoryCard> {
-  /// Store → payment details collapsed by default; user expands via chevron.
-  bool _detailsExpanded = false;
-
-  String _storeLabel(ShoppingCart cart) {
-    final name = cart.storeName?.trim();
-    if (name != null && name.isNotEmpty) return name;
-    return 'Store not specified';
+ 
+List<MapEntry<DateTime, List<PurchaseHistoryCheckout>>> _groupPurchasesByDay(
+  List<PurchaseHistoryCheckout> records,
+) {
+  final map = <DateTime, List<PurchaseHistoryCheckout>>{};
+  for (final r in records) {
+    final d = r.cart.cartDate;
+    final key = DateTime(d.year, d.month, d.day);
+    (map[key] ??= []).add(r);
   }
-
+  return map.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
+}
+ 
+String _storeLabelFor(ShoppingCart cart) {
+  final name = cart.storeName?.trim();
+  return (name != null && name.isNotEmpty) ? name : 'Store not specified';
+}
+ 
+// ----------------------------------------------------------------------------
+// Summary hero: the one expressive element on the list screen.
+// ----------------------------------------------------------------------------
+ 
+class _PurchaseSummaryHero extends StatelessWidget {
+  final List<PurchaseHistoryCheckout> all;
+  final List<PurchaseHistoryCheckout> visible;
+  final bool isFiltered;
+ 
+  const _PurchaseSummaryHero({
+    required this.all,
+    required this.visible,
+    required this.isFiltered,
+  });
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final checkout = widget.checkout;
-    final cart = checkout.cart;
-    final paymentAsync = ref.watch(
-      purchasePaymentDetailsProvider(cart.expenseId),
-    );
-    final canDelete = ref.watch(canProvider(BosPermission.financeVoid));
-
-    final time = DateFormat('h:mm a').format(cart.createdAt);
-
-    return Material(
-      color: scheme.surface,
-      borderRadius: BorderRadius.circular(20),
-      clipBehavior: Clip.antiAlias,
-      elevation: 0,
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => PurchaseCheckoutDetailPage(checkout: checkout),
-            ),
-          );
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: scheme.outlineVariant),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: scheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                      child: Icon(
-                        Icons.receipt_long_rounded,
-                        color: scheme.onPrimaryContainer,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Purchase receipt',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Checkout ${cart.id.substring(0, 8).toUpperCase()}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      _peso(cart.totalAmount),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    if (canDelete)
-                      PopupMenuButton<String>(
-                        tooltip: 'Checkout actions',
-                        onSelected: (value) {
-                          if (value == 'delete') widget.onDelete();
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text('Delete checkout'),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Material(
-                  color: scheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(14),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    children: [
-                      InkWell(
-                        onTap: () => setState(
-                          () => _detailsExpanded = !_detailsExpanded,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.info_outline_rounded,
-                                size: 17,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _detailsExpanded
-                                      ? 'Hide store & payment details'
-                                      : 'Store, date & payment',
-                                  style: theme.textTheme.labelLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ),
-                              AnimatedRotation(
-                                turns: _detailsExpanded ? 0.5 : 0,
-                                duration: const Duration(milliseconds: 180),
-                                child: Icon(
-                                  Icons.expand_more_rounded,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      AnimatedCrossFade(
-                        firstChild: const SizedBox(width: double.infinity),
-                        secondChild: Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                          child: Column(
-                            children: [
-                              const Divider(height: 1),
-                              const SizedBox(height: 10),
-                              _ReceiptInfoRow(
-                                icon: Icons.storefront_outlined,
-                                label: 'Store',
-                                value: _storeLabel(cart),
-                              ),
-                              const SizedBox(height: 8),
-                              _ReceiptInfoRow(
-                                icon: Icons.calendar_today_outlined,
-                                label: 'Purchase date',
-                                value: _formatDate(cart.cartDate),
-                              ),
-                              const SizedBox(height: 8),
-                              _ReceiptInfoRow(
-                                icon: Icons.schedule_outlined,
-                                label: 'Time',
-                                value: time,
-                              ),
-                              const SizedBox(height: 8),
-                              _ReceiptPaymentSummary(
-                                paymentAsync: paymentAsync,
-                              ),
-                            ],
-                          ),
-                        ),
-                        crossFadeState: _detailsExpanded
-                            ? CrossFadeState.showSecond
-                            : CrossFadeState.showFirst,
-                        duration: const Duration(milliseconds: 200),
-                      ),
-                    ],
+    final onTop = scheme.onPrimary;
+ 
+    final total = visible.fold<int>(0, (s, r) => s + r.cart.totalAmount);
+    final items = visible.fold<int>(0, (s, r) => s + r.items.length);
+    final average = visible.isEmpty ? 0 : (total / visible.length).round();
+ 
+    // Spend per day for the last 7 days (always from ALL receipts, so the
+    // chart stays a stable overview while the user filters the list).
+    final now = DateTime.now();
+    final today = DateTime.utc(now.year, now.month, now.day);
+    final dayTotals = List<int>.filled(7, 0);
+    for (final r in all) {
+      final d = r.cart.cartDate;
+      final day = DateTime.utc(d.year, d.month, d.day);
+      final index = 6 - today.difference(day).inDays;
+      if (index >= 0 && index < 7) dayTotals[index] += r.cart.totalAmount;
+    }
+    final maxDay = dayTotals.reduce((a, b) => a > b ? a : b);
+ 
+    // Cap the system font scale inside the hero so large accessibility
+    // sizes can't push the fixed-height chart past its box.
+    final mq = MediaQuery.of(context);
+    final scaler = mq.textScaler.clamp(maxScaleFactor: 1.25);
+ 
+    return MediaQuery(
+      data: mq.copyWith(textScaler: scaler),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final compact = width < 340;
+          final padding = compact ? 14.0 : 20.0;
+          final chartHeight = compact ? 56.0 : 68.0;
+ 
+          return Container(
+            padding: EdgeInsets.fromLTRB(padding, padding, padding, padding - 2),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(compact ? 22 : 28),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  scheme.primary,
+                  Color.alphaBlend(
+                    scheme.tertiary.withValues(alpha: 0.55),
+                    scheme.primary,
                   ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.shopping_bag_outlined,
-                      size: 17,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      '${checkout.items.length} item${checkout.items.length == 1 ? '' : 's'}',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      'Tap to view receipt',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      size: 18,
-                      color: scheme.primary,
-                    ),
-                  ],
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: scheme.primary.withValues(alpha: 0.26),
+                  blurRadius: 26,
+                  offset: const Offset(0, 12),
                 ),
               ],
             ),
-          ),
-        ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    isFiltered ? 'Spent in this view' : 'Total spent on supplies',
+                    maxLines: 1,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: onTop.withValues(alpha: 0.82),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _peso(total),
+                    maxLines: 1,
+                    style: theme.textTheme.displaySmall?.copyWith(
+                      fontSize: compact ? 30 : null,
+                      color: onTop,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -1,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                SizedBox(height: compact ? 12 : 16),
+                Row(
+                  children: [
+                    _HeroStat(label: 'Receipts', value: '${visible.length}'),
+                    _HeroStat(label: 'Items bought', value: '$items'),
+                    _HeroStat(label: 'Avg. receipt', value: _peso(average)),
+                  ],
+                ),
+                if (maxDay > 0) ...[
+                  SizedBox(height: compact ? 12 : 16),
+                  Container(height: 1, color: onTop.withValues(alpha: 0.18)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Last 7 days',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: onTop.withValues(alpha: 0.78),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: chartHeight,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < 7; i++)
+                          Expanded(
+                            child: _DayBar(
+                              fraction: dayTotals[i] / maxDay,
+                              hasSpend: dayTotals[i] > 0,
+                              isToday: i == 6,
+                              label: DateFormat('E').format(
+                                today.subtract(Duration(days: 6 - i)),
+                              )[0],
+                              color: onTop,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 }
-
-class _ReceiptInfoRow extends StatelessWidget {
-  final IconData icon;
+ 
+class _HeroStat extends StatelessWidget {
   final String label;
   final String value;
-
-  const _ReceiptInfoRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
+ 
+  const _HeroStat({required this.label, required this.value});
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 17, color: scheme.onSurfaceVariant),
-        const SizedBox(width: 9),
-        SizedBox(
-          width: 92,
-          child: Text(
-            label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+    final onTop = theme.colorScheme.onPrimary;
+ 
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: onTop,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            value,
-            textAlign: TextAlign.right,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w800,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              label,
+              maxLines: 1,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: onTop.withValues(alpha: 0.75),
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
-
-class _ReceiptPaymentSummary extends StatelessWidget {
-  final AsyncValue<List<PurchasePaymentDetail>> paymentAsync;
-
-  const _ReceiptPaymentSummary({required this.paymentAsync});
-
+ 
+class _DayBar extends StatelessWidget {
+  final double fraction;
+  final bool hasSpend;
+  final bool isToday;
+  final String label;
+  final Color color;
+ 
+  const _DayBar({
+    required this.fraction,
+    required this.hasSpend,
+    required this.isToday,
+    required this.label,
+    required this.color,
+  });
+ 
   @override
   Widget build(BuildContext context) {
-    return paymentAsync.when(
-      loading: () => const _ReceiptInfoRow(
-        icon: Icons.payments_outlined,
-        label: 'Payment',
-        value: 'Loading…',
-      ),
-      error: (_, __) => const _ReceiptInfoRow(
-        icon: Icons.payments_outlined,
-        label: 'Payment',
-        value: 'Unavailable',
-      ),
-      data: (payments) {
-        if (payments.isEmpty) {
-          return const _ReceiptInfoRow(
-            icon: Icons.payments_outlined,
-            label: 'Payment',
-            value: 'Not recorded',
-          );
-        }
-
-        final label = payments.length == 1
-            ? payments.first.account.name
-            : payments.map((payment) => payment.account.name).join(' + ');
-
-        return _ReceiptInfoRow(
-          icon: Icons.payments_outlined,
-          label: 'Payment',
-          value: label.isEmpty ? 'Payment account' : label,
+    const labelHeight = 16.0;
+    const gap = 4.0;
+ 
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The bar can only use what is left after the label, so the column
+        // can never overflow whatever height or font scale it is given.
+        final maxBar = (constraints.maxHeight - labelHeight - gap).clamp(
+          4.0,
+          double.infinity,
+        );
+        final barHeight = hasSpend ? (4 + (maxBar - 4) * fraction) : 4.0;
+ 
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOutCubic,
+              width: (constraints.maxWidth * 0.55).clamp(8.0, 22.0),
+              height: barHeight,
+              decoration: BoxDecoration(
+                color: color.withValues(
+                  alpha: isToday ? 1 : (hasSpend ? 0.55 : 0.2),
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            const SizedBox(height: gap),
+            SizedBox(
+              height: labelHeight,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
+                    color: color.withValues(alpha: isToday ? 1 : 0.7),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
   }
 }
-
+ 
+// ----------------------------------------------------------------------------
+// Day header + empty state
+// ----------------------------------------------------------------------------
+ 
+class _DayHeader extends StatelessWidget {
+  final DateTime day;
+  final List<PurchaseHistoryCheckout> receipts;
+ 
+  const _DayHeader({required this.day, required this.receipts});
+ 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final total = receipts.fold<int>(0, (s, r) => s + r.cart.totalAmount);
+ 
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _dayLabel(day),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Text(
+            _peso(total),
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+ 
+class _PurchaseEmptyState extends StatelessWidget {
+  final bool hasRecords;
+  final VoidCallback onClear;
+ 
+  const _PurchaseEmptyState({required this.hasRecords, required this.onClear});
+ 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+ 
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 16),
+      child: Column(
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              hasRecords
+                  ? Icons.search_off_rounded
+                  : Icons.receipt_long_outlined,
+              size: 32,
+              color: scheme.onPrimaryContainer,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            hasRecords ? 'No receipts match' : 'No purchases yet',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            hasRecords
+                ? 'Try a different search or clear the date filter.'
+                : 'Receipts show up here after you check out a cart.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          if (hasRecords) ...[
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: onClear,
+              child: const Text('Clear filters'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+ 
+// ----------------------------------------------------------------------------
+// Receipt card (list item)
+// ----------------------------------------------------------------------------
+ 
+class _PurchaseHistoryCard extends ConsumerWidget {
+  final PurchaseHistoryCheckout checkout;
+  final VoidCallback onDelete;
+ 
+  const _PurchaseHistoryCard({required this.checkout, required this.onDelete});
+ 
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cart = checkout.cart;
+    final items = checkout.items;
+    final paymentAsync = ref.watch(
+      purchasePaymentDetailsProvider(cart.expenseId),
+    );
+    final canDelete = ref.watch(canProvider(BosPermission.financeVoid));
+ 
+    final time = DateFormat('h:mm a').format(cart.createdAt);
+    final shown = items.take(3).toList();
+    final extra = items.length - shown.length;
+ 
+    return Material(
+      color: scheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(22),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PurchaseCheckoutDetailPage(checkout: checkout),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 6, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _StoreAvatar(name: cart.storeName),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _storeLabelFor(cart),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '$time · ${items.length} item'
+                          '${items.length == 1 ? '' : 's'}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: EdgeInsets.only(right: canDelete ? 0 : 8, top: 2),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.sizeOf(context).width * 0.34,
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          _peso(cart.totalAmount),
+                          maxLines: 1,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (canDelete)
+                    SizedBox(
+                      width: 36,
+                      height: 28,
+                      child: PopupMenuButton<String>(
+                        tooltip: 'Checkout actions',
+                        padding: EdgeInsets.zero,
+                        icon: Icon(
+                          Icons.more_vert_rounded,
+                          size: 20,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        onSelected: (value) {
+                          if (value == 'delete') onDelete();
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.delete_outline_rounded,
+                                  size: 20,
+                                  color: scheme.error,
+                                ),
+                                const SizedBox(width: 10),
+                                const Text('Delete checkout'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final item in shown)
+                      _MiniPill(
+                        text: item.itemName.trim().isEmpty
+                            ? 'Item'
+                            : item.itemName.trim(),
+                      ),
+                    if (extra > 0) _MiniPill(text: '+$extra more', muted: true),
+                  ],
+                ),
+              ),
+              paymentAsync.maybeWhen(
+                data: (payments) => payments.isEmpty
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 10, right: 8),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.account_balance_wallet_outlined,
+                              size: 15,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                payments.length == 1
+                                    ? 'Paid with ${payments.first.account.name}'
+                                    : 'Split: ${payments.map((p) => p.account.name).join(' + ')}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              size: 20,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ),
+                orElse: () => const SizedBox.shrink(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+ 
+/// Tonal rounded-square avatar. The tint is picked from the store name so
+/// the same store always looks the same.
+class _StoreAvatar extends StatelessWidget {
+  final String? name;
+  final double size;
+ 
+  const _StoreAvatar({required this.name, this.size = 46});
+ 
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final trimmed = (name ?? '').trim();
+    final palettes = <(Color, Color)>[
+      (scheme.primaryContainer, scheme.onPrimaryContainer),
+      (scheme.secondaryContainer, scheme.onSecondaryContainer),
+      (scheme.tertiaryContainer, scheme.onTertiaryContainer),
+    ];
+    final (bg, fg) = trimmed.isEmpty
+        ? (scheme.surfaceContainerHighest, scheme.onSurfaceVariant)
+        : palettes[trimmed.toLowerCase().codeUnits.fold<int>(0, (a, b) => a + b) %
+              palettes.length];
+ 
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(size * 0.32),
+      ),
+      child: trimmed.isEmpty
+          ? Icon(Icons.storefront_outlined, color: fg, size: size * 0.5)
+          : Text(
+              trimmed[0].toUpperCase(),
+              style: TextStyle(
+                color: fg,
+                fontSize: size * 0.42,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+    );
+  }
+}
+ 
+class _MiniPill extends StatelessWidget {
+  final String text;
+  final bool muted;
+ 
+  const _MiniPill({required this.text, this.muted = false});
+ 
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+ 
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 150),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: muted
+            ? Colors.transparent
+            : scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(20),
+        border: muted
+            ? Border.all(color: scheme.outlineVariant.withValues(alpha: 0.7))
+            : null,
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+ 
+// ----------------------------------------------------------------------------
+// Receipt detail page: a paper receipt with a torn bottom edge.
+// ----------------------------------------------------------------------------
+ 
 class PurchaseCheckoutDetailPage extends ConsumerWidget {
   final PurchaseHistoryCheckout checkout;
-
+ 
   const PurchaseCheckoutDetailPage({super.key, required this.checkout});
-
+ 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -2576,178 +2921,167 @@ class PurchaseCheckoutDetailPage extends ConsumerWidget {
     final paymentAsync = ref.watch(
       purchasePaymentDetailsProvider(cart.expenseId),
     );
-
-    final purchaseDate = _formatDate(cart.cartDate);
-    final checkoutTime = DateFormat('h:mm a').format(cart.createdAt);
-    final storeName = cart.storeName?.trim();
+ 
     final storeAddress = cart.storeAddress?.trim();
-
+    final itemCount = checkout.items.length;
+    final saved = checkout.items.fold<int>(
+      0,
+      (s, i) => s + (i.discountAmount > 0 ? i.discountAmount : 0),
+    );
+ 
     return Scaffold(
+      backgroundColor: scheme.surfaceContainer,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: const Text(
-          'Purchase receipt',
+          'Receipt',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 32),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         children: [
-          Center(
-            child: Text(
-              'PURCHASE RECEIPT',
-              style: theme.textTheme.labelLarge?.copyWith(
-                letterSpacing: 1.8,
-                fontWeight: FontWeight.w900,
-                color: scheme.primary,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
+          ClipPath(
+            clipper: const _ReceiptEdgeClipper(),
+            child: Container(
               color: scheme.surface,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: scheme.outlineVariant),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.storefront_rounded,
-                        size: 30,
+              padding: EdgeInsets.fromLTRB(
+                MediaQuery.sizeOf(context).width < 360 ? 16 : 22,
+                26,
+                MediaQuery.sizeOf(context).width < 360 ? 16 : 22,
+                34,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Store + total ───────────────────────────────────
+                  Center(child: _StoreAvatar(name: cart.storeName, size: 56)),
+                  const SizedBox(height: 12),
+                  Text(
+                    _storeLabelFor(cart),
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  if (storeAddress != null && storeAddress.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      storeAddress,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      _peso(cart.totalAmount),
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -1,
                         color: scheme.primary,
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        storeName?.isNotEmpty == true
-                            ? storeName!
-                            : 'Store not specified',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      if (storeAddress?.isNotEmpty == true) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          storeAddress!,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 12),
-                      Container(
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$itemCount item${itemCount == 1 ? '' : 's'} purchased',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (saved > 0) ...[
+                    const SizedBox(height: 10),
+                    Center(
+                      child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
-                          vertical: 6,
+                          vertical: 5,
                         ),
                         decoration: BoxDecoration(
-                          color: scheme.surfaceContainerLow,
-                          borderRadius: BorderRadius.circular(9),
+                          color: Colors.green.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          'Checkout ${cart.id.substring(0, 8).toUpperCase()}',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.4,
+                          'You saved ${_peso(saved)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.green.shade700,
                           ),
                         ),
                       ),
-                    ],
+                    ),
+                  ],
+ 
+                  const SizedBox(height: 22),
+                  _DashedLine(color: scheme.outlineVariant),
+                  const SizedBox(height: 16),
+ 
+                  // ── When ────────────────────────────────────────────
+                  _ReceiptInfoRow(
+                    icon: Icons.calendar_today_outlined,
+                    label: 'Date',
+                    value: _formatDate(cart.cartDate),
                   ),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                  child: Column(
-                    children: [
-                      _ReceiptInfoRow(
-                        icon: Icons.calendar_today_outlined,
-                        label: 'Purchase date',
-                        value: purchaseDate,
-                      ),
-                      const SizedBox(height: 10),
-                      _ReceiptInfoRow(
-                        icon: Icons.schedule_outlined,
-                        label: 'Time purchased',
-                        value: checkoutTime,
-                      ),
-                      const SizedBox(height: 10),
-                      _ReceiptPaymentDetail(paymentAsync: paymentAsync),
-                    ],
+                  const SizedBox(height: 10),
+                  _ReceiptInfoRow(
+                    icon: Icons.schedule_outlined,
+                    label: 'Time',
+                    value: DateFormat('h:mm a').format(cart.createdAt),
                   ),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-                  child: Row(
+                  const SizedBox(height: 10),
+                  _ReceiptInfoRow(
+                    icon: Icons.tag_rounded,
+                    label: 'Checkout',
+                    value: cart.id.substring(0, 8).toUpperCase(),
+                  ),
+ 
+                  const SizedBox(height: 16),
+                  _DashedLine(color: scheme.outlineVariant),
+                  const SizedBox(height: 8),
+ 
+                  // ── Items ───────────────────────────────────────────
+                  for (final item in checkout.items) _ReceiptItemRow(item: item),
+ 
+                  const SizedBox(height: 8),
+                  _DashedLine(color: scheme.outlineVariant),
+                  const SizedBox(height: 16),
+ 
+                  // ── Total + payment ─────────────────────────────────
+                  Row(
                     children: [
                       Text(
-                        'ITEM',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
+                        'Total',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                       const Spacer(),
                       Text(
-                        'AMOUNT',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
+                        _peso(cart.totalAmount),
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ],
                   ),
-                ),
-                ...checkout.items.map((item) => _ReceiptItemRow(item: item)),
-                const SizedBox(height: 6),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
-                  child: Column(
-                    children: [
-                      Divider(height: 1, color: scheme.outlineVariant),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          Text(
-                            'TOTAL',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            _peso(cart.totalAmount),
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${checkout.items.length} item${checkout.items.length == 1 ? '' : 's'} purchased',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+                  const SizedBox(height: 14),
+                  _ReceiptPaymentDetail(paymentAsync: paymentAsync),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Text(
             'Recorded in BOS inventory and accounting.',
             textAlign: TextAlign.center,
@@ -2760,183 +3094,230 @@ class PurchaseCheckoutDetailPage extends ConsumerWidget {
     );
   }
 }
-
-class _ReceiptPaymentDetail extends StatelessWidget {
-  final AsyncValue<List<PurchasePaymentDetail>> paymentAsync;
-
-  const _ReceiptPaymentDetail({required this.paymentAsync});
-
+ 
+class _ReceiptInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+ 
+  const _ReceiptInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-
-    return paymentAsync.when(
-      loading: () => const _ReceiptInfoRow(
-        icon: Icons.payments_outlined,
-        label: 'Payment method',
-        value: 'Loading…',
+ 
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 17, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 9),
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+ 
+class _ReceiptPaymentDetail extends StatelessWidget {
+  final AsyncValue<List<PurchasePaymentDetail>> paymentAsync;
+ 
+  const _ReceiptPaymentDetail({required this.paymentAsync});
+ 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+ 
+    Widget shell(Widget child) => Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
       ),
-      error: (_, __) => const _ReceiptInfoRow(
-        icon: Icons.payments_outlined,
-        label: 'Payment method',
-        value: 'Unavailable',
+      child: child,
+    );
+ 
+    return paymentAsync.when(
+      loading: () => shell(
+        Text(
+          'Loading payment…',
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        ),
+      ),
+      error: (_, __) => shell(
+        Text(
+          'Payment details unavailable',
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        ),
       ),
       data: (payments) {
         if (payments.isEmpty) {
-          return const _ReceiptInfoRow(
-            icon: Icons.payments_outlined,
-            label: 'Payment method',
-            value: 'Not recorded',
+          return shell(
+            Text(
+              'Payment not recorded',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
           );
         }
-
-        if (payments.length == 1) {
-          return _ReceiptInfoRow(
-            icon: Icons.payments_outlined,
-            label: 'Payment method',
-            value:
-                '${payments.first.account.name} · ${_peso(payments.first.amount)}',
-          );
-        }
-
-        return Column(
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.payments_outlined,
-                  size: 17,
+ 
+        return shell(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                payments.length == 1 ? 'Paid with' : 'Paid with (split)',
+                style: theme.textTheme.labelMedium?.copyWith(
                   color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(width: 9),
-                SizedBox(
-                  width: 92,
-                  child: Text(
-                    'Payment method',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
+              ),
+              const SizedBox(height: 10),
+              for (var i = 0; i < payments.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.account_balance_wallet_outlined,
+                        size: 17,
+                        color: scheme.onPrimaryContainer,
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (final payment in payments) ...[
-                        Text(
-                          '${payment.account.name} · ${_peso(payment.amount)}',
-                          textAlign: TextAlign.right,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        payments[i].account.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
                         ),
-                        if (payment != payments.last) const SizedBox(height: 4),
-                      ],
-                    ],
-                  ),
+                      ),
+                    ),
+                    Text(
+                      _peso(payments[i].amount),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         );
       },
     );
   }
 }
-
+ 
 class _ReceiptItemRow extends StatelessWidget {
   final ShoppingCartItem item;
-
+ 
   const _ReceiptItemRow({required this.item});
-
-  String _trimQty(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final unitLabel = [
-      if (!item.isWeighted && item.unitQuantity != null) '${item.unitQuantity}',
-      if (item.unit != null && item.unit!.trim().isNotEmpty) item.unit!,
-    ].join(' ');
-
-    final quantityLabel = item.isWeighted
-        ? '${_trimQty(item.weightQuantity ?? 0)}${item.unit == null ? '' : ' ${item.unit}'}'
-        : '${item.quantity}';
-
+ 
+    final unit = (item.unit ?? '').trim();
+    final qtyBadge = item.isWeighted
+        ? '${_qty(item.weightQuantity ?? 0)}${unit.isEmpty ? '' : ' $unit'}'
+        : '${item.quantity}×';
+    final detail = item.isWeighted
+        ? '${_peso(item.unitPrice)}${unit.isEmpty ? '' : ' / $unit'}'
+        : '${_peso(item.unitPrice)} each${unit.isEmpty ? '' : ' · $unit'}';
+    final brand = (item.brand ?? '').trim();
+ 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
+      padding: const EdgeInsets.symmetric(vertical: 9),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            constraints: const BoxConstraints(minWidth: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              qtyBadge,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        item.itemName,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    if (item.isWeighted) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'By weight',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.blue.shade800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                Text(
+                  item.itemName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-                if (item.brand != null && item.brand!.trim().isNotEmpty)
+                if (brand.isNotEmpty)
                   Text(
-                    item.brand!,
+                    brand,
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
                   ),
                 const SizedBox(height: 2),
                 Text(
-                  item.isWeighted
-                      ? '$quantityLabel × ${_peso(item.unitPrice)}'
-                      : '$quantityLabel × ${_peso(item.unitPrice)}${unitLabel.isEmpty ? '' : ' · $unitLabel'}',
+                  detail,
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
+                if (item.discountAmount > 0)
+                  Text(
+                    'Discount −${_peso(item.discountAmount)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.green.shade700,
+                    ),
+                  ),
               ],
             ),
           ),
           const SizedBox(width: 12),
           Text(
             _peso(item.lineTotal),
-            textAlign: TextAlign.right,
             style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -2944,6 +3325,86 @@ class _ReceiptItemRow extends StatelessWidget {
     );
   }
 }
+ 
+// ----------------------------------------------------------------------------
+// Receipt paper details
+// ----------------------------------------------------------------------------
+ 
+/// Rounded top corners, zig-zag torn bottom edge.
+class _ReceiptEdgeClipper extends CustomClipper<Path> {
+  const _ReceiptEdgeClipper();
+ 
+  @override
+  Path getClip(Size size) {
+    const radius = 22.0;
+    const tooth = 10.0;
+    final count = (size.width / 14).floor().clamp(4, 80);
+    final w = size.width / count;
+ 
+    final path = Path()
+      ..moveTo(0, radius)
+      ..arcToPoint(
+        const Offset(radius, 0),
+        radius: const Radius.circular(radius),
+      )
+      ..lineTo(size.width - radius, 0)
+      ..arcToPoint(
+        Offset(size.width, radius),
+        radius: const Radius.circular(radius),
+      )
+      ..lineTo(size.width, size.height - tooth);
+ 
+    for (var i = count; i > 0; i--) {
+      path
+        ..lineTo(w * i - w / 2, size.height)
+        ..lineTo(w * (i - 1), size.height - tooth);
+    }
+ 
+    return path..close();
+  }
+ 
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+ 
+class _DashedLine extends StatelessWidget {
+  final Color color;
+ 
+  const _DashedLine({required this.color});
+ 
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 1,
+      width: double.infinity,
+      child: CustomPaint(painter: _DashedLinePainter(color)),
+    );
+  }
+}
+ 
+class _DashedLinePainter extends CustomPainter {
+  final Color color;
+ 
+  _DashedLinePainter(this.color);
+ 
+  @override
+  void paint(Canvas canvas, Size size) {
+    const dash = 6.0;
+    const gap = 5.0;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2;
+    var x = 0.0;
+    while (x < size.width) {
+      canvas.drawLine(Offset(x, 0), Offset(x + dash, 0), paint);
+      x += dash + gap;
+    }
+  }
+ 
+  @override
+  bool shouldRepaint(covariant _DashedLinePainter old) => old.color != color;
+}
+ 
 
 // ============================================================================
 // ALL STOCK ADJUSTMENTS PAGE — every damaged/expired/corrected write-off

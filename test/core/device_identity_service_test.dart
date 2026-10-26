@@ -1,3 +1,6 @@
+// This suite is disabled until its commented implementation is updated.
+void main() {}
+
 // import 'package:bos_application/core/device/device_identity_service.dart';
 // import 'package:test/test.dart';
 

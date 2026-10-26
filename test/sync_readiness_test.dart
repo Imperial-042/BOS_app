@@ -10,6 +10,7 @@ import 'package:bos_application/core/business/business_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/ledger/ledger_service.dart';
 import 'package:bos_application/core/sync/business_export_service.dart';
+import 'package:bos_application/core/sync/sync_tracker.dart';
 import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart'
     show CustomerService;
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
@@ -82,9 +83,11 @@ void main() {
     customers = CustomerService(db);
     biz = await _createBusiness(db, 'Alpha');
     kCurrentBusinessId = biz.id;
+    SyncTracker.currentUserId = _owner;
   });
 
   tearDown(() async {
+    SyncTracker.currentUserId = null;
     await db.close();
   });
 

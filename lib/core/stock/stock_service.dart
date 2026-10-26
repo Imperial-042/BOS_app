@@ -147,6 +147,16 @@ class StockService {
     String? shoppingCartItemId,
     String? id,
   }) async {
+    if (!quantity.isFinite) {
+      throw ArgumentError('Stock movement quantity must be finite.');
+    }
+    final supply = await (db.select(
+      db.supplies,
+    )..where((s) => s.id.equals(supplyId))).getSingleOrNull();
+    if (supply == null || !supply.isActive) {
+      throw StateError('This supply is unavailable.');
+    }
+    await _requireActiveBranch(branchId, supply.businessId);
     await db
         .into(db.inventoryMovements)
         .insert(
@@ -178,11 +188,20 @@ class StockService {
     String? notes,
     String? id,
   }) async {
-    final biz =
-        businessId ??
-        (await (db.select(
-          db.products,
-        )..where((p) => p.id.equals(productId))).getSingle()).businessId;
+    if (!quantity.isFinite) {
+      throw ArgumentError('Stock movement quantity must be finite.');
+    }
+    final product = await (db.select(
+      db.products,
+    )..where((p) => p.id.equals(productId))).getSingleOrNull();
+    if (product == null || !product.isActive) {
+      throw StateError('This product is unavailable.');
+    }
+    final biz = businessId ?? product.businessId;
+    if (product.businessId != biz) {
+      throw StateError('This product does not belong to this business.');
+    }
+    await _requireActiveBranch(branchId, biz);
     await db
         .into(db.productStockMovements)
         .insert(
@@ -200,6 +219,20 @@ class StockService {
           mode: InsertMode.insertOrIgnore,
         );
     await _projectProduct(productId, branchId);
+  }
+
+  Future<void> _requireActiveBranch(String branchId, String businessId) async {
+    final branch =
+        await (db.select(db.branches)..where(
+              (b) =>
+                  b.id.equals(branchId) &
+                  b.businessId.equals(businessId) &
+                  b.isActive.equals(true),
+            ))
+            .getSingleOrNull();
+    if (branch == null) {
+      throw StateError('Choose an active branch in this business.');
+    }
   }
 
   // ---------------------------------------------------------- projection ----
@@ -297,10 +330,12 @@ class StockProjection {
   final Ref _ref;
 
   Future<void> refresh() async {
+    final branchId = _ref.read(selectedBranchIdProvider);
+    if (branchId.isEmpty) return;
     await StockService.recompute(
       _ref.read(databaseProvider),
       businessId: _ref.read(selectedBusinessIdProvider),
-      branchId: _ref.read(selectedBranchIdProvider),
+      branchId: branchId,
     );
     // Open screens re-read on this signal.
     _ref.read(ledgerVersionProvider.notifier).state++;

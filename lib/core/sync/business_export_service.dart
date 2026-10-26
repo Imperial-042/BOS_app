@@ -17,9 +17,11 @@ import '../database/database_provider.dart';
 /// Parent-before-child: inserting in this order satisfies every foreign
 /// key. Businesses lead, then account/category masters, then parties, then
 /// the transactional/ledger records that reference them.
-const _exportOrder = <String>[
+const businessExportTables = <String>[
   'businesses',
   'accounts',
+  'branches',
+  'branch_members',
   'categories',
   'product_categories',
   'customers',
@@ -40,17 +42,32 @@ const _exportOrder = <String>[
   'shopping_cart_items',
   'supply_price_history',
   'inventory_movements',
+  'pos_order_types',
+  'pos_tables',
   'pos_sessions',
   'pos_sales',
   'pos_sale_items',
   'pos_sale_payments',
   'pos_sale_tenders',
+  'pos_returns',
+  'pos_return_items',
+  'product_stock_movements',
+  'stock_transfers',
+  'stock_transfer_items',
   'journal_entries',
   'ledger_lines',
+  'schedule_shifts',
+  'attendance_records',
+  'leave_requests',
+  'payroll_profiles',
+  'payroll_runs',
+  'payroll_items',
   'business_members',
   'business_invites',
   'business_module_configs',
   'role_permission_overrides',
+  'custom_roles',
+  'role_labels',
   'audit_logs',
   'sync_outbox',
 ];
@@ -66,7 +83,7 @@ class BusinessExportService {
     String businessId,
   ) async {
     final result = <String, List<Map<String, Object?>>>{};
-    for (final table in _exportOrder) {
+    for (final table in businessExportTables) {
       result[table] = await _exportTable(table, businessId);
     }
     return result;
@@ -119,8 +136,14 @@ class BusinessExportService {
       case 'pos_sale_payments':
       case 'pos_sale_tenders':
         return 'sale_id IN (SELECT id FROM pos_sales WHERE business_id = ?)';
+      case 'pos_return_items':
+        return 'return_id IN (SELECT id FROM pos_returns WHERE business_id = ?)';
       case 'ledger_lines':
         return 'journal_entry_id IN (SELECT id FROM journal_entries WHERE business_id = ?)';
+      case 'payroll_items':
+        return 'run_id IN (SELECT id FROM payroll_runs WHERE business_id = ?)';
+      case 'stock_transfer_items':
+        return 'transfer_id IN (SELECT id FROM stock_transfers WHERE business_id = ?)';
       default:
         return null;
     }

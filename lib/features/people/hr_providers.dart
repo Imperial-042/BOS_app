@@ -121,9 +121,10 @@ class HrService {
   // ---------------- attendance ----------------
 
   Future<void> clockIn({
-    required String businessId,
-    required String userId,
-  }) async {
+  required String businessId,
+  required String userId,
+  String? branchId, // NEW
+}) async {
     final open =
         await (db.select(db.attendanceRecords)..where(
               (a) =>
@@ -135,19 +136,19 @@ class HrService {
     if (open.isNotEmpty) throw StateError('You are already clocked in.');
 
     final now = DateTime.now();
-    await db
-        .into(db.attendanceRecords)
-        .insert(
-          AttendanceRecordsCompanion.insert(
-            id: _uuid.v4(),
-            businessId: businessId,
-            userId: userId,
-            workDate: dateOnly(now),
-            clockIn: now,
-            createdBy: Value(userId),
-          ),
-        );
-  }
+    await db.into(db.attendanceRecords).insert(
+    AttendanceRecordsCompanion.insert(
+      id: _uuid.v4(),
+      businessId: businessId,
+      userId: userId,
+      workDate: dateOnly(now),
+      clockIn: now,
+      branchId: Value(branchId), // NEW
+      createdBy: Value(userId),
+    ),
+  );
+}
+
 
   Future<void> clockOut(String recordId, {int breakMinutes = 0}) async {
     final rec = await (db.select(
@@ -171,16 +172,17 @@ class HrService {
     );
   }
 
-  Future<void> addManualAttendance({
-    required String businessId,
-    required String userId,
-    required DateTime date,
-    required int inMinutes,
-    required int outMinutes,
-    required int breakMinutes,
-    String? note,
-    String? enteredBy,
-  }) async {
+Future<void> addManualAttendance({
+  required String businessId,
+  required String userId,
+  required DateTime date,
+  required int inMinutes,
+  required int outMinutes,
+  required int breakMinutes,
+  String? note,
+  String? enteredBy,
+  String? branchId, // NEW
+}) async {
     if (outMinutes <= inMinutes) {
       throw StateError('The time out must be after the time in.');
     }
@@ -215,6 +217,7 @@ class HrService {
             breakMinutes: Value(breakMinutes),
             source: const Value('manual'),
             note: Value((note ?? '').trim().isEmpty ? null : note!.trim()),
+            branchId: Value(branchId),
             createdBy: Value(enteredBy),
           ),
         );

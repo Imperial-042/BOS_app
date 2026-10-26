@@ -1,4 +1,5 @@
 import 'package:bos_application/core/database/app_database.dart';
+import 'package:bos_application/core/stock/stock_service.dart';
 import 'package:bos_application/features/transactions/domain/costing_service.dart';
 import 'package:bos_application/features/transactions/domain/production_service.dart';
 import 'package:bos_application/features/transactions/domain/purchase_draft_cart_service.dart';
@@ -9,6 +10,7 @@ import 'package:bos_application/features/transactions/presentation/screens/suppl
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
     show kCurrentBusinessId;
 import 'package:bos_application/features/transactions/presentation/widgets/purchase_line_editor_dialog.dart';
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -94,7 +96,25 @@ void main() {
             ownerUserId: 'owner-1',
           ),
         );
+    await database
+        .into(database.branches)
+        .insert(
+          BranchesCompanion.insert(
+            id: AppDatabase.mainBranchId('business-1'),
+            businessId: 'business-1',
+            name: 'Main Branch',
+            isHeadquarters: const Value(true),
+          ),
+        );
     await database.into(database.supplies).insert(makeCokeSupply());
+    final branchId = AppDatabase.mainBranchId('business-1');
+    await StockService(database, viewBranchId: branchId).moveSupply(
+      branchId: branchId,
+      supplyId: 'supply-coke',
+      type: 'opening_balance',
+      quantity: 100,
+      unit: 'piece',
+    );
   });
 
   tearDown(() async {
@@ -425,10 +445,9 @@ void main() {
       );
       expect(baseUnits, 12);
 
-      final branchId = ref.read(selectedBranchIdProvider);
+      final branchId = AppDatabase.mainBranchId('business-1');
 
-      await CostingService(database).recordPurchase(
-        branchId: AppDatabase.mainBranchId('business-1')
+      await CostingService(database, branchId: branchId).recordPurchase(
         supplyId: supply.id,
         pricePerPurchaseUnitCents: item.unitPrice,
         purchaseQuantity: item.quantity.toDouble(),
@@ -494,31 +513,32 @@ void main() {
         ),
       );
 
-      TextField totalField() => tester.widget<TextField>(
+      TextField field(String label) => tester.widget<TextField>(
         find.byWidgetPredicate(
           (widget) =>
-              widget is TextField &&
-              widget.decoration?.labelText == 'Total Purchase Price',
+              widget is TextField && widget.decoration?.labelText == label,
         ),
       );
 
       await tester.tap(find.text('Edit line'));
       await tester.pumpAndSettle();
-      expect(totalField().controller!.text, '160.00');
+      expect(field('Total Purchase Price').controller!.text, '160.00');
 
-      // case → piece: ₱160 / 12 ≈ ₱13.33.
+      // Switching units preserves the total while converting quantity and unit price.
       await tester.tap(find.byType(DropdownButtonFormField<String>));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(DropdownMenuItem<String>, 'piece'));
       await tester.pumpAndSettle();
-      expect(totalField().controller!.text, '13.33');
+      expect(field('Quantity').controller!.text, '12');
+      expect(field('Total Purchase Price').controller!.text, '160.00');
 
-      // piece → case: the original ₱160.00 is restored exactly.
+      // Switching back restores the original unit, quantity, and unit price.
       await tester.tap(find.byType(DropdownButtonFormField<String>));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(DropdownMenuItem<String>, 'case'));
       await tester.pumpAndSettle();
-      expect(totalField().controller!.text, '160.00');
+      expect(field('Quantity').controller!.text, '1');
+      expect(field('Total Purchase Price').controller!.text, '160.00');
 
       await tester.tap(find.text('Save Changes'));
       await tester.pumpAndSettle();

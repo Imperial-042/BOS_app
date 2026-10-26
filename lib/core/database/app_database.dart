@@ -904,6 +904,8 @@ class AuditLogs extends Table {
   TextColumn get actorName => text().nullable()();
   TextColumn get actorRole => text().nullable()();
   TextColumn get deviceId => text().nullable()();
+  TextColumn get source =>
+      text().withDefault(const Constant('client_reported'))();
   TextColumn get reason => text().nullable()();
   TextColumn get beforeJson => text().nullable()();
   TextColumn get afterJson => text().nullable()();
@@ -1317,7 +1319,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 45;
+  int get schemaVersion => 47;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -1368,6 +1370,7 @@ class AppDatabase extends _$AppDatabase {
       await _createModuleConfigIndexes();
       await _createSyncOutboxIndexes();
       await _createBranchIndexes();
+      await _createPosReturnTables();
       await SyncChangeLog.install(this);
       await AuditSchemaGuard.install(this);
     },
@@ -1853,6 +1856,12 @@ class AppDatabase extends _$AppDatabase {
         await _enableBranches();
         await _createBranchIndexes();
       }
+      if (from < 46) {
+        await _addColumnIfMissing(m, auditLogs, auditLogs.source);
+      }
+      if (from < 47) {
+        await _createPosReturnTables();
+      }
     },
   );
 
@@ -1867,6 +1876,46 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS ix_sync_outbox_owners_user '
       'ON sync_outbox_owners (owner_user_id, outbox_id)',
+    );
+  }
+
+  Future<void> _createPosReturnTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS pos_returns (
+        id TEXT NOT NULL PRIMARY KEY,
+        business_id TEXT NOT NULL REFERENCES businesses(id),
+        sale_id TEXT NOT NULL REFERENCES pos_sales(id),
+        refund_account_id TEXT NOT NULL REFERENCES accounts(id),
+        reason TEXT NOT NULL,
+        created_by TEXT,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS pos_return_items (
+        id TEXT NOT NULL PRIMARY KEY,
+        return_id TEXT NOT NULL
+          REFERENCES pos_returns(id) ON DELETE RESTRICT,
+        sale_item_id TEXT NOT NULL REFERENCES pos_sale_items(id),
+        quantity REAL NOT NULL CHECK (quantity > 0),
+        refund_amount INTEGER NOT NULL CHECK (refund_amount >= 0)
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS pos_returns_business_created_idx '
+      'ON pos_returns (business_id, created_at DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS pos_returns_sale_idx '
+      'ON pos_returns (sale_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS pos_return_items_return_idx '
+      'ON pos_return_items (return_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS pos_return_items_sale_item_idx '
+      'ON pos_return_items (sale_item_id)',
     );
   }
 

@@ -1,4 +1,5 @@
 import 'package:bos_application/core/database/app_database.dart';
+import 'package:bos_application/core/stock/stock_service.dart';
 import 'package:bos_application/features/transactions/domain/costing_service.dart';
 import 'package:bos_application/features/transactions/domain/purchase_draft_cart_service.dart';
 import 'package:bos_application/features/transactions/domain/purchase_cart_search.dart';
@@ -78,7 +79,27 @@ void main() {
             ownerUserId: 'owner-2',
           ),
         );
+    for (final businessId in ['business-1', 'business-2']) {
+      await database
+          .into(database.branches)
+          .insert(
+            BranchesCompanion.insert(
+              id: AppDatabase.mainBranchId(businessId),
+              businessId: businessId,
+              name: 'Main Branch',
+              isHeadquarters: const Value(true),
+            ),
+          );
+    }
     await database.into(database.supplies).insert(makeSupply());
+    final branchId = AppDatabase.mainBranchId('business-1');
+    await StockService(database, viewBranchId: branchId).moveSupply(
+      branchId: branchId,
+      supplyId: 'supply-1',
+      type: 'opening_balance',
+      quantity: 10,
+      unit: 'kg',
+    );
   });
 
   tearDown(() async {
@@ -363,21 +384,22 @@ void main() {
       await tester.tap(find.text('piece').last);
       await tester.pumpAndSettle();
 
-      final totalField = tester.widget<TextField>(
+      TextField field(String label) => tester.widget<TextField>(
         find.byWidgetPredicate(
           (widget) =>
-              widget is TextField &&
-              widget.decoration?.labelText == 'Total Purchase Price',
+              widget is TextField && widget.decoration?.labelText == label,
         ),
       );
-      expect(totalField.controller!.text, '14.00');
+      expect(field('Quantity').controller!.text, '10');
+      expect(field('Total Purchase Price').controller!.text, '140.00');
 
       await tester.tap(find.text('Save Changes'));
       await tester.pumpAndSettle();
       expect(savedPricing!.unitName, 'piece');
+      expect(savedPricing!.quantity, 10);
       expect(savedPricing!.stockUnitsPerUnit, closeTo(0.1, 0.000001));
       expect(savedPricing!.unitPriceCents, 1400);
-      expect(savedPricing!.finalTotalCents, 1400);
+      expect(savedPricing!.finalTotalCents, 14000);
     });
 
     test('keeps separate same-product lines through database reload', () async {
@@ -571,7 +593,10 @@ void main() {
         purchaseUnit: 'sack',
         configuredUnitsPerPurchase: 10,
       );
-      await CostingService(database).recordPurchase(
+      await CostingService(
+        database,
+        branchId: AppDatabase.mainBranchId('business-1'),
+      ).recordPurchase(
         supplyId: 'supply-1',
         pricePerPurchaseUnitCents: 9000,
         purchaseQuantity: 1,
@@ -657,7 +682,10 @@ void main() {
       expect(restored.state.single.unit, 'piece');
       expect(restored.state.single.stockUnitsPerUnit, closeTo(0.1, 0.000001));
 
-      final costing = CostingService(database);
+      final costing = CostingService(
+        database,
+        branchId: AppDatabase.mainBranchId('business-1'),
+      );
       await costing.recordPurchase(
         supplyId: 'supply-1',
         pricePerPurchaseUnitCents: 1400,

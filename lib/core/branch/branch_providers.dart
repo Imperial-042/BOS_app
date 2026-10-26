@@ -13,7 +13,6 @@
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/app_database.dart';
@@ -119,13 +118,9 @@ final selectedBranchIdProvider = Provider<String>((ref) {
   final allowed = ref.watch(allowedBranchesProvider);
 
   if (allowed.isEmpty) {
-    final isOwner = ref.watch(authorizationServiceProvider).isOwner;
-    final mine =
-        ref.watch(branchMembershipsProvider).value ?? const <BranchMember>[];
-    // Assigned somewhere (e.g. only to a branch that is now deactivated, or
-    // branches haven't loaded yet): never fall back to the Main Branch.
-    if (!isOwner && mine.isNotEmpty) return mine.first.branchId;
-    return AppDatabase.mainBranchId(businessId);
+    // No active authorized branch is available (including while providers
+    // load). An invalid sentinel makes branch-scoped actions fail closed.
+    return '';
   }
 
   final locked = ref.watch(lockedBranchIdProvider(businessId));

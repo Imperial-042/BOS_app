@@ -114,7 +114,12 @@ class StockTransferService {
     if (lines.isEmpty) throw StateError('Add at least one item.');
     final seen = <String>{};
     for (final l in lines) {
-      if (l.quantity <= 0) throw StateError('Enter a quantity for ${l.name}.');
+      if (!l.quantity.isFinite || l.quantity <= 0) {
+        throw StateError('Enter a valid quantity for ${l.name}.');
+      }
+      if (l.itemType != 'supply' && l.itemType != 'product') {
+        throw StateError('Unsupported item type for ${l.name}.');
+      }
       if (!seen.add('${l.itemType}:${l.itemId}')) {
         throw StateError('${l.name} is listed twice.');
       }
@@ -122,6 +127,17 @@ class StockTransferService {
 
     final transferId = _uuid.v4();
     await db.transaction(() async {
+      final from =
+          await (db.select(db.branches)..where(
+                (b) =>
+                    b.id.equals(fromBranchId) &
+                    b.businessId.equals(businessId) &
+                    b.isActive.equals(true),
+              ))
+              .getSingleOrNull();
+      if (from == null) {
+        throw StateError('That source branch is not available.');
+      }
       final to =
           await (db.select(db.branches)..where(
                 (b) =>
@@ -135,6 +151,35 @@ class StockTransferService {
       }
 
       for (final l in lines) {
+        if (l.itemType == 'supply') {
+          final item =
+              await (db.select(db.supplies)..where(
+                    (s) =>
+                        s.id.equals(l.itemId) &
+                        s.businessId.equals(businessId) &
+                        s.isActive.equals(true),
+                  ))
+                  .getSingleOrNull();
+          if (item == null) {
+            throw StateError('${l.name} is not an active supply here.');
+          }
+        } else {
+          final item =
+              await (db.select(db.products)..where(
+                    (p) =>
+                        p.id.equals(l.itemId) &
+                        p.businessId.equals(businessId) &
+                        p.isActive.equals(true) &
+                        p.trackingType.equals('stocked'),
+                  ))
+                  .getSingleOrNull();
+          if (item == null) {
+            throw StateError(
+              '${l.name} is not an active stocked product here.',
+            );
+          }
+        }
+
         final onHand = l.itemType == 'supply'
             ? await stock.supplyQty(fromBranchId, l.itemId)
             : await stock.productQty(fromBranchId, l.itemId);
@@ -196,15 +241,24 @@ class StockTransferService {
         userId: auth.userId,
         action: 'inventory.stock_transfer_shipped',
         module: AuditModule.inventory,
-        actionType: AuditActionType.adjustment,
+        actionType: AuditActionType.create,
         entityType: 'stock_transfers',
         entityId: transferId,
-        entityLabel: '${lines.length} item(s) to ${to.name}',
+        entityLabel: 'Transfer to ${to.name}',
         details: {
           'from': fromBranchId,
+          'fromName': from.name,
           'to': toBranchId,
+          'toName': to.name,
           'items': [
-            for (final l in lines) {'name': l.name, 'qty': l.quantity},
+            for (final l in lines)
+              {
+                'itemId': l.itemId,
+                'itemType': l.itemType,
+                'name': l.name,
+                'unit': l.unit,
+                'shipped': l.quantity,
+              },
           ],
         },
       );
@@ -240,10 +294,11 @@ class StockTransferService {
         db.stockTransferItems,
       )..where((i) => i.transferId.equals(transferId))).get();
 
+      final receivedItems = <Map<String, Object?>>[];
       final shortages = <Map<String, Object?>>[];
       for (final it in items) {
         final got = receivedByItemId[it.id] ?? it.quantity;
-        if (got < 0 || got > it.quantity + 1e-9) {
+        if (!got.isFinite || got < 0 || got > it.quantity + 1e-9) {
           throw StateError(
             'Received quantity for ${it.itemName} must be between 0 and '
             '${_n(it.quantity)}.',
@@ -261,11 +316,22 @@ class StockTransferService {
         }
         if (got + 1e-9 < it.quantity) {
           shortages.add({
+            'itemId': it.itemId,
+            'itemType': it.itemType,
             'name': it.itemName,
+            'unit': it.unit,
             'shipped': it.quantity,
             'received': got,
           });
         }
+        receivedItems.add({
+          'itemId': it.itemId,
+          'itemType': it.itemType,
+          'name': it.itemName,
+          'unit': it.unit,
+          'shipped': it.quantity,
+          'received': got,
+        });
         await (db.update(db.stockTransferItems)
               ..where((i) => i.id.equals(it.id)))
             .write(StockTransferItemsCompanion(receivedQuantity: Value(got)));
@@ -288,10 +354,10 @@ class StockTransferService {
         userId: auth.userId,
         action: 'inventory.stock_transfer_received',
         module: AuditModule.inventory,
-        actionType: AuditActionType.adjustment,
+        actionType: AuditActionType.update,
         entityType: 'stock_transfers',
         entityId: transferId,
-        details: {'shortages': shortages},
+        details: {'items': receivedItems, 'shortages': shortages},
       );
     });
   }
@@ -339,9 +405,23 @@ class StockTransferService {
         userId: auth.userId,
         action: 'inventory.stock_transfer_cancelled',
         module: AuditModule.inventory,
-        actionType: AuditActionType.adjustment,
+        actionType: AuditActionType.update,
         entityType: 'stock_transfers',
         entityId: transferId,
+        details: {
+          'from': t.fromBranchId,
+          'to': t.toBranchId,
+          'items': [
+            for (final it in items)
+              {
+                'itemId': it.itemId,
+                'itemType': it.itemType,
+                'name': it.itemName,
+                'unit': it.unit,
+                'restored': it.quantity,
+              },
+          ],
+        },
       );
     });
   }

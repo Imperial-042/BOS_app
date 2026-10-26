@@ -6,9 +6,9 @@
 // runs with sync_context.suppress = 1 and is therefore the only writer that
 // may touch an existing row (to apply the cloud copy).
 //
-// Note: this protects against app-level bugs/misuse, not against someone
-// with direct file access to the SQLite database. The authoritative
-// tamper-resistant copy is the server (see the Supabase migration).
+// Note: this protects against app-level bugs/misuse, not direct access to the
+// SQLite file. The server copy blocks client-side edits and deletes, but
+// authenticated clients can still submit fabricated audit events.
 
 import '../database/app_database.dart';
 

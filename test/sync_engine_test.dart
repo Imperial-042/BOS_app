@@ -8,7 +8,9 @@
 import 'package:bos_application/core/auth/authorization_service.dart';
 import 'package:bos_application/core/business/business_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
+import 'package:bos_application/core/sync/sync_change_log.dart';
 import 'package:bos_application/core/sync/sync_coordinator.dart';
+import 'package:bos_application/core/sync/sync_tracker.dart';
 import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart'
     show CustomerService;
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
@@ -46,9 +48,11 @@ void main() {
     customers = CustomerService(db);
     biz = await _createBusiness(db, 'Alpha');
     kCurrentBusinessId = biz.id;
+    SyncTracker.currentUserId = _owner;
   });
 
   tearDown(() async {
+    SyncTracker.currentUserId = null;
     await db.close();
   });
 
@@ -99,6 +103,32 @@ void main() {
         isNull,
       );
       expect(coordinator.isOnline, isFalse);
+    });
+
+    test('pull cursor version change rewinds cursors only once', () async {
+      await db
+          .into(db.syncCheckpoints)
+          .insert(
+            SyncCheckpointsCompanion(
+              businessId: Value(biz.id),
+              lastServerCursor: const Value(500),
+            ),
+          );
+
+      await SyncChangeLog.ensurePullCursorVersion(db, version: '2');
+      var checkpoint = await db.select(db.syncCheckpoints).getSingle();
+      expect(checkpoint.lastServerCursor, 0);
+
+      await (db.update(db.syncCheckpoints)
+            ..where((c) => c.businessId.equals(biz.id)))
+          .write(const SyncCheckpointsCompanion(lastServerCursor: Value(550)));
+      await SyncChangeLog.ensurePullCursorVersion(db, version: '2');
+      checkpoint = await db.select(db.syncCheckpoints).getSingle();
+      expect(checkpoint.lastServerCursor, 550);
+
+      await SyncChangeLog.ensurePullCursorVersion(db, version: '3');
+      checkpoint = await db.select(db.syncCheckpoints).getSingle();
+      expect(checkpoint.lastServerCursor, 0);
     });
 
     test(

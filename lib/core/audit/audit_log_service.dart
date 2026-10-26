@@ -66,7 +66,7 @@ class AuditEvent {
   final AuditModule module;
   final AuditActionType actionType;
 
-  /// '<entity>.<verb>', same style as the existing 'user.role_changed'.
+  /// An entity-and-verb code, such as `user.role_changed`.
   final String action;
   final String entityType;
   final String? entityId;
@@ -94,16 +94,18 @@ class AuditLogService {
 
   Future<String> record(AuditEvent e) async {
     final ctx = _resolve();
-    if (ctx == null || ctx.userId.isEmpty || ctx.businessId.isEmpty) {
+    if (ctx == null ||
+        ctx.userId.trim().isEmpty ||
+        ctx.businessId.trim().isEmpty) {
       throw const AuditContextException(
         'Cannot record audit event: no signed-in user or selected business.',
       );
     }
-    if (e.actionType.requiresReason && (e.reason ?? '').trim().isEmpty) {
+    if (e.businessId != null && e.businessId != ctx.businessId) {
       throw ArgumentError.value(
-        e.reason,
-        'reason',
-        '${e.actionType.id} requires a reason.',
+        e.businessId,
+        'businessId',
+        'Audit event business must match the resolved business context.',
       );
     }
     return AuditWriter.write(

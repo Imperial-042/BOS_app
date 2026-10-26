@@ -297,6 +297,17 @@ class PosSessionService {
     String? userId,
   }) {
     return db.transaction(() async {
+      final branch = await (db.select(db.branches)..where(
+            (b) =>
+                b.id.equals(branchId) &
+                b.businessId.equals(businessId) &
+                b.isActive.equals(true),
+          ))
+          .getSingleOrNull();
+      if (branch == null) {
+        throw StateError('Choose an active branch in this business.');
+      }
+
       final open =
           await (db.select(db.posSessions)..where(
                 (s) =>

@@ -22539,6 +22539,16 @@ class $AuditLogsTable extends AuditLogs
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+    'source',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('client_reported'),
+  );
   static const VerificationMeta _reasonMeta = const VerificationMeta('reason');
   @override
   late final GeneratedColumn<String> reason = GeneratedColumn<String>(
@@ -22587,6 +22597,7 @@ class $AuditLogsTable extends AuditLogs
     actorName,
     actorRole,
     deviceId,
+    source,
     reason,
     beforeJson,
     afterJson,
@@ -22703,6 +22714,12 @@ class $AuditLogsTable extends AuditLogs
         deviceId.isAcceptableOrUnknown(data['device_id']!, _deviceIdMeta),
       );
     }
+    if (data.containsKey('source')) {
+      context.handle(
+        _sourceMeta,
+        source.isAcceptableOrUnknown(data['source']!, _sourceMeta),
+      );
+    }
     if (data.containsKey('reason')) {
       context.handle(
         _reasonMeta,
@@ -22790,6 +22807,10 @@ class $AuditLogsTable extends AuditLogs
         DriftSqlType.string,
         data['${effectivePrefix}device_id'],
       ),
+      source: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source'],
+      )!,
       reason: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}reason'],
@@ -22829,6 +22850,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
   final String? actorName;
   final String? actorRole;
   final String? deviceId;
+  final String source;
   final String? reason;
   final String? beforeJson;
   final String? afterJson;
@@ -22848,6 +22870,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
     this.actorName,
     this.actorRole,
     this.deviceId,
+    required this.source,
     this.reason,
     this.beforeJson,
     this.afterJson,
@@ -22888,6 +22911,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
     if (!nullToAbsent || deviceId != null) {
       map['device_id'] = Variable<String>(deviceId);
     }
+    map['source'] = Variable<String>(source);
     if (!nullToAbsent || reason != null) {
       map['reason'] = Variable<String>(reason);
     }
@@ -22935,6 +22959,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
       deviceId: deviceId == null && nullToAbsent
           ? const Value.absent()
           : Value(deviceId),
+      source: Value(source),
       reason: reason == null && nullToAbsent
           ? const Value.absent()
           : Value(reason),
@@ -22968,6 +22993,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
       actorName: serializer.fromJson<String?>(json['actorName']),
       actorRole: serializer.fromJson<String?>(json['actorRole']),
       deviceId: serializer.fromJson<String?>(json['deviceId']),
+      source: serializer.fromJson<String>(json['source']),
       reason: serializer.fromJson<String?>(json['reason']),
       beforeJson: serializer.fromJson<String?>(json['beforeJson']),
       afterJson: serializer.fromJson<String?>(json['afterJson']),
@@ -22992,6 +23018,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
       'actorName': serializer.toJson<String?>(actorName),
       'actorRole': serializer.toJson<String?>(actorRole),
       'deviceId': serializer.toJson<String?>(deviceId),
+      'source': serializer.toJson<String>(source),
       'reason': serializer.toJson<String?>(reason),
       'beforeJson': serializer.toJson<String?>(beforeJson),
       'afterJson': serializer.toJson<String?>(afterJson),
@@ -23014,6 +23041,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
     Value<String?> actorName = const Value.absent(),
     Value<String?> actorRole = const Value.absent(),
     Value<String?> deviceId = const Value.absent(),
+    String? source,
     Value<String?> reason = const Value.absent(),
     Value<String?> beforeJson = const Value.absent(),
     Value<String?> afterJson = const Value.absent(),
@@ -23033,6 +23061,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
     actorName: actorName.present ? actorName.value : this.actorName,
     actorRole: actorRole.present ? actorRole.value : this.actorRole,
     deviceId: deviceId.present ? deviceId.value : this.deviceId,
+    source: source ?? this.source,
     reason: reason.present ? reason.value : this.reason,
     beforeJson: beforeJson.present ? beforeJson.value : this.beforeJson,
     afterJson: afterJson.present ? afterJson.value : this.afterJson,
@@ -23062,6 +23091,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
       actorName: data.actorName.present ? data.actorName.value : this.actorName,
       actorRole: data.actorRole.present ? data.actorRole.value : this.actorRole,
       deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
+      source: data.source.present ? data.source.value : this.source,
       reason: data.reason.present ? data.reason.value : this.reason,
       beforeJson: data.beforeJson.present
           ? data.beforeJson.value
@@ -23088,6 +23118,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
           ..write('actorName: $actorName, ')
           ..write('actorRole: $actorRole, ')
           ..write('deviceId: $deviceId, ')
+          ..write('source: $source, ')
           ..write('reason: $reason, ')
           ..write('beforeJson: $beforeJson, ')
           ..write('afterJson: $afterJson')
@@ -23112,6 +23143,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
     actorName,
     actorRole,
     deviceId,
+    source,
     reason,
     beforeJson,
     afterJson,
@@ -23135,6 +23167,7 @@ class AuditLog extends DataClass implements Insertable<AuditLog> {
           other.actorName == this.actorName &&
           other.actorRole == this.actorRole &&
           other.deviceId == this.deviceId &&
+          other.source == this.source &&
           other.reason == this.reason &&
           other.beforeJson == this.beforeJson &&
           other.afterJson == this.afterJson);
@@ -23156,6 +23189,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
   final Value<String?> actorName;
   final Value<String?> actorRole;
   final Value<String?> deviceId;
+  final Value<String> source;
   final Value<String?> reason;
   final Value<String?> beforeJson;
   final Value<String?> afterJson;
@@ -23176,6 +23210,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
     this.actorName = const Value.absent(),
     this.actorRole = const Value.absent(),
     this.deviceId = const Value.absent(),
+    this.source = const Value.absent(),
     this.reason = const Value.absent(),
     this.beforeJson = const Value.absent(),
     this.afterJson = const Value.absent(),
@@ -23197,6 +23232,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
     this.actorName = const Value.absent(),
     this.actorRole = const Value.absent(),
     this.deviceId = const Value.absent(),
+    this.source = const Value.absent(),
     this.reason = const Value.absent(),
     this.beforeJson = const Value.absent(),
     this.afterJson = const Value.absent(),
@@ -23222,6 +23258,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
     Expression<String>? actorName,
     Expression<String>? actorRole,
     Expression<String>? deviceId,
+    Expression<String>? source,
     Expression<String>? reason,
     Expression<String>? beforeJson,
     Expression<String>? afterJson,
@@ -23243,6 +23280,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
       if (actorName != null) 'actor_name': actorName,
       if (actorRole != null) 'actor_role': actorRole,
       if (deviceId != null) 'device_id': deviceId,
+      if (source != null) 'source': source,
       if (reason != null) 'reason': reason,
       if (beforeJson != null) 'before_json': beforeJson,
       if (afterJson != null) 'after_json': afterJson,
@@ -23266,6 +23304,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
     Value<String?>? actorName,
     Value<String?>? actorRole,
     Value<String?>? deviceId,
+    Value<String>? source,
     Value<String?>? reason,
     Value<String?>? beforeJson,
     Value<String?>? afterJson,
@@ -23287,6 +23326,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
       actorName: actorName ?? this.actorName,
       actorRole: actorRole ?? this.actorRole,
       deviceId: deviceId ?? this.deviceId,
+      source: source ?? this.source,
       reason: reason ?? this.reason,
       beforeJson: beforeJson ?? this.beforeJson,
       afterJson: afterJson ?? this.afterJson,
@@ -23342,6 +23382,9 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
     if (deviceId.present) {
       map['device_id'] = Variable<String>(deviceId.value);
     }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
     if (reason.present) {
       map['reason'] = Variable<String>(reason.value);
     }
@@ -23375,6 +23418,7 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
           ..write('actorName: $actorName, ')
           ..write('actorRole: $actorRole, ')
           ..write('deviceId: $deviceId, ')
+          ..write('source: $source, ')
           ..write('reason: $reason, ')
           ..write('beforeJson: $beforeJson, ')
           ..write('afterJson: $afterJson, ')
@@ -34593,7 +34637,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.accounts,
-    aliasName: 'businesses__id__accounts__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.accounts.businessId),
   );
 
   $$AccountsTableProcessedTableManager get accountsRefs {
@@ -34611,7 +34655,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$JournalEntriesTable, List<JournalEntry>>
   _journalEntriesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.journalEntries,
-    aliasName: 'businesses__id__journal_entries__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.journalEntries.businessId,
+    ),
   );
 
   $$JournalEntriesTableProcessedTableManager get journalEntriesRefs {
@@ -34629,7 +34676,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$CategoriesTable, List<Category>>
   _categoriesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.categories,
-    aliasName: 'businesses__id__categories__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.categories.businessId),
   );
 
   $$CategoriesTableProcessedTableManager get categoriesRefs {
@@ -34647,7 +34694,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$CustomersTable, List<Customer>>
   _customersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.customers,
-    aliasName: 'businesses__id__customers__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.customers.businessId),
   );
 
   $$CustomersTableProcessedTableManager get customersRefs {
@@ -34666,7 +34713,10 @@ final class $$BusinessesTableReferences
   _incomeTransactionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.incomeTransactions,
-        aliasName: 'businesses__id__income_transactions__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.incomeTransactions.businessId,
+        ),
       );
 
   $$IncomeTransactionsTableProcessedTableManager get incomeTransactionsRefs {
@@ -34687,7 +34737,10 @@ final class $$BusinessesTableReferences
   _receivablePaymentsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.receivablePayments,
-        aliasName: 'businesses__id__receivable_payments__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.receivablePayments.businessId,
+        ),
       );
 
   $$ReceivablePaymentsTableProcessedTableManager get receivablePaymentsRefs {
@@ -34707,7 +34760,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$SuppliersTable, List<Supplier>>
   _suppliersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.suppliers,
-    aliasName: 'businesses__id__suppliers__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.suppliers.businessId),
   );
 
   $$SuppliersTableProcessedTableManager get suppliersRefs {
@@ -34726,7 +34779,10 @@ final class $$BusinessesTableReferences
   _supplierPurchasesRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplierPurchases,
-        aliasName: 'businesses__id__supplier_purchases__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.supplierPurchases.businessId,
+        ),
       );
 
   $$SupplierPurchasesTableProcessedTableManager get supplierPurchasesRefs {
@@ -34746,7 +34802,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PayablePaymentsTable, List<PayablePayment>>
   _payablePaymentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payablePayments,
-    aliasName: 'businesses__id__payable_payments__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.payablePayments.businessId,
+    ),
   );
 
   $$PayablePaymentsTableProcessedTableManager get payablePaymentsRefs {
@@ -34767,7 +34826,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.expenses,
-    aliasName: 'businesses__id__expenses__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.expenses.businessId),
   );
 
   $$ExpensesTableProcessedTableManager get expensesRefs {
@@ -34786,7 +34845,10 @@ final class $$BusinessesTableReferences
   _productCategoriesRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.productCategories,
-        aliasName: 'businesses__id__product_categories__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.productCategories.businessId,
+        ),
       );
 
   $$ProductCategoriesTableProcessedTableManager get productCategoriesRefs {
@@ -34807,7 +34869,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.supplies,
-    aliasName: 'businesses__id__supplies__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.supplies.businessId),
   );
 
   $$SuppliesTableProcessedTableManager get suppliesRefs {
@@ -34825,7 +34887,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$ShoppingCartsTable, List<ShoppingCart>>
   _shoppingCartsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.shoppingCarts,
-    aliasName: 'businesses__id__shopping_carts__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.shoppingCarts.businessId,
+    ),
   );
 
   $$ShoppingCartsTableProcessedTableManager get shoppingCartsRefs {
@@ -34843,7 +34908,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$AccountTransfersTable, List<AccountTransfer>>
   _accountTransfersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.accountTransfers,
-    aliasName: 'businesses__id__account_transfers__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.accountTransfers.businessId,
+    ),
   );
 
   $$AccountTransfersTableProcessedTableManager get accountTransfersRefs {
@@ -34864,7 +34932,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.products,
-    aliasName: 'businesses__id__products__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.products.businessId),
   );
 
   $$ProductsTableProcessedTableManager get productsRefs {
@@ -34882,7 +34950,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PosSessionsTable, List<PosSession>>
   _posSessionsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSessions,
-    aliasName: 'businesses__id__pos_sessions__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.posSessions.businessId,
+    ),
   );
 
   $$PosSessionsTableProcessedTableManager get posSessionsRefs {
@@ -34901,7 +34972,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.posSales,
-    aliasName: 'businesses__id__pos_sales__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.posSales.businessId),
   );
 
   $$PosSalesTableProcessedTableManager get posSalesRefs {
@@ -34919,7 +34990,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PaymentProvidersTable, List<PaymentProvider>>
   _paymentProvidersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.paymentProviders,
-    aliasName: 'businesses__id__payment_providers__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.paymentProviders.businessId,
+    ),
   );
 
   $$PaymentProvidersTableProcessedTableManager get paymentProvidersRefs {
@@ -34939,7 +35013,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PosOrderTypesTable, List<PosOrderType>>
   _posOrderTypesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posOrderTypes,
-    aliasName: 'businesses__id__pos_order_types__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.posOrderTypes.businessId,
+    ),
   );
 
   $$PosOrderTypesTableProcessedTableManager get posOrderTypesRefs {
@@ -34957,7 +35034,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PosTablesTable, List<PosTable>>
   _posTablesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posTables,
-    aliasName: 'businesses__id__pos_tables__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.posTables.businessId),
   );
 
   $$PosTablesTableProcessedTableManager get posTablesRefs {
@@ -34975,7 +35052,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$BusinessMembersTable, List<BusinessMember>>
   _businessMembersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.businessMembers,
-    aliasName: 'businesses__id__business_members__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.businessMembers.businessId,
+    ),
   );
 
   $$BusinessMembersTableProcessedTableManager get businessMembersRefs {
@@ -34995,7 +35075,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$AuditLogsTable, List<AuditLog>>
   _auditLogsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.auditLogs,
-    aliasName: 'businesses__id__audit_logs__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.auditLogs.businessId),
   );
 
   $$AuditLogsTableProcessedTableManager get auditLogsRefs {
@@ -35017,7 +35097,10 @@ final class $$BusinessesTableReferences
   _rolePermissionOverridesRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.rolePermissionOverrides,
-        aliasName: 'businesses__id__role_permission_overrides__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.rolePermissionOverrides.businessId,
+        ),
       );
 
   $$RolePermissionOverridesTableProcessedTableManager
@@ -35038,7 +35121,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$BusinessInvitesTable, List<BusinessInvite>>
   _businessInvitesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.businessInvites,
-    aliasName: 'businesses__id__business_invites__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.businessInvites.businessId,
+    ),
   );
 
   $$BusinessInvitesTableProcessedTableManager get businessInvitesRefs {
@@ -35062,7 +35148,10 @@ final class $$BusinessesTableReferences
   _businessModuleConfigsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.businessModuleConfigs,
-        aliasName: 'businesses__id__business_module_configs__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.businessModuleConfigs.businessId,
+        ),
       );
 
   $$BusinessModuleConfigsTableProcessedTableManager
@@ -35083,7 +35172,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$SyncOutboxTable, List<SyncOutboxData>>
   _syncOutboxRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.syncOutbox,
-    aliasName: 'businesses__id__sync_outbox__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.syncOutbox.businessId),
   );
 
   $$SyncOutboxTableProcessedTableManager get syncOutboxRefs {
@@ -35101,7 +35190,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$SyncCheckpointsTable, List<SyncCheckpoint>>
   _syncCheckpointsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.syncCheckpoints,
-    aliasName: 'businesses__id__sync_checkpoints__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.syncCheckpoints.businessId,
+    ),
   );
 
   $$SyncCheckpointsTableProcessedTableManager get syncCheckpointsRefs {
@@ -35121,7 +35213,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$ScheduleShiftsTable, List<ScheduleShift>>
   _scheduleShiftsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.scheduleShifts,
-    aliasName: 'businesses__id__schedule_shifts__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.scheduleShifts.businessId,
+    ),
   );
 
   $$ScheduleShiftsTableProcessedTableManager get scheduleShiftsRefs {
@@ -35140,7 +35235,10 @@ final class $$BusinessesTableReferences
   _attendanceRecordsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.attendanceRecords,
-        aliasName: 'businesses__id__attendance_records__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.attendanceRecords.businessId,
+        ),
       );
 
   $$AttendanceRecordsTableProcessedTableManager get attendanceRecordsRefs {
@@ -35160,7 +35258,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$LeaveRequestsTable, List<LeaveRequest>>
   _leaveRequestsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.leaveRequests,
-    aliasName: 'businesses__id__leave_requests__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.leaveRequests.businessId,
+    ),
   );
 
   $$LeaveRequestsTableProcessedTableManager get leaveRequestsRefs {
@@ -35178,7 +35279,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PayrollProfilesTable, List<PayrollProfile>>
   _payrollProfilesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payrollProfiles,
-    aliasName: 'businesses__id__payroll_profiles__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.payrollProfiles.businessId,
+    ),
   );
 
   $$PayrollProfilesTableProcessedTableManager get payrollProfilesRefs {
@@ -35198,7 +35302,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$PayrollRunsTable, List<PayrollRun>>
   _payrollRunsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payrollRuns,
-    aliasName: 'businesses__id__payroll_runs__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.payrollRuns.businessId,
+    ),
   );
 
   $$PayrollRunsTableProcessedTableManager get payrollRunsRefs {
@@ -35216,7 +35323,7 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$RoleLabelsTable, List<RoleLabel>>
   _roleLabelsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.roleLabels,
-    aliasName: 'businesses__id__role_labels__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.roleLabels.businessId),
   );
 
   $$RoleLabelsTableProcessedTableManager get roleLabelsRefs {
@@ -35234,7 +35341,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$CustomRolesTable, List<CustomRole>>
   _customRolesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.customRoles,
-    aliasName: 'businesses__id__custom_roles__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.customRoles.businessId,
+    ),
   );
 
   $$CustomRolesTableProcessedTableManager get customRolesRefs {
@@ -35253,7 +35363,7 @@ final class $$BusinessesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.branches,
-    aliasName: 'businesses__id__branches__business_id',
+    aliasName: $_aliasNameGenerator(db.businesses.id, db.branches.businessId),
   );
 
   $$BranchesTableProcessedTableManager get branchesRefs {
@@ -35271,7 +35381,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$BranchMembersTable, List<BranchMember>>
   _branchMembersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.branchMembers,
-    aliasName: 'businesses__id__branch_members__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.branchMembers.businessId,
+    ),
   );
 
   $$BranchMembersTableProcessedTableManager get branchMembersRefs {
@@ -35293,7 +35406,10 @@ final class $$BusinessesTableReferences
   _productStockMovementsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.productStockMovements,
-        aliasName: 'businesses__id__product_stock_movements__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.productStockMovements.businessId,
+        ),
       );
 
   $$ProductStockMovementsTableProcessedTableManager
@@ -35314,7 +35430,10 @@ final class $$BusinessesTableReferences
   static MultiTypedResultKey<$StockTransfersTable, List<StockTransfer>>
   _stockTransfersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.stockTransfers,
-    aliasName: 'businesses__id__stock_transfers__business_id',
+    aliasName: $_aliasNameGenerator(
+      db.businesses.id,
+      db.stockTransfers.businessId,
+    ),
   );
 
   $$StockTransfersTableProcessedTableManager get stockTransfersRefs {
@@ -35333,7 +35452,10 @@ final class $$BusinessesTableReferences
   _stockTransferItemsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.stockTransferItems,
-        aliasName: 'businesses__id__stock_transfer_items__business_id',
+        aliasName: $_aliasNameGenerator(
+          db.businesses.id,
+          db.stockTransferItems.businessId,
+        ),
       );
 
   $$StockTransferItemsTableProcessedTableManager get stockTransferItemsRefs {
@@ -37891,7 +38013,7 @@ class $$BusinessesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$BusinessesTable, BusinessesData>(table),
+                  e.readTable(table),
                   $$BusinessesTableReferences(db, table, e),
                 ),
               )
@@ -38897,7 +39019,9 @@ final class $$AccountsTableReferences
   $$AccountsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('accounts__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.accounts.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -38916,7 +39040,7 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$LedgerLinesTable, List<LedgerLine>>
   _ledgerLinesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.ledgerLines,
-    aliasName: 'accounts__id__ledger_lines__account_id',
+    aliasName: $_aliasNameGenerator(db.accounts.id, db.ledgerLines.accountId),
   );
 
   $$LedgerLinesTableProcessedTableManager get ledgerLinesRefs {
@@ -38934,7 +39058,10 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$CategoriesTable, List<Category>>
   _categoriesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.categories,
-    aliasName: 'accounts__id__categories__ledger_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.categories.ledgerAccountId,
+    ),
   );
 
   $$CategoriesTableProcessedTableManager get categoriesRefs {
@@ -38952,7 +39079,10 @@ final class $$AccountsTableReferences
   _incomeTransactionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.incomeTransactions,
-        aliasName: 'accounts__id__income_transactions__payment_account_id',
+        aliasName: $_aliasNameGenerator(
+          db.accounts.id,
+          db.incomeTransactions.paymentAccountId,
+        ),
       );
 
   $$IncomeTransactionsTableProcessedTableManager get incomeTransactionsRefs {
@@ -38976,7 +39106,10 @@ final class $$AccountsTableReferences
   _receivablePaymentsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.receivablePayments,
-        aliasName: 'accounts__id__receivable_payments__payment_account_id',
+        aliasName: $_aliasNameGenerator(
+          db.accounts.id,
+          db.receivablePayments.paymentAccountId,
+        ),
       );
 
   $$ReceivablePaymentsTableProcessedTableManager get receivablePaymentsRefs {
@@ -39000,7 +39133,10 @@ final class $$AccountsTableReferences
   _supplierPurchasesRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplierPurchases,
-        aliasName: 'accounts__id__supplier_purchases__payment_account_id',
+        aliasName: $_aliasNameGenerator(
+          db.accounts.id,
+          db.supplierPurchases.paymentAccountId,
+        ),
       );
 
   $$SupplierPurchasesTableProcessedTableManager get supplierPurchasesRefs {
@@ -39023,7 +39159,10 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$PayablePaymentsTable, List<PayablePayment>>
   _payablePaymentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payablePayments,
-    aliasName: 'accounts__id__payable_payments__payment_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.payablePayments.paymentAccountId,
+    ),
   );
 
   $$PayablePaymentsTableProcessedTableManager get payablePaymentsRefs {
@@ -39044,7 +39183,10 @@ final class $$AccountsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.expenses,
-    aliasName: 'accounts__id__expenses__payment_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.expenses.paymentAccountId,
+    ),
   );
 
   $$ExpensesTableProcessedTableManager get expensesRefs {
@@ -39061,7 +39203,10 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$AccountTransfersTable, List<AccountTransfer>>
   _transfersFromTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.accountTransfers,
-    aliasName: 'accounts__id__account_transfers__from_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.accountTransfers.fromAccountId,
+    ),
   );
 
   $$AccountTransfersTableProcessedTableManager get transfersFrom {
@@ -39079,7 +39224,10 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$AccountTransfersTable, List<AccountTransfer>>
   _transfersToTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.accountTransfers,
-    aliasName: 'accounts__id__account_transfers__to_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.accountTransfers.toAccountId,
+    ),
   );
 
   $$AccountTransfersTableProcessedTableManager get transfersTo {
@@ -39098,7 +39246,10 @@ final class $$AccountsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.posSales,
-    aliasName: 'accounts__id__pos_sales__payment_account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.posSales.paymentAccountId,
+    ),
   );
 
   $$PosSalesTableProcessedTableManager get posSalesRefs {
@@ -39115,7 +39266,10 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$PosSaleTendersTable, List<PosSaleTender>>
   _posSaleTendersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSaleTenders,
-    aliasName: 'accounts__id__pos_sale_tenders__account_id',
+    aliasName: $_aliasNameGenerator(
+      db.accounts.id,
+      db.posSaleTenders.accountId,
+    ),
   );
 
   $$PosSaleTendersTableProcessedTableManager get posSaleTendersRefs {
@@ -39981,7 +40135,7 @@ class $$AccountsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$AccountsTable, Account>(table),
+                  e.readTable(table),
                   $$AccountsTableReferences(db, table, e),
                 ),
               )
@@ -40352,7 +40506,9 @@ final class $$JournalEntriesTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('journal_entries__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.journalEntries.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -40371,7 +40527,10 @@ final class $$JournalEntriesTableReferences
   static MultiTypedResultKey<$LedgerLinesTable, List<LedgerLine>>
   _ledgerLinesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.ledgerLines,
-    aliasName: 'journal_entries__id__ledger_lines__journal_entry_id',
+    aliasName: $_aliasNameGenerator(
+      db.journalEntries.id,
+      db.ledgerLines.journalEntryId,
+    ),
   );
 
   $$LedgerLinesTableProcessedTableManager get ledgerLinesRefs {
@@ -40390,7 +40549,10 @@ final class $$JournalEntriesTableReferences
   _incomeTransactionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.incomeTransactions,
-        aliasName: 'journal_entries__id__income_transactions__journal_entry_id',
+        aliasName: $_aliasNameGenerator(
+          db.journalEntries.id,
+          db.incomeTransactions.journalEntryId,
+        ),
       );
 
   $$IncomeTransactionsTableProcessedTableManager get incomeTransactionsRefs {
@@ -40411,7 +40573,10 @@ final class $$JournalEntriesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.expenses,
-    aliasName: 'journal_entries__id__expenses__journal_entry_id',
+    aliasName: $_aliasNameGenerator(
+      db.journalEntries.id,
+      db.expenses.journalEntryId,
+    ),
   );
 
   $$ExpensesTableProcessedTableManager get expensesRefs {
@@ -40869,7 +41034,7 @@ class $$JournalEntriesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$JournalEntriesTable, JournalEntry>(table),
+                  e.readTable(table),
                   $$JournalEntriesTableReferences(db, table, e),
                 ),
               )
@@ -41037,9 +41202,13 @@ final class $$LedgerLinesTableReferences
     extends BaseReferences<_$AppDatabase, $LedgerLinesTable, LedgerLine> {
   $$LedgerLinesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $JournalEntriesTable _journalEntryIdTable(_$AppDatabase db) => db
-      .journalEntries
-      .createAlias('ledger_lines__journal_entry_id__journal_entries__id');
+  static $JournalEntriesTable _journalEntryIdTable(_$AppDatabase db) =>
+      db.journalEntries.createAlias(
+        $_aliasNameGenerator(
+          db.ledgerLines.journalEntryId,
+          db.journalEntries.id,
+        ),
+      );
 
   $$JournalEntriesTableProcessedTableManager get journalEntryId {
     final $_column = $_itemColumn<String>('journal_entry_id')!;
@@ -41056,7 +41225,9 @@ final class $$LedgerLinesTableReferences
   }
 
   static $AccountsTable _accountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('ledger_lines__account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.ledgerLines.accountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager get accountId {
     final $_column = $_itemColumn<String>('account_id')!;
@@ -41341,7 +41512,7 @@ class $$LedgerLinesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$LedgerLinesTable, LedgerLine>(table),
+                  e.readTable(table),
                   $$LedgerLinesTableReferences(db, table, e),
                 ),
               )
@@ -41448,7 +41619,9 @@ final class $$CategoriesTableReferences
   $$CategoriesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('categories__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.categories.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -41465,7 +41638,9 @@ final class $$CategoriesTableReferences
   }
 
   static $AccountsTable _ledgerAccountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('categories__ledger_account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.categories.ledgerAccountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager get ledgerAccountId {
     final $_column = $_itemColumn<String>('ledger_account_id')!;
@@ -41485,7 +41660,10 @@ final class $$CategoriesTableReferences
   _incomeTransactionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.incomeTransactions,
-        aliasName: 'categories__id__income_transactions__category_id',
+        aliasName: $_aliasNameGenerator(
+          db.categories.id,
+          db.incomeTransactions.categoryId,
+        ),
       );
 
   $$IncomeTransactionsTableProcessedTableManager get incomeTransactionsRefs {
@@ -41506,7 +41684,7 @@ final class $$CategoriesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.expenses,
-    aliasName: 'categories__id__expenses__category_id',
+    aliasName: $_aliasNameGenerator(db.categories.id, db.expenses.categoryId),
   );
 
   $$ExpensesTableProcessedTableManager get expensesRefs {
@@ -41947,7 +42125,7 @@ class $$CategoriesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$CategoriesTable, Category>(table),
+                  e.readTable(table),
                   $$CategoriesTableReferences(db, table, e),
                 ),
               )
@@ -42115,7 +42293,9 @@ final class $$CustomersTableReferences
   $$CustomersTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('customers__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.customers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -42135,7 +42315,10 @@ final class $$CustomersTableReferences
   _incomeTransactionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.incomeTransactions,
-        aliasName: 'customers__id__income_transactions__customer_id',
+        aliasName: $_aliasNameGenerator(
+          db.customers.id,
+          db.incomeTransactions.customerId,
+        ),
       );
 
   $$IncomeTransactionsTableProcessedTableManager get incomeTransactionsRefs {
@@ -42156,7 +42339,10 @@ final class $$CustomersTableReferences
   _receivablePaymentsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.receivablePayments,
-        aliasName: 'customers__id__receivable_payments__customer_id',
+        aliasName: $_aliasNameGenerator(
+          db.customers.id,
+          db.receivablePayments.customerId,
+        ),
       );
 
   $$ReceivablePaymentsTableProcessedTableManager get receivablePaymentsRefs {
@@ -42560,7 +42746,7 @@ class $$CustomersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$CustomersTable, Customer>(table),
+                  e.readTable(table),
                   $$CustomersTableReferences(db, table, e),
                 ),
               )
@@ -42731,8 +42917,13 @@ final class $$IncomeTransactionsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('income_transactions__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.incomeTransactions.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -42748,8 +42939,13 @@ final class $$IncomeTransactionsTableReferences
     );
   }
 
-  static $CategoriesTable _categoryIdTable(_$AppDatabase db) => db.categories
-      .createAlias('income_transactions__category_id__categories__id');
+  static $CategoriesTable _categoryIdTable(_$AppDatabase db) =>
+      db.categories.createAlias(
+        $_aliasNameGenerator(
+          db.incomeTransactions.categoryId,
+          db.categories.id,
+        ),
+      );
 
   $$CategoriesTableProcessedTableManager get categoryId {
     final $_column = $_itemColumn<String>('category_id')!;
@@ -42765,8 +42961,10 @@ final class $$IncomeTransactionsTableReferences
     );
   }
 
-  static $CustomersTable _customerIdTable(_$AppDatabase db) => db.customers
-      .createAlias('income_transactions__customer_id__customers__id');
+  static $CustomersTable _customerIdTable(_$AppDatabase db) =>
+      db.customers.createAlias(
+        $_aliasNameGenerator(db.incomeTransactions.customerId, db.customers.id),
+      );
 
   $$CustomersTableProcessedTableManager? get customerId {
     final $_column = $_itemColumn<String>('customer_id');
@@ -42782,8 +42980,13 @@ final class $$IncomeTransactionsTableReferences
     );
   }
 
-  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias('income_transactions__payment_account_id__accounts__id');
+  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias(
+        $_aliasNameGenerator(
+          db.incomeTransactions.paymentAccountId,
+          db.accounts.id,
+        ),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -42801,7 +43004,10 @@ final class $$IncomeTransactionsTableReferences
 
   static $JournalEntriesTable _journalEntryIdTable(_$AppDatabase db) =>
       db.journalEntries.createAlias(
-        'income_transactions__journal_entry_id__journal_entries__id',
+        $_aliasNameGenerator(
+          db.incomeTransactions.journalEntryId,
+          db.journalEntries.id,
+        ),
       );
 
   $$JournalEntriesTableProcessedTableManager? get journalEntryId {
@@ -43438,9 +43644,7 @@ class $$IncomeTransactionsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$IncomeTransactionsTable, IncomeTransaction>(
-                    table,
-                  ),
+                  e.readTable(table),
                   $$IncomeTransactionsTableReferences(db, table, e),
                 ),
               )
@@ -43621,8 +43825,13 @@ final class $$ReceivablePaymentsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('receivable_payments__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.receivablePayments.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -43638,8 +43847,10 @@ final class $$ReceivablePaymentsTableReferences
     );
   }
 
-  static $CustomersTable _customerIdTable(_$AppDatabase db) => db.customers
-      .createAlias('receivable_payments__customer_id__customers__id');
+  static $CustomersTable _customerIdTable(_$AppDatabase db) =>
+      db.customers.createAlias(
+        $_aliasNameGenerator(db.receivablePayments.customerId, db.customers.id),
+      );
 
   $$CustomersTableProcessedTableManager get customerId {
     final $_column = $_itemColumn<String>('customer_id')!;
@@ -43655,8 +43866,13 @@ final class $$ReceivablePaymentsTableReferences
     );
   }
 
-  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias('receivable_payments__payment_account_id__accounts__id');
+  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias(
+        $_aliasNameGenerator(
+          db.receivablePayments.paymentAccountId,
+          db.accounts.id,
+        ),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -44095,9 +44311,7 @@ class $$ReceivablePaymentsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ReceivablePaymentsTable, ReceivablePayment>(
-                    table,
-                  ),
+                  e.readTable(table),
                   $$ReceivablePaymentsTableReferences(db, table, e),
                 ),
               )
@@ -44232,7 +44446,9 @@ final class $$SuppliersTableReferences
   $$SuppliersTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('suppliers__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.suppliers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -44252,7 +44468,10 @@ final class $$SuppliersTableReferences
   _supplierPurchasesRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplierPurchases,
-        aliasName: 'suppliers__id__supplier_purchases__supplier_id',
+        aliasName: $_aliasNameGenerator(
+          db.suppliers.id,
+          db.supplierPurchases.supplierId,
+        ),
       );
 
   $$SupplierPurchasesTableProcessedTableManager get supplierPurchasesRefs {
@@ -44272,7 +44491,10 @@ final class $$SuppliersTableReferences
   static MultiTypedResultKey<$PayablePaymentsTable, List<PayablePayment>>
   _payablePaymentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payablePayments,
-    aliasName: 'suppliers__id__payable_payments__supplier_id',
+    aliasName: $_aliasNameGenerator(
+      db.suppliers.id,
+      db.payablePayments.supplierId,
+    ),
   );
 
   $$PayablePaymentsTableProcessedTableManager get payablePaymentsRefs {
@@ -44296,7 +44518,10 @@ final class $$SuppliersTableReferences
   _supplyPriceHistoryRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplyPriceHistory,
-        aliasName: 'suppliers__id__supply_price_history__supplier_id',
+        aliasName: $_aliasNameGenerator(
+          db.suppliers.id,
+          db.supplyPriceHistory.supplierId,
+        ),
       );
 
   $$SupplyPriceHistoryTableProcessedTableManager get supplyPriceHistoryRefs {
@@ -44734,7 +44959,7 @@ class $$SuppliersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SuppliersTable, Supplier>(table),
+                  e.readTable(table),
                   $$SuppliersTableReferences(db, table, e),
                 ),
               )
@@ -44919,8 +45144,10 @@ final class $$SupplierPurchasesTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('supplier_purchases__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.supplierPurchases.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -44936,8 +45163,10 @@ final class $$SupplierPurchasesTableReferences
     );
   }
 
-  static $SuppliersTable _supplierIdTable(_$AppDatabase db) => db.suppliers
-      .createAlias('supplier_purchases__supplier_id__suppliers__id');
+  static $SuppliersTable _supplierIdTable(_$AppDatabase db) =>
+      db.suppliers.createAlias(
+        $_aliasNameGenerator(db.supplierPurchases.supplierId, db.suppliers.id),
+      );
 
   $$SuppliersTableProcessedTableManager get supplierId {
     final $_column = $_itemColumn<String>('supplier_id')!;
@@ -44953,8 +45182,13 @@ final class $$SupplierPurchasesTableReferences
     );
   }
 
-  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias('supplier_purchases__payment_account_id__accounts__id');
+  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias(
+        $_aliasNameGenerator(
+          db.supplierPurchases.paymentAccountId,
+          db.accounts.id,
+        ),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -45393,7 +45627,7 @@ class $$SupplierPurchasesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SupplierPurchasesTable, SupplierPurchase>(table),
+                  e.readTable(table),
                   $$SupplierPurchasesTableReferences(db, table, e),
                 ),
               )
@@ -45536,8 +45770,10 @@ final class $$PayablePaymentsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('payable_payments__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.payablePayments.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -45554,7 +45790,9 @@ final class $$PayablePaymentsTableReferences
   }
 
   static $SuppliersTable _supplierIdTable(_$AppDatabase db) =>
-      db.suppliers.createAlias('payable_payments__supplier_id__suppliers__id');
+      db.suppliers.createAlias(
+        $_aliasNameGenerator(db.payablePayments.supplierId, db.suppliers.id),
+      );
 
   $$SuppliersTableProcessedTableManager get supplierId {
     final $_column = $_itemColumn<String>('supplier_id')!;
@@ -45570,8 +45808,13 @@ final class $$PayablePaymentsTableReferences
     );
   }
 
-  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias('payable_payments__payment_account_id__accounts__id');
+  static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias(
+        $_aliasNameGenerator(
+          db.payablePayments.paymentAccountId,
+          db.accounts.id,
+        ),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -46007,7 +46250,7 @@ class $$PayablePaymentsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PayablePaymentsTable, PayablePayment>(table),
+                  e.readTable(table),
                   $$PayablePaymentsTableReferences(db, table, e),
                 ),
               )
@@ -46156,7 +46399,9 @@ final class $$ExpensesTableReferences
   $$ExpensesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('expenses__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.expenses.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -46173,7 +46418,9 @@ final class $$ExpensesTableReferences
   }
 
   static $CategoriesTable _categoryIdTable(_$AppDatabase db) =>
-      db.categories.createAlias('expenses__category_id__categories__id');
+      db.categories.createAlias(
+        $_aliasNameGenerator(db.expenses.categoryId, db.categories.id),
+      );
 
   $$CategoriesTableProcessedTableManager get categoryId {
     final $_column = $_itemColumn<String>('category_id')!;
@@ -46190,7 +46437,9 @@ final class $$ExpensesTableReferences
   }
 
   static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('expenses__payment_account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.expenses.paymentAccountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -46206,9 +46455,10 @@ final class $$ExpensesTableReferences
     );
   }
 
-  static $JournalEntriesTable _journalEntryIdTable(_$AppDatabase db) => db
-      .journalEntries
-      .createAlias('expenses__journal_entry_id__journal_entries__id');
+  static $JournalEntriesTable _journalEntryIdTable(_$AppDatabase db) =>
+      db.journalEntries.createAlias(
+        $_aliasNameGenerator(db.expenses.journalEntryId, db.journalEntries.id),
+      );
 
   $$JournalEntriesTableProcessedTableManager? get journalEntryId {
     final $_column = $_itemColumn<String>('journal_entry_id');
@@ -46227,7 +46477,7 @@ final class $$ExpensesTableReferences
   static MultiTypedResultKey<$ShoppingCartsTable, List<ShoppingCart>>
   _shoppingCartsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.shoppingCarts,
-    aliasName: 'expenses__id__shopping_carts__expense_id',
+    aliasName: $_aliasNameGenerator(db.expenses.id, db.shoppingCarts.expenseId),
   );
 
   $$ShoppingCartsTableProcessedTableManager get shoppingCartsRefs {
@@ -46855,7 +47105,7 @@ class $$ExpensesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ExpensesTable, Expense>(table),
+                  e.readTable(table),
                   $$ExpensesTableReferences(db, table, e),
                 ),
               )
@@ -47035,8 +47285,10 @@ final class $$ProductCategoriesTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('product_categories__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.productCategories.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -47056,7 +47308,10 @@ final class $$ProductCategoriesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.supplies,
-    aliasName: 'product_categories__id__supplies__category_id',
+    aliasName: $_aliasNameGenerator(
+      db.productCategories.id,
+      db.supplies.categoryId,
+    ),
   );
 
   $$SuppliesTableProcessedTableManager get suppliesRefs {
@@ -47075,7 +47330,10 @@ final class $$ProductCategoriesTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.products,
-    aliasName: 'product_categories__id__products__category_id',
+    aliasName: $_aliasNameGenerator(
+      db.productCategories.id,
+      db.products.categoryId,
+    ),
   );
 
   $$ProductsTableProcessedTableManager get productsRefs {
@@ -47482,7 +47740,7 @@ class $$ProductCategoriesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ProductCategoriesTable, ProductCategory>(table),
+                  e.readTable(table),
                   $$ProductCategoriesTableReferences(db, table, e),
                 ),
               )
@@ -47671,7 +47929,9 @@ final class $$SuppliesTableReferences
   $$SuppliesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('supplies__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.supplies.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -47687,9 +47947,10 @@ final class $$SuppliesTableReferences
     );
   }
 
-  static $ProductCategoriesTable _categoryIdTable(_$AppDatabase db) => db
-      .productCategories
-      .createAlias('supplies__category_id__product_categories__id');
+  static $ProductCategoriesTable _categoryIdTable(_$AppDatabase db) =>
+      db.productCategories.createAlias(
+        $_aliasNameGenerator(db.supplies.categoryId, db.productCategories.id),
+      );
 
   $$ProductCategoriesTableProcessedTableManager? get categoryId {
     final $_column = $_itemColumn<String>('category_id');
@@ -47712,7 +47973,10 @@ final class $$SuppliesTableReferences
   _supplyUnitConversionsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplyUnitConversions,
-        aliasName: 'supplies__id__supply_unit_conversions__supply_id',
+        aliasName: $_aliasNameGenerator(
+          db.supplies.id,
+          db.supplyUnitConversions.supplyId,
+        ),
       );
 
   $$SupplyUnitConversionsTableProcessedTableManager
@@ -47734,7 +47998,10 @@ final class $$SuppliesTableReferences
   _shoppingCartItemsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.shoppingCartItems,
-        aliasName: 'supplies__id__shopping_cart_items__supply_id',
+        aliasName: $_aliasNameGenerator(
+          db.supplies.id,
+          db.shoppingCartItems.supplyId,
+        ),
       );
 
   $$ShoppingCartItemsTableProcessedTableManager get shoppingCartItemsRefs {
@@ -47758,7 +48025,10 @@ final class $$SuppliesTableReferences
   _supplyPriceHistoryRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.supplyPriceHistory,
-        aliasName: 'supplies__id__supply_price_history__supply_id',
+        aliasName: $_aliasNameGenerator(
+          db.supplies.id,
+          db.supplyPriceHistory.supplyId,
+        ),
       );
 
   $$SupplyPriceHistoryTableProcessedTableManager get supplyPriceHistoryRefs {
@@ -47778,7 +48048,10 @@ final class $$SuppliesTableReferences
   static MultiTypedResultKey<$RecipeComponentsTable, List<RecipeComponent>>
   _recipeComponentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.recipeComponents,
-    aliasName: 'supplies__id__recipe_components__supply_id',
+    aliasName: $_aliasNameGenerator(
+      db.supplies.id,
+      db.recipeComponents.supplyId,
+    ),
   );
 
   $$RecipeComponentsTableProcessedTableManager get recipeComponentsRefs {
@@ -47799,7 +48072,10 @@ final class $$SuppliesTableReferences
   _inventoryMovementsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.inventoryMovements,
-        aliasName: 'supplies__id__inventory_movements__supply_id',
+        aliasName: $_aliasNameGenerator(
+          db.supplies.id,
+          db.inventoryMovements.supplyId,
+        ),
       );
 
   $$InventoryMovementsTableProcessedTableManager get inventoryMovementsRefs {
@@ -48747,7 +49023,7 @@ class $$SuppliesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SuppliesTable, Supply>(table),
+                  e.readTable(table),
                   $$SuppliesTableReferences(db, table, e),
                 ),
               )
@@ -48981,8 +49257,10 @@ final class $$SupplyUnitConversionsTableReferences
     super.$_typedResult,
   );
 
-  static $SuppliesTable _supplyIdTable(_$AppDatabase db) => db.supplies
-      .createAlias('supply_unit_conversions__supply_id__supplies__id');
+  static $SuppliesTable _supplyIdTable(_$AppDatabase db) =>
+      db.supplies.createAlias(
+        $_aliasNameGenerator(db.supplyUnitConversions.supplyId, db.supplies.id),
+      );
 
   $$SuppliesTableProcessedTableManager get supplyId {
     final $_column = $_itemColumn<String>('supply_id')!;
@@ -49190,10 +49468,7 @@ class $$SupplyUnitConversionsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<
-                    $SupplyUnitConversionsTable,
-                    SupplyUnitConversion
-                  >(table),
+                  e.readTable(table),
                   $$SupplyUnitConversionsTableReferences(db, table, e),
                 ),
               )
@@ -49295,7 +49570,9 @@ final class $$ShoppingCartsTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('shopping_carts__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.shoppingCarts.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -49312,7 +49589,9 @@ final class $$ShoppingCartsTableReferences
   }
 
   static $ExpensesTable _expenseIdTable(_$AppDatabase db) =>
-      db.expenses.createAlias('shopping_carts__expense_id__expenses__id');
+      db.expenses.createAlias(
+        $_aliasNameGenerator(db.shoppingCarts.expenseId, db.expenses.id),
+      );
 
   $$ExpensesTableProcessedTableManager? get expenseId {
     final $_column = $_itemColumn<String>('expense_id');
@@ -49332,7 +49611,10 @@ final class $$ShoppingCartsTableReferences
   _shoppingCartItemsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.shoppingCartItems,
-        aliasName: 'shopping_carts__id__shopping_cart_items__cart_id',
+        aliasName: $_aliasNameGenerator(
+          db.shoppingCarts.id,
+          db.shoppingCartItems.cartId,
+        ),
       );
 
   $$ShoppingCartItemsTableProcessedTableManager get shoppingCartItemsRefs {
@@ -49745,7 +50027,7 @@ class $$ShoppingCartsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ShoppingCartsTable, ShoppingCart>(table),
+                  e.readTable(table),
                   $$ShoppingCartsTableReferences(db, table, e),
                 ),
               )
@@ -49919,8 +50201,10 @@ final class $$ShoppingCartItemsTableReferences
     super.$_typedResult,
   );
 
-  static $ShoppingCartsTable _cartIdTable(_$AppDatabase db) => db.shoppingCarts
-      .createAlias('shopping_cart_items__cart_id__shopping_carts__id');
+  static $ShoppingCartsTable _cartIdTable(_$AppDatabase db) =>
+      db.shoppingCarts.createAlias(
+        $_aliasNameGenerator(db.shoppingCartItems.cartId, db.shoppingCarts.id),
+      );
 
   $$ShoppingCartsTableProcessedTableManager get cartId {
     final $_column = $_itemColumn<String>('cart_id')!;
@@ -49937,7 +50221,9 @@ final class $$ShoppingCartItemsTableReferences
   }
 
   static $SuppliesTable _supplyIdTable(_$AppDatabase db) =>
-      db.supplies.createAlias('shopping_cart_items__supply_id__supplies__id');
+      db.supplies.createAlias(
+        $_aliasNameGenerator(db.shoppingCartItems.supplyId, db.supplies.id),
+      );
 
   $$SuppliesTableProcessedTableManager? get supplyId {
     final $_column = $_itemColumn<String>('supply_id');
@@ -49957,13 +50243,14 @@ final class $$ShoppingCartItemsTableReferences
     $SupplyPriceHistoryTable,
     List<SupplyPriceHistoryData>
   >
-  _supplyPriceHistoryRefsTable(
-    _$AppDatabase db,
-  ) => MultiTypedResultKey.fromTable(
-    db.supplyPriceHistory,
-    aliasName:
-        'shopping_cart_items__id__supply_price_history__shopping_cart_item_id',
-  );
+  _supplyPriceHistoryRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.supplyPriceHistory,
+        aliasName: $_aliasNameGenerator(
+          db.shoppingCartItems.id,
+          db.supplyPriceHistory.shoppingCartItemId,
+        ),
+      );
 
   $$SupplyPriceHistoryTableProcessedTableManager get supplyPriceHistoryRefs {
     final manager =
@@ -49983,13 +50270,14 @@ final class $$ShoppingCartItemsTableReferences
   }
 
   static MultiTypedResultKey<$InventoryMovementsTable, List<InventoryMovement>>
-  _inventoryMovementsRefsTable(
-    _$AppDatabase db,
-  ) => MultiTypedResultKey.fromTable(
-    db.inventoryMovements,
-    aliasName:
-        'shopping_cart_items__id__inventory_movements__shopping_cart_item_id',
-  );
+  _inventoryMovementsRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.inventoryMovements,
+        aliasName: $_aliasNameGenerator(
+          db.shoppingCartItems.id,
+          db.inventoryMovements.shoppingCartItemId,
+        ),
+      );
 
   $$InventoryMovementsTableProcessedTableManager get inventoryMovementsRefs {
     final manager =
@@ -50647,7 +50935,7 @@ class $$ShoppingCartItemsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ShoppingCartItemsTable, ShoppingCartItem>(table),
+                  e.readTable(table),
                   $$ShoppingCartItemsTableReferences(db, table, e),
                 ),
               )
@@ -50832,7 +51120,9 @@ final class $$SupplyPriceHistoryTableReferences
   );
 
   static $SuppliesTable _supplyIdTable(_$AppDatabase db) =>
-      db.supplies.createAlias('supply_price_history__supply_id__supplies__id');
+      db.supplies.createAlias(
+        $_aliasNameGenerator(db.supplyPriceHistory.supplyId, db.supplies.id),
+      );
 
   $$SuppliesTableProcessedTableManager get supplyId {
     final $_column = $_itemColumn<String>('supply_id')!;
@@ -50848,8 +51138,10 @@ final class $$SupplyPriceHistoryTableReferences
     );
   }
 
-  static $SuppliersTable _supplierIdTable(_$AppDatabase db) => db.suppliers
-      .createAlias('supply_price_history__supplier_id__suppliers__id');
+  static $SuppliersTable _supplierIdTable(_$AppDatabase db) =>
+      db.suppliers.createAlias(
+        $_aliasNameGenerator(db.supplyPriceHistory.supplierId, db.suppliers.id),
+      );
 
   $$SuppliersTableProcessedTableManager? get supplierId {
     final $_column = $_itemColumn<String>('supplier_id');
@@ -50867,7 +51159,10 @@ final class $$SupplyPriceHistoryTableReferences
 
   static $ShoppingCartItemsTable _shoppingCartItemIdTable(_$AppDatabase db) =>
       db.shoppingCartItems.createAlias(
-        'supply_price_history__shopping_cart_item_id__shopping_cart_items__id',
+        $_aliasNameGenerator(
+          db.supplyPriceHistory.shoppingCartItemId,
+          db.shoppingCartItems.id,
+        ),
       );
 
   $$ShoppingCartItemsTableProcessedTableManager? get shoppingCartItemId {
@@ -51346,9 +51641,7 @@ class $$SupplyPriceHistoryTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SupplyPriceHistoryTable, SupplyPriceHistoryData>(
-                    table,
-                  ),
+                  e.readTable(table),
                   $$SupplyPriceHistoryTableReferences(db, table, e),
                 ),
               )
@@ -51487,8 +51780,10 @@ final class $$AccountTransfersTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('account_transfers__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.accountTransfers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -51504,8 +51799,10 @@ final class $$AccountTransfersTableReferences
     );
   }
 
-  static $AccountsTable _fromAccountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias('account_transfers__from_account_id__accounts__id');
+  static $AccountsTable _fromAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.accountTransfers.fromAccountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager get fromAccountId {
     final $_column = $_itemColumn<String>('from_account_id')!;
@@ -51522,7 +51819,9 @@ final class $$AccountTransfersTableReferences
   }
 
   static $AccountsTable _toAccountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('account_transfers__to_account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.accountTransfers.toAccountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager get toAccountId {
     final $_column = $_itemColumn<String>('to_account_id')!;
@@ -51922,7 +52221,7 @@ class $$AccountTransfersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$AccountTransfersTable, AccountTransfer>(table),
+                  e.readTable(table),
                   $$AccountTransfersTableReferences(db, table, e),
                 ),
               )
@@ -52079,7 +52378,9 @@ final class $$ProductsTableReferences
   $$ProductsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('products__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.products.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -52095,9 +52396,10 @@ final class $$ProductsTableReferences
     );
   }
 
-  static $ProductCategoriesTable _categoryIdTable(_$AppDatabase db) => db
-      .productCategories
-      .createAlias('products__category_id__product_categories__id');
+  static $ProductCategoriesTable _categoryIdTable(_$AppDatabase db) =>
+      db.productCategories.createAlias(
+        $_aliasNameGenerator(db.products.categoryId, db.productCategories.id),
+      );
 
   $$ProductCategoriesTableProcessedTableManager? get categoryId {
     final $_column = $_itemColumn<String>('category_id');
@@ -52117,7 +52419,7 @@ final class $$ProductsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.recipes,
-    aliasName: 'products__id__recipes__product_id',
+    aliasName: $_aliasNameGenerator(db.products.id, db.recipes.productId),
   );
 
   $$RecipesTableProcessedTableManager get recipesRefs {
@@ -52135,7 +52437,10 @@ final class $$ProductsTableReferences
   static MultiTypedResultKey<$RecipeComponentsTable, List<RecipeComponent>>
   _recipeComponentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.recipeComponents,
-    aliasName: 'products__id__recipe_components__component_product_id',
+    aliasName: $_aliasNameGenerator(
+      db.products.id,
+      db.recipeComponents.componentProductId,
+    ),
   );
 
   $$RecipeComponentsTableProcessedTableManager get recipeComponentsRefs {
@@ -52155,7 +52460,7 @@ final class $$ProductsTableReferences
   static MultiTypedResultKey<$PosSaleItemsTable, List<PosSaleItem>>
   _posSaleItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSaleItems,
-    aliasName: 'products__id__pos_sale_items__product_id',
+    aliasName: $_aliasNameGenerator(db.products.id, db.posSaleItems.productId),
   );
 
   $$PosSaleItemsTableProcessedTableManager get posSaleItemsRefs {
@@ -52177,7 +52482,10 @@ final class $$ProductsTableReferences
   _productStockMovementsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.productStockMovements,
-        aliasName: 'products__id__product_stock_movements__product_id',
+        aliasName: $_aliasNameGenerator(
+          db.products.id,
+          db.productStockMovements.productId,
+        ),
       );
 
   $$ProductStockMovementsTableProcessedTableManager
@@ -52924,7 +53232,7 @@ class $$ProductsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ProductsTable, Product>(table),
+                  e.readTable(table),
                   $$ProductsTableReferences(db, table, e),
                 ),
               )
@@ -53129,8 +53437,8 @@ final class $$RecipesTableReferences
     extends BaseReferences<_$AppDatabase, $RecipesTable, Recipe> {
   $$RecipesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $ProductsTable _productIdTable(_$AppDatabase db) =>
-      db.products.createAlias('recipes__product_id__products__id');
+  static $ProductsTable _productIdTable(_$AppDatabase db) => db.products
+      .createAlias($_aliasNameGenerator(db.recipes.productId, db.products.id));
 
   $$ProductsTableProcessedTableManager get productId {
     final $_column = $_itemColumn<String>('product_id')!;
@@ -53149,7 +53457,10 @@ final class $$RecipesTableReferences
   static MultiTypedResultKey<$RecipeComponentsTable, List<RecipeComponent>>
   _recipeComponentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.recipeComponents,
-    aliasName: 'recipes__id__recipe_components__recipe_id',
+    aliasName: $_aliasNameGenerator(
+      db.recipes.id,
+      db.recipeComponents.recipeId,
+    ),
   );
 
   $$RecipeComponentsTableProcessedTableManager get recipeComponentsRefs {
@@ -53431,7 +53742,7 @@ class $$RecipesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$RecipesTable, Recipe>(table),
+                  e.readTable(table),
                   $$RecipesTableReferences(db, table, e),
                 ),
               )
@@ -53553,7 +53864,9 @@ final class $$RecipeComponentsTableReferences
   );
 
   static $RecipesTable _recipeIdTable(_$AppDatabase db) =>
-      db.recipes.createAlias('recipe_components__recipe_id__recipes__id');
+      db.recipes.createAlias(
+        $_aliasNameGenerator(db.recipeComponents.recipeId, db.recipes.id),
+      );
 
   $$RecipesTableProcessedTableManager get recipeId {
     final $_column = $_itemColumn<String>('recipe_id')!;
@@ -53570,7 +53883,9 @@ final class $$RecipeComponentsTableReferences
   }
 
   static $SuppliesTable _supplyIdTable(_$AppDatabase db) =>
-      db.supplies.createAlias('recipe_components__supply_id__supplies__id');
+      db.supplies.createAlias(
+        $_aliasNameGenerator(db.recipeComponents.supplyId, db.supplies.id),
+      );
 
   $$SuppliesTableProcessedTableManager? get supplyId {
     final $_column = $_itemColumn<String>('supply_id');
@@ -53586,9 +53901,13 @@ final class $$RecipeComponentsTableReferences
     );
   }
 
-  static $ProductsTable _componentProductIdTable(_$AppDatabase db) => db
-      .products
-      .createAlias('recipe_components__component_product_id__products__id');
+  static $ProductsTable _componentProductIdTable(_$AppDatabase db) =>
+      db.products.createAlias(
+        $_aliasNameGenerator(
+          db.recipeComponents.componentProductId,
+          db.products.id,
+        ),
+      );
 
   $$ProductsTableProcessedTableManager? get componentProductId {
     final $_column = $_itemColumn<String>('component_product_id');
@@ -53973,7 +54292,7 @@ class $$RecipeComponentsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$RecipeComponentsTable, RecipeComponent>(table),
+                  e.readTable(table),
                   $$RecipeComponentsTableReferences(db, table, e),
                 ),
               )
@@ -54123,7 +54442,9 @@ final class $$InventoryMovementsTableReferences
   );
 
   static $SuppliesTable _supplyIdTable(_$AppDatabase db) =>
-      db.supplies.createAlias('inventory_movements__supply_id__supplies__id');
+      db.supplies.createAlias(
+        $_aliasNameGenerator(db.inventoryMovements.supplyId, db.supplies.id),
+      );
 
   $$SuppliesTableProcessedTableManager get supplyId {
     final $_column = $_itemColumn<String>('supply_id')!;
@@ -54141,7 +54462,10 @@ final class $$InventoryMovementsTableReferences
 
   static $ShoppingCartItemsTable _shoppingCartItemIdTable(_$AppDatabase db) =>
       db.shoppingCartItems.createAlias(
-        'inventory_movements__shopping_cart_item_id__shopping_cart_items__id',
+        $_aliasNameGenerator(
+          db.inventoryMovements.shoppingCartItemId,
+          db.shoppingCartItems.id,
+        ),
       );
 
   $$ShoppingCartItemsTableProcessedTableManager? get shoppingCartItemId {
@@ -54543,9 +54867,7 @@ class $$InventoryMovementsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$InventoryMovementsTable, InventoryMovement>(
-                    table,
-                  ),
+                  e.readTable(table),
                   $$InventoryMovementsTableReferences(db, table, e),
                 ),
               )
@@ -54663,7 +54985,9 @@ final class $$PosSessionsTableReferences
   $$PosSessionsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('pos_sessions__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.posSessions.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -54683,7 +55007,7 @@ final class $$PosSessionsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.posSales,
-    aliasName: 'pos_sessions__id__pos_sales__session_id',
+    aliasName: $_aliasNameGenerator(db.posSessions.id, db.posSales.sessionId),
   );
 
   $$PosSalesTableProcessedTableManager get posSalesRefs {
@@ -55069,7 +55393,7 @@ class $$PosSessionsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosSessionsTable, PosSession>(table),
+                  e.readTable(table),
                   $$PosSessionsTableReferences(db, table, e),
                 ),
               )
@@ -55219,7 +55543,9 @@ final class $$PosSalesTableReferences
   $$PosSalesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('pos_sales__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.posSales.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -55236,7 +55562,9 @@ final class $$PosSalesTableReferences
   }
 
   static $AccountsTable _paymentAccountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('pos_sales__payment_account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.posSales.paymentAccountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager? get paymentAccountId {
     final $_column = $_itemColumn<String>('payment_account_id');
@@ -55253,7 +55581,9 @@ final class $$PosSalesTableReferences
   }
 
   static $PosSessionsTable _sessionIdTable(_$AppDatabase db) =>
-      db.posSessions.createAlias('pos_sales__session_id__pos_sessions__id');
+      db.posSessions.createAlias(
+        $_aliasNameGenerator(db.posSales.sessionId, db.posSessions.id),
+      );
 
   $$PosSessionsTableProcessedTableManager? get sessionId {
     final $_column = $_itemColumn<String>('session_id');
@@ -55272,7 +55602,7 @@ final class $$PosSalesTableReferences
   static MultiTypedResultKey<$PosSaleItemsTable, List<PosSaleItem>>
   _posSaleItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSaleItems,
-    aliasName: 'pos_sales__id__pos_sale_items__sale_id',
+    aliasName: $_aliasNameGenerator(db.posSales.id, db.posSaleItems.saleId),
   );
 
   $$PosSaleItemsTableProcessedTableManager get posSaleItemsRefs {
@@ -55290,7 +55620,7 @@ final class $$PosSalesTableReferences
   static MultiTypedResultKey<$PosSalePaymentsTable, List<PosSalePayment>>
   _posSalePaymentsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSalePayments,
-    aliasName: 'pos_sales__id__pos_sale_payments__sale_id',
+    aliasName: $_aliasNameGenerator(db.posSales.id, db.posSalePayments.saleId),
   );
 
   $$PosSalePaymentsTableProcessedTableManager get posSalePaymentsRefs {
@@ -55310,7 +55640,7 @@ final class $$PosSalesTableReferences
   static MultiTypedResultKey<$PosSaleTendersTable, List<PosSaleTender>>
   _posSaleTendersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.posSaleTenders,
-    aliasName: 'pos_sales__id__pos_sale_tenders__sale_id',
+    aliasName: $_aliasNameGenerator(db.posSales.id, db.posSaleTenders.saleId),
   );
 
   $$PosSaleTendersTableProcessedTableManager get posSaleTendersRefs {
@@ -56188,7 +56518,7 @@ class $$PosSalesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosSalesTable, PosSale>(table),
+                  e.readTable(table),
                   $$PosSalesTableReferences(db, table, e),
                 ),
               )
@@ -56393,7 +56723,9 @@ final class $$PosSaleItemsTableReferences
   $$PosSaleItemsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $PosSalesTable _saleIdTable(_$AppDatabase db) =>
-      db.posSales.createAlias('pos_sale_items__sale_id__pos_sales__id');
+      db.posSales.createAlias(
+        $_aliasNameGenerator(db.posSaleItems.saleId, db.posSales.id),
+      );
 
   $$PosSalesTableProcessedTableManager get saleId {
     final $_column = $_itemColumn<String>('sale_id')!;
@@ -56410,7 +56742,9 @@ final class $$PosSaleItemsTableReferences
   }
 
   static $ProductsTable _productIdTable(_$AppDatabase db) =>
-      db.products.createAlias('pos_sale_items__product_id__products__id');
+      db.products.createAlias(
+        $_aliasNameGenerator(db.posSaleItems.productId, db.products.id),
+      );
 
   $$ProductsTableProcessedTableManager? get productId {
     final $_column = $_itemColumn<String>('product_id');
@@ -56765,7 +57099,7 @@ class $$PosSaleItemsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosSaleItemsTable, PosSaleItem>(table),
+                  e.readTable(table),
                   $$PosSaleItemsTableReferences(db, table, e),
                 ),
               )
@@ -56877,7 +57211,9 @@ final class $$PosSalePaymentsTableReferences
   );
 
   static $PosSalesTable _saleIdTable(_$AppDatabase db) =>
-      db.posSales.createAlias('pos_sale_payments__sale_id__pos_sales__id');
+      db.posSales.createAlias(
+        $_aliasNameGenerator(db.posSalePayments.saleId, db.posSales.id),
+      );
 
   $$PosSalesTableProcessedTableManager get saleId {
     final $_column = $_itemColumn<String>('sale_id')!;
@@ -57163,7 +57499,7 @@ class $$PosSalePaymentsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosSalePaymentsTable, PosSalePayment>(table),
+                  e.readTable(table),
                   $$PosSalePaymentsTableReferences(db, table, e),
                 ),
               )
@@ -57259,8 +57595,10 @@ final class $$PaymentProvidersTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('payment_providers__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.paymentProviders.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -57508,7 +57846,7 @@ class $$PaymentProvidersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PaymentProvidersTable, PaymentProvider>(table),
+                  e.readTable(table),
                   $$PaymentProvidersTableReferences(db, table, e),
                 ),
               )
@@ -57614,7 +57952,9 @@ final class $$PosOrderTypesTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('pos_order_types__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.posOrderTypes.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -57953,7 +58293,7 @@ class $$PosOrderTypesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosOrderTypesTable, PosOrderType>(table),
+                  e.readTable(table),
                   $$PosOrderTypesTableReferences(db, table, e),
                 ),
               )
@@ -58049,7 +58389,9 @@ final class $$PosTablesTableReferences
   $$PosTablesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('pos_tables__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.posTables.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -58346,7 +58688,7 @@ class $$PosTablesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosTablesTable, PosTable>(table),
+                  e.readTable(table),
                   $$PosTablesTableReferences(db, table, e),
                 ),
               )
@@ -58452,7 +58794,9 @@ final class $$PosSaleTendersTableReferences
   );
 
   static $PosSalesTable _saleIdTable(_$AppDatabase db) =>
-      db.posSales.createAlias('pos_sale_tenders__sale_id__pos_sales__id');
+      db.posSales.createAlias(
+        $_aliasNameGenerator(db.posSaleTenders.saleId, db.posSales.id),
+      );
 
   $$PosSalesTableProcessedTableManager get saleId {
     final $_column = $_itemColumn<String>('sale_id')!;
@@ -58469,7 +58813,9 @@ final class $$PosSaleTendersTableReferences
   }
 
   static $AccountsTable _accountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias('pos_sale_tenders__account_id__accounts__id');
+      db.accounts.createAlias(
+        $_aliasNameGenerator(db.posSaleTenders.accountId, db.accounts.id),
+      );
 
   $$AccountsTableProcessedTableManager get accountId {
     final $_column = $_itemColumn<String>('account_id')!;
@@ -58879,7 +59225,7 @@ class $$PosSaleTendersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PosSaleTendersTable, PosSaleTender>(table),
+                  e.readTable(table),
                   $$PosSaleTendersTableReferences(db, table, e),
                 ),
               )
@@ -58992,8 +59338,10 @@ final class $$BusinessMembersTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('business_members__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.businessMembers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -59275,7 +59623,7 @@ class $$BusinessMembersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$BusinessMembersTable, BusinessMember>(table),
+                  e.readTable(table),
                   $$BusinessMembersTableReferences(db, table, e),
                 ),
               )
@@ -59358,6 +59706,7 @@ typedef $$AuditLogsTableCreateCompanionBuilder =
       Value<String?> actorName,
       Value<String?> actorRole,
       Value<String?> deviceId,
+      Value<String> source,
       Value<String?> reason,
       Value<String?> beforeJson,
       Value<String?> afterJson,
@@ -59380,6 +59729,7 @@ typedef $$AuditLogsTableUpdateCompanionBuilder =
       Value<String?> actorName,
       Value<String?> actorRole,
       Value<String?> deviceId,
+      Value<String> source,
       Value<String?> reason,
       Value<String?> beforeJson,
       Value<String?> afterJson,
@@ -59391,7 +59741,9 @@ final class $$AuditLogsTableReferences
   $$AuditLogsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('audit_logs__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.auditLogs.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -59484,6 +59836,11 @@ class $$AuditLogsTableFilterComposer
 
   ColumnFilters<String> get deviceId => $composableBuilder(
     column: $table.deviceId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get source => $composableBuilder(
+    column: $table.source,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -59605,6 +59962,11 @@ class $$AuditLogsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get reason => $composableBuilder(
     column: $table.reason,
     builder: (column) => ColumnOrderings(column),
@@ -59701,6 +60063,9 @@ class $$AuditLogsTableAnnotationComposer
   GeneratedColumn<String> get deviceId =>
       $composableBuilder(column: $table.deviceId, builder: (column) => column);
 
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
   GeneratedColumn<String> get reason =>
       $composableBuilder(column: $table.reason, builder: (column) => column);
 
@@ -59779,6 +60144,7 @@ class $$AuditLogsTableTableManager
                 Value<String?> actorName = const Value.absent(),
                 Value<String?> actorRole = const Value.absent(),
                 Value<String?> deviceId = const Value.absent(),
+                Value<String> source = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 Value<String?> beforeJson = const Value.absent(),
                 Value<String?> afterJson = const Value.absent(),
@@ -59799,6 +60165,7 @@ class $$AuditLogsTableTableManager
                 actorName: actorName,
                 actorRole: actorRole,
                 deviceId: deviceId,
+                source: source,
                 reason: reason,
                 beforeJson: beforeJson,
                 afterJson: afterJson,
@@ -59821,6 +60188,7 @@ class $$AuditLogsTableTableManager
                 Value<String?> actorName = const Value.absent(),
                 Value<String?> actorRole = const Value.absent(),
                 Value<String?> deviceId = const Value.absent(),
+                Value<String> source = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 Value<String?> beforeJson = const Value.absent(),
                 Value<String?> afterJson = const Value.absent(),
@@ -59841,6 +60209,7 @@ class $$AuditLogsTableTableManager
                 actorName: actorName,
                 actorRole: actorRole,
                 deviceId: deviceId,
+                source: source,
                 reason: reason,
                 beforeJson: beforeJson,
                 afterJson: afterJson,
@@ -59849,7 +60218,7 @@ class $$AuditLogsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$AuditLogsTable, AuditLog>(table),
+                  e.readTable(table),
                   $$AuditLogsTableReferences(db, table, e),
                 ),
               )
@@ -60173,16 +60542,7 @@ class $$UsersTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map(
-                (e) => (
-                  e.readTable<$UsersTable, AppUser>(table),
-                  BaseReferences<_$AppDatabase, $UsersTable, AppUser>(
-                    db,
-                    table,
-                    e,
-                  ),
-                ),
-              )
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -60237,8 +60597,13 @@ final class $$RolePermissionOverridesTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('role_permission_overrides__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.rolePermissionOverrides.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -60497,10 +60862,7 @@ class $$RolePermissionOverridesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<
-                    $RolePermissionOverridesTable,
-                    RolePermissionOverride
-                  >(table),
+                  e.readTable(table),
                   $$RolePermissionOverridesTableReferences(db, table, e),
                 ),
               )
@@ -60602,8 +60964,10 @@ final class $$BusinessInvitesTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('business_invites__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.businessInvites.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -60904,7 +61268,7 @@ class $$BusinessInvitesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$BusinessInvitesTable, BusinessInvite>(table),
+                  e.readTable(table),
                   $$BusinessInvitesTableReferences(db, table, e),
                 ),
               )
@@ -61006,8 +61370,13 @@ final class $$BusinessModuleConfigsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('business_module_configs__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.businessModuleConfigs.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -61283,10 +61652,7 @@ class $$BusinessModuleConfigsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<
-                    $BusinessModuleConfigsTable,
-                    BusinessModuleConfig
-                  >(table),
+                  e.readTable(table),
                   $$BusinessModuleConfigsTableReferences(db, table, e),
                 ),
               )
@@ -61390,7 +61756,9 @@ final class $$SyncOutboxTableReferences
   $$SyncOutboxTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('sync_outbox__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.syncOutbox.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -61748,7 +62116,7 @@ class $$SyncOutboxTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SyncOutboxTable, SyncOutboxData>(table),
+                  e.readTable(table),
                   $$SyncOutboxTableReferences(db, table, e),
                 ),
               )
@@ -61836,8 +62204,10 @@ final class $$SyncCheckpointsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('sync_checkpoints__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.syncCheckpoints.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -62038,7 +62408,7 @@ class $$SyncCheckpointsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$SyncCheckpointsTable, SyncCheckpoint>(table),
+                  e.readTable(table),
                   $$SyncCheckpointsTableReferences(db, table, e),
                 ),
               )
@@ -62142,7 +62512,9 @@ final class $$ScheduleShiftsTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('schedule_shifts__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.scheduleShifts.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -62462,7 +62834,7 @@ class $$ScheduleShiftsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$ScheduleShiftsTable, ScheduleShift>(table),
+                  e.readTable(table),
                   $$ScheduleShiftsTableReferences(db, table, e),
                 ),
               )
@@ -62573,8 +62945,10 @@ final class $$AttendanceRecordsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('attendance_records__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.attendanceRecords.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -62929,7 +63303,7 @@ class $$AttendanceRecordsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$AttendanceRecordsTable, AttendanceRecord>(table),
+                  e.readTable(table),
                   $$AttendanceRecordsTableReferences(db, table, e),
                 ),
               )
@@ -63039,7 +63413,9 @@ final class $$LeaveRequestsTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('leave_requests__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.leaveRequests.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -63406,7 +63782,7 @@ class $$LeaveRequestsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$LeaveRequestsTable, LeaveRequest>(table),
+                  e.readTable(table),
                   $$LeaveRequestsTableReferences(db, table, e),
                 ),
               )
@@ -63500,8 +63876,10 @@ final class $$PayrollProfilesTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('payroll_profiles__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.payrollProfiles.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -63749,7 +64127,7 @@ class $$PayrollProfilesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PayrollProfilesTable, PayrollProfile>(table),
+                  e.readTable(table),
                   $$PayrollProfilesTableReferences(db, table, e),
                 ),
               )
@@ -63847,7 +64225,9 @@ final class $$PayrollRunsTableReferences
   $$PayrollRunsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('payroll_runs__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.payrollRuns.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -63866,7 +64246,7 @@ final class $$PayrollRunsTableReferences
   static MultiTypedResultKey<$PayrollItemsTable, List<PayrollItem>>
   _payrollItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.payrollItems,
-    aliasName: 'payroll_runs__id__payroll_items__run_id',
+    aliasName: $_aliasNameGenerator(db.payrollRuns.id, db.payrollItems.runId),
   );
 
   $$PayrollItemsTableProcessedTableManager get payrollItemsRefs {
@@ -64216,7 +64596,7 @@ class $$PayrollRunsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PayrollRunsTable, PayrollRun>(table),
+                  e.readTable(table),
                   $$PayrollRunsTableReferences(db, table, e),
                 ),
               )
@@ -64349,7 +64729,9 @@ final class $$PayrollItemsTableReferences
   $$PayrollItemsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $PayrollRunsTable _runIdTable(_$AppDatabase db) =>
-      db.payrollRuns.createAlias('payroll_items__run_id__payroll_runs__id');
+      db.payrollRuns.createAlias(
+        $_aliasNameGenerator(db.payrollItems.runId, db.payrollRuns.id),
+      );
 
   $$PayrollRunsTableProcessedTableManager get runId {
     final $_column = $_itemColumn<String>('run_id')!;
@@ -64739,7 +65121,7 @@ class $$PayrollItemsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$PayrollItemsTable, PayrollItem>(table),
+                  e.readTable(table),
                   $$PayrollItemsTableReferences(db, table, e),
                 ),
               )
@@ -64827,7 +65209,9 @@ final class $$RoleLabelsTableReferences
   $$RoleLabelsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('role_labels__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.roleLabels.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -65056,7 +65440,7 @@ class $$RoleLabelsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$RoleLabelsTable, RoleLabel>(table),
+                  e.readTable(table),
                   $$RoleLabelsTableReferences(db, table, e),
                 ),
               )
@@ -65148,7 +65532,9 @@ final class $$CustomRolesTableReferences
   $$CustomRolesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('custom_roles__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.customRoles.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -65411,7 +65797,7 @@ class $$CustomRolesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$CustomRolesTable, CustomRole>(table),
+                  e.readTable(table),
                   $$CustomRolesTableReferences(db, table, e),
                 ),
               )
@@ -65511,7 +65897,9 @@ final class $$BranchesTableReferences
   $$BranchesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('branches__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.branches.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -65530,7 +65918,7 @@ final class $$BranchesTableReferences
   static MultiTypedResultKey<$BranchMembersTable, List<BranchMember>>
   _branchMembersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.branchMembers,
-    aliasName: 'branches__id__branch_members__branch_id',
+    aliasName: $_aliasNameGenerator(db.branches.id, db.branchMembers.branchId),
   );
 
   $$BranchMembersTableProcessedTableManager get branchMembersRefs {
@@ -65552,7 +65940,10 @@ final class $$BranchesTableReferences
   _productStockMovementsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.productStockMovements,
-        aliasName: 'branches__id__product_stock_movements__branch_id',
+        aliasName: $_aliasNameGenerator(
+          db.branches.id,
+          db.productStockMovements.branchId,
+        ),
       );
 
   $$ProductStockMovementsTableProcessedTableManager
@@ -65573,7 +65964,10 @@ final class $$BranchesTableReferences
   static MultiTypedResultKey<$StockTransfersTable, List<StockTransfer>>
   _stockOutTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.stockTransfers,
-    aliasName: 'branches__id__stock_transfers__from_branch_id',
+    aliasName: $_aliasNameGenerator(
+      db.branches.id,
+      db.stockTransfers.fromBranchId,
+    ),
   );
 
   $$StockTransfersTableProcessedTableManager get stockOut {
@@ -65591,7 +65985,10 @@ final class $$BranchesTableReferences
   static MultiTypedResultKey<$StockTransfersTable, List<StockTransfer>>
   _stockInTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.stockTransfers,
-    aliasName: 'branches__id__stock_transfers__to_branch_id',
+    aliasName: $_aliasNameGenerator(
+      db.branches.id,
+      db.stockTransfers.toBranchId,
+    ),
   );
 
   $$StockTransfersTableProcessedTableManager get stockIn {
@@ -66133,7 +66530,7 @@ class $$BranchesTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$BranchesTable, Branch>(table),
+                  e.readTable(table),
                   $$BranchesTableReferences(db, table, e),
                 ),
               )
@@ -66324,7 +66721,9 @@ final class $$BranchMembersTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('branch_members__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.branchMembers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -66341,7 +66740,9 @@ final class $$BranchMembersTableReferences
   }
 
   static $BranchesTable _branchIdTable(_$AppDatabase db) =>
-      db.branches.createAlias('branch_members__branch_id__branches__id');
+      db.branches.createAlias(
+        $_aliasNameGenerator(db.branchMembers.branchId, db.branches.id),
+      );
 
   $$BranchesTableProcessedTableManager get branchId {
     final $_column = $_itemColumn<String>('branch_id')!;
@@ -66660,7 +67061,7 @@ class $$BranchMembersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$BranchMembersTable, BranchMember>(table),
+                  e.readTable(table),
                   $$BranchMembersTableReferences(db, table, e),
                 ),
               )
@@ -66781,8 +67182,13 @@ final class $$ProductStockMovementsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('product_stock_movements__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.productStockMovements.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -66798,8 +67204,10 @@ final class $$ProductStockMovementsTableReferences
     );
   }
 
-  static $BranchesTable _branchIdTable(_$AppDatabase db) => db.branches
-      .createAlias('product_stock_movements__branch_id__branches__id');
+  static $BranchesTable _branchIdTable(_$AppDatabase db) =>
+      db.branches.createAlias(
+        $_aliasNameGenerator(db.productStockMovements.branchId, db.branches.id),
+      );
 
   $$BranchesTableProcessedTableManager get branchId {
     final $_column = $_itemColumn<String>('branch_id')!;
@@ -66815,8 +67223,13 @@ final class $$ProductStockMovementsTableReferences
     );
   }
 
-  static $ProductsTable _productIdTable(_$AppDatabase db) => db.products
-      .createAlias('product_stock_movements__product_id__products__id');
+  static $ProductsTable _productIdTable(_$AppDatabase db) =>
+      db.products.createAlias(
+        $_aliasNameGenerator(
+          db.productStockMovements.productId,
+          db.products.id,
+        ),
+      );
 
   $$ProductsTableProcessedTableManager get productId {
     final $_column = $_itemColumn<String>('product_id')!;
@@ -67282,10 +67695,7 @@ class $$ProductStockMovementsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<
-                    $ProductStockMovementsTable,
-                    ProductStockMovement
-                  >(table),
+                  e.readTable(table),
                   $$ProductStockMovementsTableReferences(db, table, e),
                 ),
               )
@@ -67424,7 +67834,9 @@ final class $$StockTransfersTableReferences
   );
 
   static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
-      db.businesses.createAlias('stock_transfers__business_id__businesses__id');
+      db.businesses.createAlias(
+        $_aliasNameGenerator(db.stockTransfers.businessId, db.businesses.id),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -67441,7 +67853,9 @@ final class $$StockTransfersTableReferences
   }
 
   static $BranchesTable _fromBranchIdTable(_$AppDatabase db) =>
-      db.branches.createAlias('stock_transfers__from_branch_id__branches__id');
+      db.branches.createAlias(
+        $_aliasNameGenerator(db.stockTransfers.fromBranchId, db.branches.id),
+      );
 
   $$BranchesTableProcessedTableManager get fromBranchId {
     final $_column = $_itemColumn<String>('from_branch_id')!;
@@ -67458,7 +67872,9 @@ final class $$StockTransfersTableReferences
   }
 
   static $BranchesTable _toBranchIdTable(_$AppDatabase db) =>
-      db.branches.createAlias('stock_transfers__to_branch_id__branches__id');
+      db.branches.createAlias(
+        $_aliasNameGenerator(db.stockTransfers.toBranchId, db.branches.id),
+      );
 
   $$BranchesTableProcessedTableManager get toBranchId {
     final $_column = $_itemColumn<String>('to_branch_id')!;
@@ -67478,7 +67894,10 @@ final class $$StockTransfersTableReferences
   _stockTransferItemsRefsTable(_$AppDatabase db) =>
       MultiTypedResultKey.fromTable(
         db.stockTransferItems,
-        aliasName: 'stock_transfers__id__stock_transfer_items__transfer_id',
+        aliasName: $_aliasNameGenerator(
+          db.stockTransfers.id,
+          db.stockTransferItems.transferId,
+        ),
       );
 
   $$StockTransferItemsTableProcessedTableManager get stockTransferItemsRefs {
@@ -68001,7 +68420,7 @@ class $$StockTransfersTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$StockTransfersTable, StockTransfer>(table),
+                  e.readTable(table),
                   $$StockTransfersTableReferences(db, table, e),
                 ),
               )
@@ -68172,8 +68591,13 @@ final class $$StockTransferItemsTableReferences
     super.$_typedResult,
   );
 
-  static $BusinessesTable _businessIdTable(_$AppDatabase db) => db.businesses
-      .createAlias('stock_transfer_items__business_id__businesses__id');
+  static $BusinessesTable _businessIdTable(_$AppDatabase db) =>
+      db.businesses.createAlias(
+        $_aliasNameGenerator(
+          db.stockTransferItems.businessId,
+          db.businesses.id,
+        ),
+      );
 
   $$BusinessesTableProcessedTableManager get businessId {
     final $_column = $_itemColumn<String>('business_id')!;
@@ -68189,9 +68613,13 @@ final class $$StockTransferItemsTableReferences
     );
   }
 
-  static $StockTransfersTable _transferIdTable(_$AppDatabase db) => db
-      .stockTransfers
-      .createAlias('stock_transfer_items__transfer_id__stock_transfers__id');
+  static $StockTransfersTable _transferIdTable(_$AppDatabase db) =>
+      db.stockTransfers.createAlias(
+        $_aliasNameGenerator(
+          db.stockTransferItems.transferId,
+          db.stockTransfers.id,
+        ),
+      );
 
   $$StockTransfersTableProcessedTableManager get transferId {
     final $_column = $_itemColumn<String>('transfer_id')!;
@@ -68551,9 +68979,7 @@ class $$StockTransferItemsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable<$StockTransferItemsTable, StockTransferItem>(
-                    table,
-                  ),
+                  e.readTable(table),
                   $$StockTransferItemsTableReferences(db, table, e),
                 ),
               )

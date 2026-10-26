@@ -2,7 +2,7 @@ import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/sync/sync_tracker.dart';
 import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   late AppDatabase db;

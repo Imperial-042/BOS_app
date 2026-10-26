@@ -8,6 +8,9 @@
 // // creation/seeding atomicity and idempotency, switching, archival and
 // // deletion rules, and per-business module configuration.
 
+// This suite is disabled until its commented implementation is updated.
+void main() {}
+
 // import 'package:bos_application/core/auth/authorization_service.dart';
 // import 'package:bos_application/core/business/business_service.dart';
 // import 'package:bos_application/core/business/module_config_service.dart';

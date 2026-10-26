@@ -1,8 +1,21 @@
 // lib/features/people/presentation/payroll_screen.dart
+//
+// People -> Payroll, now branch-aware:
+//   Pay rates : branch filter chips + branch tags on every person
+//   Pay run   : "Payroll by branch" strip (net pay per branch, tap to filter
+//               the payslips), a share-of-total bar, branch tags on payslips,
+//               and the branch breakdown in the copied summary
+//
+// Pay runs themselves are business-wide (payroll_runs has no branch column),
+// so the branch view is DERIVED from each person's current branch assignment:
+// someone assigned to exactly one branch counts there; everyone else
+// (unrestricted, or in several branches) is grouped as "Any / several".
 import 'package:bos_application/core/auth/authorization_providers.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/format/money.dart';
+import 'package:bos_application/features/branch_people.dart';
 import 'package:bos_application/features/people/hr_common.dart';
 import 'package:bos_application/features/people/hr_providers.dart';
 import 'package:flutter/material.dart';
@@ -49,6 +62,8 @@ String _displayName(PayrollItem i, List<HrPerson> people) {
   final live = people.where((p) => p.userId == i.userId).firstOrNull?.name;
   return (live != null && live.trim().isNotEmpty) ? live.trim() : saved;
 }
+
+String _people(int n) => '$n ${n == 1 ? 'person' : 'people'}';
 
 List<Color> _heroColors(bool negative) => negative
     ? const [Color(0xFFB91C1C), Color(0xFFEF4444)]
@@ -124,11 +139,18 @@ class _PillTabs extends StatelessWidget {
 // PAY RATES
 // ============================================================================
 
-class _RatesTab extends ConsumerWidget {
+class _RatesTab extends ConsumerStatefulWidget {
   const _RatesTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RatesTab> createState() => _RatesTabState();
+}
+
+class _RatesTabState extends ConsumerState<_RatesTab> {
+  String? _branch; // null = everyone, a branch id, or kAnyBranch
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final people = ref.watch(hrPeopleProvider).value ?? const <HrPerson>[];
     final profiles = {
@@ -137,6 +159,9 @@ class _RatesTab extends ConsumerWidget {
               const <PayrollProfile>[])
         p.userId: p,
     };
+    final branches = ref.watch(branchesProvider);
+    final assigned = ref.watch(assignedBranchesByUserProvider);
+    final multi = branches.length >= 2;
 
     if (people.isEmpty) {
       return const HrEmpty(
@@ -145,6 +170,15 @@ class _RatesTab extends ConsumerWidget {
         message: 'Invite people in Users & Roles first.',
       );
     }
+
+    final filter =
+        multi &&
+            (_branch == kAnyBranch || branches.any((b) => b.id == _branch))
+        ? _branch
+        : null;
+    final shown = people
+        .where((p) => matchesBranchFilter(p.userId, filter, assigned))
+        .toList();
 
     final missing = people.where((p) => !profiles.containsKey(p.userId)).length;
     final done = people.length - missing;
@@ -163,79 +197,111 @@ class _RatesTab extends ConsumerWidget {
                 'pay rate. They get ₱0 in a pay run until you set one.',
           ),
         ],
-        const SizedBox(height: 14),
-        HrCard(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              for (var i = 0; i < people.length; i++) ...[
-                if (i > 0) const Divider(height: 1, indent: 72),
-                Builder(
-                  builder: (context) {
-                    final p = people[i];
-                    final prof = profiles[p.userId];
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 4,
-                      ),
-                      leading: HrAvatar(
-                        name: p.name,
-                        seed: p.userId,
-                        radius: 22,
-                      ),
-                      title: Text(
-                        p.name,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      subtitle: prof == null
-                          ? Text(
-                              'No pay rate set',
-                              style: TextStyle(color: Colors.orange.shade800),
-                            )
-                          : Row(
-                              children: [
-                                Icon(
-                                  _payTypeIcons[prof.payType] ??
-                                      Icons.payments_outlined,
-                                  size: 14,
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                                const SizedBox(width: 4),
-                                Flexible(
-                                  child: Text(
-                                    kPayTypes[prof.payType] ?? prof.payType,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                      trailing: prof == null
-                          ? HrTag('Set rate', Colors.orange.shade800)
-                          : Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  formatPeso(prof.rate),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                                const Icon(Icons.chevron_right_rounded),
-                              ],
-                            ),
-                      onTap: () => showDialog<void>(
-                        context: context,
-                        builder: (_) => _RateDialog(person: p, existing: prof),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ],
+        if (multi) ...[
+          const SizedBox(height: 14),
+          BranchFilterChips(
+            branches: branches,
+            selected: filter,
+            onSelect: (v) => setState(() => _branch = v),
           ),
-        ),
+        ],
+        const SizedBox(height: 14),
+        if (shown.isEmpty)
+          const HrEmpty(
+            icon: Icons.filter_alt_off_rounded,
+            title: 'No one here',
+            message: 'Nobody matches this branch.',
+          )
+        else
+          HrCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                for (var i = 0; i < shown.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, indent: 72),
+                  HrFadeIn(
+                    index: i,
+                    child: Builder(
+                      builder: (context) {
+                        final p = shown[i];
+                        final prof = profiles[p.userId];
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
+                          leading: HrAvatar(
+                            name: p.name,
+                            seed: p.userId,
+                            radius: 22,
+                          ),
+                          title: Text(
+                            p.name,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (prof == null)
+                                Text(
+                                  'No pay rate set',
+                                  style: TextStyle(
+                                    color: Colors.orange.shade800,
+                                  ),
+                                )
+                              else
+                                Row(
+                                  children: [
+                                    Icon(
+                                      _payTypeIcons[prof.payType] ??
+                                          Icons.payments_outlined,
+                                      size: 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        kPayTypes[prof.payType] ?? prof.payType,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              if (multi) ...[
+                                const SizedBox(height: 6),
+                                UserBranchTags(userId: p.userId),
+                              ],
+                            ],
+                          ),
+                          trailing: prof == null
+                              ? HrTag('Set rate', Colors.orange.shade800)
+                              : Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      formatPeso(prof.rate),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const Icon(Icons.chevron_right_rounded),
+                                  ],
+                                ),
+                          onTap: () => showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                _RateDialog(person: p, existing: prof),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -292,7 +358,7 @@ class _RatesProgress extends StatelessWidget {
               tween: Tween(end: fraction),
               duration: const Duration(milliseconds: 500),
               curve: Curves.easeOutCubic,
-              builder: (_, v, _) => LinearProgressIndicator(
+              builder: (context, v, child) => LinearProgressIndicator(
                 value: v,
                 minHeight: 8,
                 backgroundColor: Colors.white.withValues(alpha: 0.25),
@@ -412,6 +478,7 @@ class _RateDialogState extends ConsumerState<_RateDialog> {
           children: [
             _RateHeader(
               name: widget.person.name,
+              userId: widget.person.userId,
               isNew: existing == null,
               cents: cents,
               unit: _units[_type] ?? '',
@@ -543,21 +610,27 @@ class _RateDialogState extends ConsumerState<_RateDialog> {
 }
 
 /// Gradient header: who the rate is for, and a live preview of the rate.
-class _RateHeader extends StatelessWidget {
+class _RateHeader extends ConsumerWidget {
   const _RateHeader({
     required this.name,
+    required this.userId,
     required this.isNew,
     required this.cents,
     required this.unit,
   });
 
   final String name;
+  final String userId;
   final bool isNew;
   final int? cents;
   final String unit;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final mine =
+        ref.watch(assignedBranchesByUserProvider)[userId] ?? const <Branch>[];
+
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
       decoration: BoxDecoration(
@@ -610,6 +683,29 @@ class _RateHeader extends StatelessWidget {
                   ],
                 ),
               ),
+              if (multi)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    mine.isEmpty
+                        ? 'Any branch'
+                        : (mine.length == 1
+                              ? mine.first.name
+                              : '${mine.length} branches'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 14),
@@ -1124,12 +1220,19 @@ class _DateTile extends StatelessWidget {
 // RUN DETAIL
 // ============================================================================
 
-class PayrollRunPage extends ConsumerWidget {
+class PayrollRunPage extends ConsumerStatefulWidget {
   const PayrollRunPage({super.key, required this.runId});
 
   final String runId;
 
-  Future<void> _finalize(BuildContext context, WidgetRef ref) async {
+  @override
+  ConsumerState<PayrollRunPage> createState() => _PayrollRunPageState();
+}
+
+class _PayrollRunPageState extends ConsumerState<PayrollRunPage> {
+  String? _branch; // null = everyone, a branch id, or kAnyBranch
+
+  Future<void> _finalize() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1154,14 +1257,14 @@ class PayrollRunPage extends ConsumerWidget {
     );
     if (ok != true) return;
     try {
-      await ref.read(hrServiceProvider).finalizeRun(runId);
-      if (context.mounted) hrSnack(context, 'Pay run finalized.');
+      await ref.read(hrServiceProvider).finalizeRun(widget.runId);
+      if (mounted) hrSnack(context, 'Pay run finalized.');
     } catch (e) {
-      if (context.mounted) hrSnack(context, hrError(e));
+      if (mounted) hrSnack(context, hrError(e));
     }
   }
 
-  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+  Future<void> _delete() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1189,20 +1292,21 @@ class PayrollRunPage extends ConsumerWidget {
     );
     if (ok != true) return;
     try {
-      await ref.read(hrServiceProvider).deleteDraftRun(runId);
-      if (context.mounted) Navigator.pop(context);
+      await ref.read(hrServiceProvider).deleteDraftRun(widget.runId);
+      if (mounted) Navigator.pop(context);
     } catch (e) {
-      if (context.mounted) hrSnack(context, hrError(e));
+      if (mounted) hrSnack(context, hrError(e));
     }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final runs = ref.watch(payrollRunsProvider).value ?? const <PayrollRun>[];
-    final found = runs.where((r) => r.id == runId).firstOrNull;
+    final found = runs.where((r) => r.id == widget.runId).firstOrNull;
     final List<PayrollItem> items =
-        ref.watch(payrollItemsProvider(runId)).value ?? const <PayrollItem>[];
+        ref.watch(payrollItemsProvider(widget.runId)).value ??
+        const <PayrollItem>[];
     final people = ref.watch(hrPeopleProvider).value ?? const <HrPerson>[];
 
     if (found == null) {
@@ -1219,6 +1323,52 @@ class PayrollRunPage extends ConsumerWidget {
     final additions = items.fold<int>(0, (s, i) => s + i.additions);
     final deductions = items.fold<int>(0, (s, i) => s + i.deductions);
 
+    // ---- branch breakdown (derived from current assignments) ----
+    final branches = ref.watch(branchesProvider);
+    final assigned = ref.watch(assignedBranchesByUserProvider);
+    final multi = branches.length >= 2;
+
+    String keyOf(PayrollItem i) =>
+        primaryBranchId(i.userId, assigned) ?? kAnyBranch;
+
+    final netBy = <String, int>{};
+    final countBy = <String, int>{};
+    for (final i in items) {
+      final k = keyOf(i);
+      netBy[k] = (netBy[k] ?? 0) + i.netPay;
+      countBy[k] = (countBy[k] ?? 0) + 1;
+    }
+
+    final stats = <BranchStat>[
+      for (final b in branches)
+        BranchStat(
+          key: b.id,
+          title: b.name,
+          icon: branchIconOf(b),
+          color: branchColorOf(b),
+          value: formatPeso(netBy[b.id] ?? 0),
+          caption: _people(countBy[b.id] ?? 0),
+        ),
+      if ((countBy[kAnyBranch] ?? 0) > 0)
+        BranchStat(
+          key: kAnyBranch,
+          title: 'Any / several',
+          icon: Icons.all_inclusive_rounded,
+          color: const Color(0xFF64748B),
+          value: formatPeso(netBy[kAnyBranch] ?? 0),
+          caption: _people(countBy[kAnyBranch] ?? 0),
+        ),
+    ];
+
+    final filter =
+        multi &&
+            (_branch == kAnyBranch || branches.any((b) => b.id == _branch))
+        ? _branch
+        : null;
+    final shownItems = filter == null
+        ? items
+        : items.where((i) => keyOf(i) == filter).toList();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_period(run)),
@@ -1234,6 +1384,13 @@ class PayrollRunPage extends ConsumerWidget {
                 );
               }
               text.writeln('TOTAL: ${formatPeso(run.totalNet)}');
+              if (multi && items.isNotEmpty) {
+                text.writeln('\nBy branch (current assignments):');
+                for (final s in stats) {
+                  if ((countBy[s.key] ?? 0) == 0) continue;
+                  text.writeln('${s.title}: ${s.value}');
+                }
+              }
               await Clipboard.setData(ClipboardData(text: text.toString()));
               if (context.mounted) hrSnack(context, 'Summary copied.');
             },
@@ -1242,7 +1399,7 @@ class PayrollRunPage extends ConsumerWidget {
             IconButton(
               tooltip: 'Delete draft',
               icon: const Icon(Icons.delete_outline_rounded),
-              onPressed: () => _delete(context, ref),
+              onPressed: _delete,
             ),
         ],
       ),
@@ -1254,7 +1411,7 @@ class PayrollRunPage extends ConsumerWidget {
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(52),
                   ),
-                  onPressed: () => _finalize(context, ref),
+                  onPressed: _finalize,
                   icon: const Icon(Icons.lock_outline_rounded),
                   label: const Text('Finalize pay run'),
                 ),
@@ -1272,22 +1429,60 @@ class PayrollRunPage extends ConsumerWidget {
             draft: draft,
             people: items.length,
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
-            child: Text(
-              'Payslips',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w900,
+          if (multi && items.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            BranchStatStrip(
+              title: 'Payroll by branch',
+              hint: filter == null
+                  ? 'Tap a branch to filter payslips'
+                  : 'Tap again to clear',
+              stats: stats,
+              selected: filter,
+              onSelect: (k) => setState(() => _branch = k),
+            ),
+            const SizedBox(height: 12),
+            _ShareBar(stats: stats, netBy: netBy),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+              child: Text(
+                'Based on each person\'s current branch assignment.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
+          ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    filter == null
+                        ? 'Payslips'
+                        : 'Payslips · ${shownItems.length} of ${items.length}',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                if (filter != null)
+                  TextButton(
+                    onPressed: () => setState(() => _branch = null),
+                    child: const Text('Clear'),
+                  ),
+              ],
+            ),
           ),
-          if (items.isEmpty)
-            const _Notice(
+          if (shownItems.isEmpty)
+            _Notice(
               icon: Icons.info_outline_rounded,
               color: Colors.blueGrey,
-              text: 'No payslips in this run.',
+              text: items.isEmpty
+                  ? 'No payslips in this run.'
+                  : 'No payslips for this branch.',
             ),
-          for (final i in items)
+          for (final i in shownItems)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: InkWell(
@@ -1327,6 +1522,10 @@ class PayrollRunPage extends ConsumerWidget {
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
+                            if (multi) ...[
+                              const SizedBox(height: 6),
+                              UserBranchTags(userId: i.userId, max: 1),
+                            ],
                             if (i.additions > 0 || i.deductions > 0) ...[
                               const SizedBox(height: 6),
                               Wrap(
@@ -1364,6 +1563,79 @@ class PayrollRunPage extends ConsumerWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Thin stacked bar: each branch's share of the positive net pay.
+class _ShareBar extends StatelessWidget {
+  const _ShareBar({required this.stats, required this.netBy});
+
+  final List<BranchStat> stats;
+  final Map<String, int> netBy;
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = [
+      for (final s in stats)
+        if ((netBy[s.key] ?? 0) > 0) (s, netBy[s.key]!),
+    ];
+    if (segments.isEmpty) return const SizedBox.shrink();
+    final total = segments.fold<int>(0, (a, e) => a + e.$2);
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            height: 10,
+            child: Row(
+              children: [
+                for (final e in segments)
+                  Expanded(
+                    flex: e.$2,
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 2),
+                      color: e.$1.color,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 14,
+          runSpacing: 4,
+          children: [
+            for (final e in segments)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: e.$1.color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '${e.$1.title} ${(e.$2 / total * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -1450,7 +1722,7 @@ class _RunHero extends StatelessWidget {
             tween: Tween(end: net.toDouble()),
             duration: const Duration(milliseconds: 450),
             curve: Curves.easeOutCubic,
-            builder: (context, v, _) => FittedBox(
+            builder: (context, v, child) => FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: Text(
@@ -1561,6 +1833,7 @@ class _PayslipSheet extends ConsumerWidget {
 
     final people = ref.watch(hrPeopleProvider).value ?? const <HrPerson>[];
     final name = _displayName(item, people);
+    final multi = ref.watch(branchesProvider).length >= 2;
 
     Widget line(String l, String v, {Color? color}) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -1616,6 +1889,13 @@ class _PayslipSheet extends ConsumerWidget {
                 ),
               ],
             ),
+            if (multi) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: UserBranchTags(userId: item.userId, max: 3),
+              ),
+            ],
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(18),
@@ -2199,7 +2479,7 @@ class _AdjustHeader extends StatelessWidget {
               tween: Tween(end: net!.toDouble()),
               duration: const Duration(milliseconds: 350),
               curve: Curves.easeOutCubic,
-              builder: (context, v, _) => FittedBox(
+              builder: (context, v, child) => FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
                 child: Text(

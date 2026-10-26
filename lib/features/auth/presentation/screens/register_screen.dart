@@ -7,6 +7,7 @@
 // for them in Users & Roles, which is how they attach to that business.
 
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
+import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,6 +44,32 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   bool _submitting = false;
   bool _confirmationSent = false;
   String? _error;
+
+  Future<void> _scanInviteCode() async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => const BarcodeScannerPage(
+          title: 'Scan invite QR code',
+          instruction: 'Position the invitation QR code inside the box',
+          qrMode: true,
+        ),
+      ),
+    );
+    if (!mounted || scanned == null) return;
+
+    final code = scanned.trim().toUpperCase();
+    if (!RegExp(r'^[A-HJ-NP-Z2-9]{8}$').hasMatch(code)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('That QR code is not a valid invitation.'),
+        ),
+      );
+      return;
+    }
+
+    _inviteCodeController.text = code;
+    setState(() => _error = null);
+  }
 
   @override
   void dispose() {
@@ -262,7 +289,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                           TextFormField(
                             controller: _nameController,
                             textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'Your name',
                               prefixIcon: Icon(Icons.person_outline_rounded),
                             ),
@@ -274,7 +301,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                           const SizedBox(height: 16),
                           DropdownButtonFormField<BosRole>(
                             initialValue: _role,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'I am',
                               prefixIcon: Icon(Icons.badge_outlined),
                             ),
@@ -297,12 +324,21 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                             TextFormField(
                               controller: _inviteCodeController,
                               textCapitalization: TextCapitalization.characters,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 labelText: 'Invitation code',
                                 helperText:
-                                    'Ask whoever invited you for this code.',
-                                prefixIcon: Icon(
+                                    'Enter a code or scan the invite QR code.',
+                                prefixIcon: const Icon(
                                   Icons.confirmation_number_outlined,
+                                ),
+                                suffixIcon: IconButton(
+                                  tooltip: 'Scan invite QR code',
+                                  onPressed: _submitting
+                                      ? null
+                                      : _scanInviteCode,
+                                  icon: const Icon(
+                                    Icons.qr_code_scanner_rounded,
+                                  ),
                                 ),
                               ),
                               validator: (value) =>

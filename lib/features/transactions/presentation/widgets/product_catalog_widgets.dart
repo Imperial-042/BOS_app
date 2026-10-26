@@ -541,7 +541,7 @@ class ProductCategoryManagerSheet extends ConsumerWidget {
                 return ReorderableListView.builder(
                   shrinkWrap: true,
                   itemCount: categories.length,
-                  onReorderItem: (oldIndex, newIndex) {
+                  onReorder: (oldIndex, newIndex) {
                     final ids = categories.map((c) => c.id).toList();
                     if (newIndex > oldIndex) newIndex -= 1;
                     ids.insert(newIndex, ids.removeAt(oldIndex));

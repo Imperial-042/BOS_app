@@ -42,7 +42,9 @@ import '../widgets/pos_category_bar.dart';
 import '../widgets/pos_session_widgets.dart';
 import 'pos_checkout_sheet.dart';
 import 'pos_history_page.dart';
+import 'orders_page.dart';
 import 'pos_order_state.dart';
+import 'returns_page.dart';
 // ignore: unused_shown_name
 import 'products_page.dart' show productsProvider, producibilityProvider;
 
@@ -437,6 +439,25 @@ class _POSPageState extends ConsumerState<POSPage> {
             MaterialPageRoute(builder: (_) => const POSHistoryPage()),
           ),
         ),
+        _HeaderAction(
+          icon: Icons.list_alt_rounded,
+          label: 'Orders',
+          showLabel: labels,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const OrdersPage()),
+          ),
+        ),
+        if (canVoid)
+          _HeaderAction(
+            icon: Icons.assignment_return_outlined,
+            label: 'Returns',
+            showLabel: labels,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ReturnsPage()),
+            ),
+          ),
         if (heldCount > 0)
           _HeaderAction(
             icon: Icons.pause_circle_outline_rounded,
@@ -505,6 +526,37 @@ class _POSPageState extends ConsumerState<POSPage> {
                     MaterialPageRoute(builder: (_) => const POSHistoryPage()),
                   ),
                   icon: const Icon(Icons.history_rounded),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Orders and returns',
+                  icon: const Icon(Icons.more_horiz_rounded),
+                  onSelected: (value) => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => value == 'orders'
+                          ? const OrdersPage()
+                          : const ReturnsPage(),
+                    ),
+                  ),
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'orders',
+                      child: ListTile(
+                        leading: Icon(Icons.list_alt_rounded),
+                        title: Text('Orders'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    if (ref.watch(canProvider(BosPermission.salesVoid)))
+                      const PopupMenuItem(
+                        value: 'returns',
+                        child: ListTile(
+                          leading: Icon(Icons.assignment_return_outlined),
+                          title: Text('Returns'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                  ],
                 ),
                 if (ref.watch(canProvider(BosPermission.salesVoid)))
                   IconButton(

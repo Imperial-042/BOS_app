@@ -50,6 +50,9 @@ class LegacyDataBootstrapService {
       'pos_sale_items',
       'pos_sale_payments',
       'pos_sale_tenders',
+      'pos_returns',
+      'pos_return_items',
+      'product_stock_movements',
     ]) {
       final cols = await db.customSelect('PRAGMA table_info("$t")').get();
       print(
@@ -221,18 +224,6 @@ class LegacyDataBootstrapService {
       businessId: businessId,
     );
 
-    await _uploadChildTable(
-      table: 'inventory_movements',
-      sql: '''
-        SELECT im.*
-        FROM inventory_movements im
-        INNER JOIN supplies s
-          ON s.id = im.supply_id
-        WHERE s.business_id = ?
-      ''',
-      businessId: businessId,
-    );
-
     // POS / payment infrastructure.
     await _uploadTableWithBusinessId(
       table: 'payment_providers',
@@ -282,6 +273,40 @@ class LegacyDataBootstrapService {
           ON ps.id = pst.sale_id
         WHERE ps.business_id = ?
       ''',
+      businessId: businessId,
+    );
+
+    await _uploadTableWithBusinessId(
+      table: 'pos_returns',
+      businessId: businessId,
+    );
+
+    await _uploadChildTable(
+      table: 'pos_return_items',
+      sql: '''
+        SELECT pri.*
+        FROM pos_return_items pri
+        INNER JOIN pos_returns pr
+          ON pr.id = pri.return_id
+        WHERE pr.business_id = ?
+      ''',
+      businessId: businessId,
+    );
+
+    await _uploadChildTable(
+      table: 'inventory_movements',
+      sql: '''
+        SELECT im.*
+        FROM inventory_movements im
+        INNER JOIN supplies s
+          ON s.id = im.supply_id
+        WHERE s.business_id = ?
+      ''',
+      businessId: businessId,
+    );
+
+    await _uploadTableWithBusinessId(
+      table: 'product_stock_movements',
       businessId: businessId,
     );
 
@@ -435,7 +460,13 @@ class LegacyDataBootstrapService {
       final end = (start + _batchSize).clamp(0, rows.length);
       final batch = rows.sublist(start, end);
 
-      await client.from(table).upsert(batch, onConflict: 'id');
+      if (table == 'pos_returns' || table == 'pos_return_items') {
+        await client
+            .from(table)
+            .upsert(batch, onConflict: 'id', ignoreDuplicates: true);
+      } else {
+        await client.from(table).upsert(batch, onConflict: 'id');
+      }
 
       print(
         '[bootstrap] $table uploaded '

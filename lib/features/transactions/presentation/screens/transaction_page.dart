@@ -7,7 +7,6 @@ import 'package:bos_application/core/auth/membership_service.dart'
 import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
@@ -97,6 +96,47 @@ class TransactionService {
 
   TransactionService(this.db, this.ledgerService, this.auth);
 
+  String _requireCurrentBusiness() {
+    final businessId = auth.currentBusinessId;
+    if (businessId == null || businessId != kCurrentBusinessId) {
+      throw const PermissionDeniedException(
+        'Select an active business before changing transactions.',
+      );
+    }
+    return businessId;
+  }
+
+  Future<Category> _requireActiveCategory(
+    String categoryId,
+    String businessId,
+    String txnType,
+  ) async {
+    final category =
+        await (db.select(db.categories)..where(
+              (c) =>
+                  c.id.equals(categoryId) &
+                  c.businessId.equals(businessId) &
+                  c.txnType.equals(txnType) &
+                  c.isActive.equals(true),
+            ))
+            .getSingleOrNull();
+    if (category == null) {
+      throw StateError(
+        'The selected ${txnType == 'income' ? 'income' : 'expense'} '
+        'category is no longer available.',
+      );
+    }
+    return category;
+  }
+
+  Future<void> _validateOptionalPaymentAccount(
+    String? accountId,
+    String businessId,
+  ) async {
+    if (accountId == null) return;
+    await ledgerService.requirePaymentAccount(accountId, businessId);
+  }
+
   // ----------------------------------------------------------
   // SYNC HELPERS
   // ----------------------------------------------------------
@@ -109,6 +149,7 @@ class TransactionService {
     'description': e.description,
     'reference': e.reference,
     'expenseDate': e.expenseDate,
+    'receiptPhotoPath': e.receiptPhotoPath,
   };
   Map<String, Object?> _incomeSnapshot(IncomeTransaction i) => {
     'amount': i.amount,
@@ -187,6 +228,31 @@ class TransactionService {
     required bool markAsPending,
     String? receiptPhotoPath,
   }) async {
+    final businessId = _requireCurrentBusiness();
+    if (existingId == null) {
+      auth.requireAny([
+        BosPermission.financeCreate,
+        BosPermission.purchasingCreate,
+      ], businessId: businessId);
+    } else {
+      auth.requireAny([
+        BosPermission.financeEdit,
+        BosPermission.purchasingEdit,
+      ], businessId: businessId);
+    }
+    if (amount <= 0) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Amount must be greater than zero.',
+      );
+    }
+    if (!markAsPending && paymentAccountId == null) {
+      throw ArgumentError('A completed expense must have a payment account.');
+    }
+    await _requireActiveCategory(categoryId, businessId, 'expense');
+    await _validateOptionalPaymentAccount(paymentAccountId, businessId);
+
     final id = existingId ?? const Uuid().v4();
     final status = markAsPending ? 'pending' : 'completed';
 
@@ -197,8 +263,11 @@ class TransactionService {
         final existing = await (db.select(
           db.expenses,
         )..where((e) => e.id.equals(existingId))).getSingleOrNull();
+        if (existing == null || existing.businessId != businessId) {
+          throw StateError('The expense could not be found in this business.');
+        }
         previous = existing;
-        previousJournalEntryId = existing?.journalEntryId;
+        previousJournalEntryId = existing.journalEntryId;
       }
 
       // -----------------------------------------------------------------------
@@ -275,6 +344,7 @@ class TransactionService {
         reference: Value(reference),
         status: Value(status),
         journalEntryId: Value(journalEntryId),
+        receiptPhotoPath: Value(receiptPhotoPath),
         updatedAt: Value(DateTime.now()),
       );
 
@@ -361,10 +431,11 @@ class TransactionService {
     String? notes,
     String? reference,
   }) async {
+    final businessId = _requireCurrentBusiness();
     auth.requireAny([
       BosPermission.financeCreate,
       BosPermission.purchasingCreate,
-    ], businessId: kCurrentBusinessId);
+    ], businessId: businessId);
 
     if (amount <= 0) {
       throw ArgumentError.value(
@@ -373,7 +444,6 @@ class TransactionService {
         'Amount must be greater than zero.',
       );
     }
-
     if (payments.isEmpty) {
       throw ArgumentError.value(
         payments,
@@ -601,6 +671,27 @@ class TransactionService {
     String? reference,
     required bool markAsPending,
   }) async {
+    final businessId = _requireCurrentBusiness();
+    if (existingId == null) {
+      auth.require(BosPermission.financeCreate, businessId: businessId);
+    } else {
+      auth.require(BosPermission.financeEdit, businessId: businessId);
+    }
+    if (amount <= 0) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Amount must be greater than zero.',
+      );
+    }
+    if (!markAsPending && paymentAccountId == null) {
+      throw ArgumentError(
+        'A completed income transaction must have a payment account.',
+      );
+    }
+    await _requireActiveCategory(categoryId, businessId, 'income');
+    await _validateOptionalPaymentAccount(paymentAccountId, businessId);
+
     final id = existingId ?? const Uuid().v4();
     final status = markAsPending ? 'pending' : 'completed';
 
@@ -611,8 +702,11 @@ class TransactionService {
         final existing = await (db.select(
           db.incomeTransactions,
         )..where((i) => i.id.equals(existingId))).getSingleOrNull();
+        if (existing == null || existing.businessId != businessId) {
+          throw StateError('The income could not be found in this business.');
+        }
         previous = existing;
-        previousJournalEntryId = existing?.journalEntryId;
+        previousJournalEntryId = existing.journalEntryId;
       }
 
       // -----------------------------------------------------------------------
@@ -770,11 +864,20 @@ class TransactionService {
 
   Future<void> deleteExpense(String id) async {
     await db.transaction(() async {
-      final expense = await (db.select(
-        db.expenses,
-      )..where((e) => e.id.equals(id))).getSingle();
+      final businessId = _requireCurrentBusiness();
+      final expense =
+          await (db.select(db.expenses)..where(
+                (e) => e.id.equals(id) & e.businessId.equals(businessId),
+              ))
+              .getSingleOrNull();
+      if (expense == null) {
+        throw StateError('The expense could not be found in this business.');
+      }
 
-      auth.require(BosPermission.financeVoid, businessId: expense.businessId);
+      auth.requireAny([
+        BosPermission.financeVoid,
+        BosPermission.purchasingEdit,
+      ], businessId: businessId);
 
       String? journalEntryId = expense.journalEntryId;
       List<String> ledgerLineIds = [];
@@ -795,9 +898,28 @@ class TransactionService {
         )..where((j) => j.id.equals(journalEntryId))).go();
       }
 
-      await (db.update(db.shoppingCarts)
-            ..where((cart) => cart.expenseId.equals(id)))
+      final linkedCarts =
+          await (db.select(db.shoppingCarts)..where(
+                (cart) =>
+                    cart.expenseId.equals(id) &
+                    cart.businessId.equals(businessId),
+              ))
+              .get();
+      await (db.update(db.shoppingCarts)..where(
+            (cart) =>
+                cart.expenseId.equals(id) & cart.businessId.equals(businessId),
+          ))
           .write(const ShoppingCartsCompanion(expenseId: Value(null)));
+      for (final cart in linkedCarts) {
+        await SyncTracker.record(
+          db,
+          businessId: businessId,
+          entityType: 'shopping_carts',
+          entityId: cart.id,
+          operation: SyncOp.update,
+          ownerUserId: auth.userId,
+        );
+      }
 
       await (db.delete(db.expenses)..where((e) => e.id.equals(id))).go();
 
@@ -805,7 +927,7 @@ class TransactionService {
       // longer references the old journal entry.
       await SyncTracker.record(
         db,
-        businessId: expense.businessId,
+        businessId: businessId,
         entityType: 'expenses',
         entityId: id,
         operation: SyncOp.delete,
@@ -837,11 +959,17 @@ class TransactionService {
 
   Future<void> deleteIncome(String id) async {
     await db.transaction(() async {
-      final income = await (db.select(
-        db.incomeTransactions,
-      )..where((i) => i.id.equals(id))).getSingle();
+      final businessId = _requireCurrentBusiness();
+      final income =
+          await (db.select(db.incomeTransactions)..where(
+                (i) => i.id.equals(id) & i.businessId.equals(businessId),
+              ))
+              .getSingleOrNull();
+      if (income == null) {
+        throw StateError('The income could not be found in this business.');
+      }
 
-      auth.require(BosPermission.financeVoid, businessId: income.businessId);
+      auth.require(BosPermission.financeVoid, businessId: businessId);
 
       String? journalEntryId = income.journalEntryId;
       List<String> ledgerLineIds = [];
@@ -870,7 +998,7 @@ class TransactionService {
 
       await SyncTracker.record(
         db,
-        businessId: income.businessId,
+        businessId: businessId,
         entityType: 'income_transactions',
         entityId: id,
         operation: SyncOp.delete,
@@ -948,6 +1076,8 @@ class TransactionService {
   // ----------------------------------------------------------
 
   Future<Category> addCategory(String name, {required bool isIncome}) async {
+    final businessId = _requireCurrentBusiness();
+    auth.require(BosPermission.financeEdit, businessId: businessId);
     final fallbackAccountName = isIncome ? 'Other Income' : 'Other Expense';
 
     final fallbackAccount =
@@ -979,6 +1109,14 @@ class TransactionService {
 
     await db.transaction(() async {
       await db.into(db.categories).insert(category);
+      await SyncTracker.record(
+        db,
+        businessId: businessId,
+        entityType: 'categories',
+        entityId: category.id.value,
+        operation: SyncOp.create,
+        ownerUserId: auth.userId,
+      );
       await AuditLogger.record(
         db,
         businessId: kCurrentBusinessId,
@@ -1121,6 +1259,13 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final canSave = ref.watch(
+      canProvider(
+        widget.isEditMode
+            ? BosPermission.financeEdit
+            : BosPermission.financeCreate,
+      ),
+    );
 
     final categoriesAsync = ref.watch(
       categoriesByTypeProvider(_isIncome ? 'income' : 'expense'),
@@ -1170,7 +1315,11 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
             ),
         ],
       ),
-      bottomNavigationBar: _buildSaveBar(categoryName, accountName),
+      bottomNavigationBar: _buildSaveBar(
+        categoryName,
+        accountName,
+        canSave: canSave,
+      ),
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
@@ -1203,7 +1352,11 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
   // SAVE BAR (sticks above the keyboard)
   // ==========================================================
 
-  Widget _buildSaveBar(String? categoryName, String? accountName) {
+  Widget _buildSaveBar(
+    String? categoryName,
+    String? accountName, {
+    required bool canSave,
+  }) {
     final theme = Theme.of(context);
     final amount = double.tryParse(_amountController.text.trim()) ?? 0;
 
@@ -1262,7 +1415,7 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
                   SizedBox(
                     height: 52,
                     child: FilledButton(
-                      onPressed: _isSaving ? null : _save,
+                      onPressed: _isSaving || !canSave ? null : _save,
                       style: FilledButton.styleFrom(
                         backgroundColor: _accentColor,
                         foregroundColor: Colors.white,
@@ -2792,7 +2945,7 @@ class _TransactionPageState extends ConsumerState<TransactionPage> {
 
     final amountValue = double.tryParse(_amountController.text.trim());
 
-    if (amountValue == null || amountValue <= 0) {
+    if (amountValue == null || !amountValue.isFinite || amountValue <= 0) {
       _showError('Enter a valid amount.');
       return;
     }

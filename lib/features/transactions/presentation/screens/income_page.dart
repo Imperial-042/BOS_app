@@ -21,12 +21,13 @@ class IncomePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final canEdit = ref.watch(canProvider(BosPermission.financeCreate));
+    final canCreate = ref.watch(canProvider(BosPermission.financeCreate));
+    final canEdit = ref.watch(canProvider(BosPermission.financeEdit));
     final itemsAsync = ref.watch(incomeListProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Income')),
-      floatingActionButton: canEdit
+      floatingActionButton: canCreate
           ? FloatingActionButton.extended(
               onPressed: () => _openForm(context, isIncome: true),
               icon: const Icon(Icons.add_rounded),

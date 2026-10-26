@@ -2,7 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
-  const BarcodeScannerPage({super.key});
+  const BarcodeScannerPage({
+    super.key,
+    this.title = 'Scan barcode',
+    this.instruction = 'Position the barcode inside the box',
+    this.qrMode = false,
+  });
+
+  final String title;
+  final String instruction;
+  final bool qrMode;
 
   @override
   State<BarcodeScannerPage> createState() => _BarcodeScannerPageState();
@@ -39,7 +48,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan barcode'),
+        title: Text(widget.title),
         actions: [
           IconButton(
             tooltip: 'Switch camera',
@@ -62,20 +71,20 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
           ),
           Center(
             child: Container(
-              width: 280,
-              height: 150,
+              width: widget.qrMode ? 260 : 280,
+              height: widget.qrMode ? 260 : 150,
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.white, width: 3),
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
           ),
-          const Positioned(
+          Positioned(
             left: 24,
             right: 24,
             bottom: 40,
             child: Text(
-              'Position the barcode inside the box',
+              widget.instruction,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white,

@@ -2,7 +2,7 @@
 //
 // Shared state for the tablet / desktop navigation list.
 
-import 'package:flutter_riverpod/legacy.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// True while the docked tablet/desktop rail is hidden (all pages except POS).
 final bosNavHiddenProvider = StateProvider<bool>((ref) => false);

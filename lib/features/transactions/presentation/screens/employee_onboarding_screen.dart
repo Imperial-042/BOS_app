@@ -1,5 +1,4 @@
 import 'package:bos_application/core/auth/authorization_providers.dart';
-import 'package:bos_application/core/auth/bos_access.dart';
 import 'package:bos_application/core/auth/role_labels.dart';
 import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/core/database/app_database.dart';

@@ -3,7 +3,6 @@
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';

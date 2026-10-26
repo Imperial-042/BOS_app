@@ -92,6 +92,22 @@ email and completed in the browser; the app only sends the request.
 | `20261003151947_user_device_registry.sql` | Account-owned installation registry, JWT-session correlation, device/session controls, and RLS device authorization. |
 | `20261004010000_cloud_schema_alignment.sql` | Cloud tables/columns the app already uses (POS, recipes, shopping carts, price history, permission overrides, extra product/supply columns), their RLS, and the completed change feed. |
 | `20261004040000_business_profile_sync.sql` | Business profile edits join the change feed (so every device with the same account gets the same profile) and existing rows are backfilled into it. |
+| `20261026130006_sync_change_commit_order.sql` | Serializes change-feed sequence allocation per business to prevent cursor races. |
+| `20261026131334_branch_scope_stock_transfers.sql` | Restricts transfer rows to users with access to an endpoint branch. |
+| `20261026142900_server_verified_audit_trail.sql` | Records committed business-row changes through database triggers and prevents clients from inserting authoritative audit rows. |
+
+Apply the commit-order migration before releasing the matching Flutter update.
+That update rewinds each installation's feed cursor once so it can recover any
+historical entries skipped by the previous cursor behavior.
+
+The server-verified audit migration must be applied with the matching Flutter
+update. Database-triggered events are the authoritative cloud audit trail.
+Client-created audit notes continue to sync for visibility, but are marked
+`client_reported` and cannot be represented as database-verified events. The
+Audit Trail labels both sources. Run
+`verification/server_verified_audit_check.sql` against a local or throwaway
+database to verify row-change capture, redaction, and rejection of client
+claims with a `database` source.
 
 ## Verification scripts
 

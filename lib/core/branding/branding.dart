@@ -21,8 +21,7 @@
 //        assets:
 //          - assets/images/
 //
-// 3. Wire AppTheme.light() into MaterialApp(theme: ...) in main.dart
-//    (shown at the bottom of this file in the comment block).
+// 3. Use AppTheme.light() and AppTheme.dark() in MaterialApp.
 
 import 'package:flutter/material.dart';
 
@@ -134,6 +133,18 @@ class AppAssets {
       'lib/core/assets/images/BOS_Icon.png'; // mark + wordmark — login/startup screens
 }
 
+class AppColorOption {
+  const AppColorOption({
+    required this.id,
+    required this.name,
+    required this.color,
+  });
+
+  final String id;
+  final String name;
+  final Color color;
+}
+
 // ============================================================
 // THEME — built entirely from AppColors above. Nothing in this
 // class should ever hardcode a color that isn't from AppColors.
@@ -142,26 +153,98 @@ class AppAssets {
 class AppTheme {
   AppTheme._();
 
-  static ThemeData light() {
+  static const colorOptions = <AppColorOption>[
+    AppColorOption(id: 'bos', name: 'BOS navy', color: AppColors.primary),
+    AppColorOption(id: 'ocean', name: 'Ocean blue', color: Color(0xFF1769AA)),
+    AppColorOption(id: 'emerald', name: 'Emerald', color: Color(0xFF18794E)),
+    AppColorOption(id: 'violet', name: 'Violet', color: Color(0xFF6941C6)),
+    AppColorOption(id: 'amber', name: 'Amber', color: Color(0xFF9A5B00)),
+  ];
+
+  static ThemeData light({
+    Color seedColor = AppColors.primary,
+    String? fontFamily,
+  }) => _build(Brightness.light, seedColor, fontFamily);
+
+  static ThemeData dark({
+    Color seedColor = AppColors.primary,
+    String? fontFamily,
+  }) => _build(Brightness.dark, seedColor, fontFamily);
+
+  static ThemeData _build(
+    Brightness brightness,
+    Color seedColor,
+    String? fontFamily,
+  ) {
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
-      primary: AppColors.primary,
+      seedColor: seedColor,
       secondary: AppColors.accent,
-      brightness: Brightness.light,
+      brightness: brightness,
     );
+    final rounded16 = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+    );
+    OutlineInputBorder inputBorder([BorderSide side = BorderSide.none]) =>
+        OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: side,
+        );
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: fontFamily,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: colorScheme.surfaceContainerLowest,
       appBarTheme: AppBarTheme(
         backgroundColor: colorScheme.surface,
         foregroundColor: colorScheme.onSurface,
         elevation: 0,
+        centerTitle: false,
+        scrolledUnderElevation: 0,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 68,
+        elevation: 0,
+        backgroundColor: colorScheme.surface,
+        indicatorShape: rounded16,
+        labelTextStyle: const WidgetStatePropertyAll(
+          TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+      ),
+      navigationDrawerTheme: NavigationDrawerThemeData(
+        backgroundColor: colorScheme.surface,
+        indicatorColor: colorScheme.primaryContainer,
+        indicatorShape: rounded16,
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: selected
+                ? colorScheme.onPrimaryContainer
+                : colorScheme.onSurfaceVariant,
+          );
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            color: selected
+                ? colorScheme.onSurface
+                : colorScheme.onSurfaceVariant,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          );
+        }),
+      ),
+      cardTheme: CardThemeData(
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      ),
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: AppColors.primary,
+          minimumSize: const Size(64, 48),
+          backgroundColor: colorScheme.primary,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -169,24 +252,23 @@ class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
+          minimumSize: const Size(64, 48),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      cardTheme: CardThemeData(
-        elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        filled: true,
+        fillColor: colorScheme.surface,
+        border: inputBorder(),
+        enabledBorder: inputBorder(),
+        focusedBorder: inputBorder(
+          BorderSide(color: colorScheme.primary, width: 1.5),
+        ),
       ),
     );
   }
-
-  // Optional: static ThemeData dark() { ... } — add later if/when
-  // dark mode support is prioritized. Would follow the same
-  // pattern: derive everything from AppColors, nothing hardcoded.
 }
 
 // ============================================================

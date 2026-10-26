@@ -80,6 +80,13 @@ class SyncCoordinator {
 
   static final Set<String> _active = {};
 
+  static const int _pullIdBatchSize = 100;
+  static const int _pullFetchConcurrency = 6;
+  static const String _pullCursorVersion = '2';
+
+  final Map<String, Future<Map<String, String>>> _localTableColumns = {};
+  bool _pullCursorVersionChecked = false;
+
   /// Businesses that asked for a sync while one was already running; they run
   /// again as soon as the current one ends so no change is left waiting.
   static final Set<String> _rerun = {};
@@ -120,7 +127,7 @@ class SyncCoordinator {
       await devices.assertCurrentDeviceAuthorized();
       await SyncChangeLog.drain(db, fallbackOwner: userId);
       await _push(businessId, userId);
-      pulled = await _pull(businessId);
+      pulled = await _pull(businessId, userId);
       await devices.recordSuccessfulSync();
 
       final pending = await _pendingCount(businessId);
@@ -226,7 +233,6 @@ class SyncCoordinator {
       'shopping_carts',
       'shopping_cart_items',
       'supply_price_history',
-      'inventory_movements',
       'recipes',
       'recipe_components',
       'payment_providers',
@@ -237,6 +243,9 @@ class SyncCoordinator {
       'pos_sale_items',
       'pos_sale_payments',
       'pos_sale_tenders',
+      'pos_returns',
+      'pos_return_items',
+      'inventory_movements',
       'role_permission_overrides',
       'business_module_configs',
       'custom_roles',
@@ -271,20 +280,35 @@ class SyncCoordinator {
     print('[outbox] ${sorted.length} groups owned by the active account');
 
     for (final row in sorted) {
-      await _pushOne(client, row);
+      await _pushOne(client, row, userId);
     }
   }
 
-  Future<void> _pushOne(SupabaseClient client, SyncOutboxData op) async {
+  Future<void> _pushOne(
+    SupabaseClient client,
+    SyncOutboxData op,
+    String userId,
+  ) async {
     // Mark syncing so a crash mid-upload resumes from a known state.
     await _setStatus(op.id, 'syncing');
 
     try {
+      final ownBranchAssignment =
+          op.entityType == 'branch_members' &&
+          (await _readEntity('branch_members', op.entityId))?['user_id'] ==
+              userId;
       final result = await _dispatch(client, op);
 
       // Duplicate is a SUCCESS — the server already has this mutation.
       await db.transaction(() async {
         await (db.delete(db.syncOutbox)..where((o) => o.id.equals(op.id))).go();
+        if (ownBranchAssignment) {
+          await db.customStatement(
+            'UPDATE sync_checkpoints SET last_server_cursor = 0 '
+            'WHERE business_id = ?',
+            [op.businessId],
+          );
+        }
 
         await _bumpCheckpoint(op.businessId);
       });
@@ -419,32 +443,13 @@ class SyncCoordinator {
         );
       case 'audit_logs':
         return _pushAuditEvent(client, op);
+      case 'pos_returns':
+      case 'pos_return_items':
+        return _pushAppendOnlyReturn(client, op);
 
       default:
         return _pushRow(client, op);
     }
-  }
-
-  /// Audit history is append-only. ON CONFLICT DO NOTHING means a retried
-  /// upload of the same event id is a no-op and only needs INSERT permission.
-  Future<String> _pushAuditEvent(
-    SupabaseClient client,
-    SyncOutboxData op,
-  ) async {
-    if (op.operation != 'create') return 'ok'; // never push edits/deletes
-    final row = await _readEntity('audit_logs', op.entityId);
-    if (row == null) {
-      throw _PermanentSyncException(
-        'Local audit_logs row ${op.entityId} is gone.',
-      );
-    }
-    final payload = AuditSyncCodec.toCloud(
-      _toSupabaseRow('audit_logs', row, businessId: op.businessId),
-    );
-    await client
-        .from('audit_logs')
-        .upsert(payload, onConflict: 'id', ignoreDuplicates: true);
-    return 'ok';
   }
 
   /// Composite financial ops go through their atomic server command, which
@@ -478,6 +483,59 @@ class SyncCoordinator {
         : Map<String, dynamic>.from(response as Map);
 
     return map['duplicate'] == true ? 'duplicate' : 'ok';
+  }
+
+  /// Client reports sync for visibility, but the database accepts them only
+  /// with the `client_reported` source. Database audit rows use the pull feed.
+  Future<String> _pushAuditEvent(
+    SupabaseClient client,
+    SyncOutboxData op,
+  ) async {
+    if (op.operation != 'create') return 'ok';
+    final row = await _readEntity('audit_logs', op.entityId);
+    if (row == null) {
+      throw _PermanentSyncException(
+        'Local audit_logs row ${op.entityId} is gone.',
+      );
+    }
+    if (row['source'] != 'client_reported') {
+      throw _PermanentSyncException(
+        'Only client-reported audit rows may be uploaded.',
+      );
+    }
+    final payload = AuditSyncCodec.toCloud(
+      _toSupabaseRow('audit_logs', row, businessId: op.businessId),
+    );
+    await client
+        .from('audit_logs')
+        .upsert(payload, onConflict: 'id', ignoreDuplicates: true);
+    return 'ok';
+  }
+
+  Future<String> _pushAppendOnlyReturn(
+    SupabaseClient client,
+    SyncOutboxData op,
+  ) async {
+    if (op.operation != 'create') {
+      throw _PermanentSyncException(
+        'POS return records are append-only and cannot be changed.',
+      );
+    }
+    final row = await _readEntity(op.entityType, op.entityId);
+    if (row == null) {
+      throw _PermanentSyncException(
+        'Local ${op.entityType} row ${op.entityId} is gone.',
+      );
+    }
+    final payload = _toSupabaseRow(
+      op.entityType,
+      row,
+      businessId: op.businessId,
+    );
+    await client
+        .from(op.entityType)
+        .upsert(payload, onConflict: 'id', ignoreDuplicates: true);
+    return 'ok';
   }
 
   Map<String, dynamic> _compositeParams(
@@ -800,8 +858,9 @@ class SyncCoordinator {
   // ---------------------------------------------------------------------------
 
   /// Returns how many remote changes were applied to this device.
-  Future<int> _pull(String businessId) async {
+  Future<int> _pull(String businessId, String userId) async {
     final client = _supabase!;
+    await _ensurePullCursorVersion();
     final checkpoint = await _checkpoint(businessId);
 
     var cursor = checkpoint?.lastServerCursor ?? 0;
@@ -828,14 +887,55 @@ class SyncCoordinator {
       }
 
       // Fetch the authoritative rows BEFORE opening the local transaction so
-      // no network wait happens while the database is locked. One fetch per
-      // entity even if it changed several times.
+      // no network wait happens while the database is locked. Fetch ids in
+      // batches per table rather than issuing one request per changed row.
       final fetched = <String, Map<String, dynamic>?>{};
+      final idsByTable = <String, Set<String>>{};
       for (final change in list) {
         if (change['operation'] == 'delete') continue;
-        final key = '${change['entity_type']}/${change['entity_id']}';
-        if (fetched.containsKey(key)) continue;
-        fetched[key] = await _fetchRemoteRow(change);
+        final table = change['entity_type'] as String;
+        idsByTable
+            .putIfAbsent(table, () => <String>{})
+            .add(change['entity_id'] as String);
+      }
+
+      final tables = idsByTable.keys.toList();
+      final available = await Future.wait(tables.map(_hasLocalTable));
+      final requests = <({String table, List<String> ids})>[];
+      for (var i = 0; i < tables.length; i++) {
+        if (!available[i]) continue;
+        final ids = idsByTable[tables[i]]!.toList();
+        for (var offset = 0; offset < ids.length; offset += _pullIdBatchSize) {
+          final end = (offset + _pullIdBatchSize).clamp(0, ids.length).toInt();
+          requests.add((table: tables[i], ids: ids.sublist(offset, end)));
+        }
+      }
+
+      var nextRequest = 0;
+      await Future.wait(
+        List.generate(_pullFetchConcurrency.clamp(0, requests.length).toInt(), (
+          _,
+        ) async {
+          while (nextRequest < requests.length) {
+            final request = requests[nextRequest++];
+            final rows = await client
+                .from(request.table)
+                .select()
+                .inFilter('id', request.ids);
+            for (final row in rows) {
+              final data = Map<String, dynamic>.from(row);
+              fetched['${request.table}/${data['id']}'] = data;
+            }
+          }
+        }),
+      );
+
+      // Preserve explicit null entries for missing tables/rows so apply logic
+      // can distinguish them from ids that were never present in this page.
+      for (final entry in idsByTable.entries) {
+        for (final id in entry.value) {
+          fetched.putIfAbsent('${entry.key}/$id', () => null);
+        }
       }
 
       final newCursor = await db.transaction(() async {
@@ -846,12 +946,21 @@ class SyncCoordinator {
         await db.customStatement('UPDATE sync_context SET suppress = 1');
 
         var maxSeq = cursor;
+        var ownBranchAssignmentChanged = false;
 
         for (final change in list) {
           final key = '${change['entity_type']}/${change['entity_id']}';
-          if (await _applyRemote(change, fetched[key])) {
+          final row = fetched[key];
+          final isOwnBranchAssignment = await _isOwnBranchAssignmentChange(
+            change,
+            row,
+            userId,
+          );
+          final changed = await _applyRemote(change, row);
+          if (changed) {
             applied++;
             touchedTables.add(change['entity_type'] as String);
+            ownBranchAssignmentChanged |= isOwnBranchAssignment;
           }
 
           maxSeq = (change['seq'] as int) > maxSeq
@@ -864,13 +973,14 @@ class SyncCoordinator {
         // Advance the durable cursor only after every change in this batch
         // applied locally — an interrupted pull resumes from the last safe
         // point, never skipping unapplied rows.
-        await _setCursor(businessId, maxSeq);
+        await _setCursor(businessId, ownBranchAssignmentChanged ? 0 : maxSeq);
 
-        return maxSeq;
+        return ownBranchAssignmentChanged ? 0 : maxSeq;
       });
 
       cursor = newCursor;
 
+      if (cursor == 0) continue;
       if (list.length < pageSize) {
         break; // last page
       }
@@ -891,29 +1001,45 @@ class SyncCoordinator {
     return applied;
   }
 
-  Future<bool> _hasLocalTable(String table) async {
-    final info = await db.customSelect('PRAGMA table_info("$table")').get();
-    return info.isNotEmpty;
+  Future<bool> _isOwnBranchAssignmentChange(
+    Map<String, dynamic> change,
+    Map<String, dynamic>? row,
+    String userId,
+  ) async {
+    if (change['entity_type'] != 'branch_members') return false;
+    if (row != null) return row['user_id'] == userId;
+
+    final local =
+        await (db.select(db.branchMembers)..where(
+              (member) => member.id.equals(change['entity_id'] as String),
+            ))
+            .getSingleOrNull();
+    return local?.userId == userId;
   }
 
-  /// The authoritative row for a change-feed entry, or null when there is
-  /// nothing to apply (no local table, or the row is already gone).
-  Future<Map<String, dynamic>?> _fetchRemoteRow(
-    Map<String, dynamic> change,
-  ) async {
-    final entityType = change['entity_type'] as String;
+  Future<void> _ensurePullCursorVersion() async {
+    if (_pullCursorVersionChecked) return;
+    await SyncChangeLog.ensurePullCursorVersion(
+      db,
+      version: _pullCursorVersion,
+    );
+    _pullCursorVersionChecked = true;
+  }
 
-    // No local table (e.g. Supabase 'business_memberships' vs Drift
-    // 'business_members'): skip rather than crash the whole pull.
-    if (!await _hasLocalTable(entityType)) {
-      return null;
-    }
+  Future<bool> _hasLocalTable(String table) async {
+    return (await _columnsForTable(table)).isNotEmpty;
+  }
 
-    return _supabase!
-        .from(entityType)
-        .select()
-        .eq('id', change['entity_id'] as String)
-        .maybeSingle();
+  Future<Map<String, String>> _columnsForTable(String table) {
+    return _localTableColumns.putIfAbsent(table, () async {
+      final info = await db.customSelect('PRAGMA table_info("$table")').get();
+      return {
+        for (final column in info)
+          column.read<String>('name'): column
+              .read<String>('type')
+              .toUpperCase(),
+      };
+    });
   }
 
   /// Apply one remote change to Drift inside the pull batch's transaction.
@@ -928,31 +1054,14 @@ class SyncCoordinator {
     final entityType = change['entity_type'] as String;
     final entityId = change['entity_id'] as String;
 
-    final info = await db
-        .customSelect('PRAGMA table_info("$entityType")')
-        .get();
-
-    if (info.isEmpty) {
-      return false;
-    }
-
-    final types = <String, String>{
-      for (final r in info)
-        r.read<String>('name'): r.read<String>('type').toUpperCase(),
-    };
+    final types = await _columnsForTable(entityType);
+    if (types.isEmpty) return false;
     // History is never deleted locally because of a feed entry.
     if (entityType == 'audit_logs' && change['operation'] == 'delete') {
       return false;
     }
-    if (change['operation'] == 'delete') {
-      await db.customStatement('DELETE FROM "$entityType" WHERE id = ?', [
-        entityId,
-      ]);
-
-      return true;
-    }
-
-    if (row == null) {
+    final isDelete = change['operation'] == 'delete';
+    if (!isDelete && row == null) {
       return false;
     }
 
@@ -972,18 +1081,29 @@ class SyncCoordinator {
       return false;
     }
 
+    if (isDelete) {
+      await db.customStatement('DELETE FROM "$entityType" WHERE id = ?', [
+        entityId,
+      ]);
+      return true;
+    }
+    final cloudRow = row;
+    if (cloudRow == null) return false;
+
     // Per-device state; the cloud value is meaningless locally.
     final deviceLocalColumns =
         _deviceLocalColumns[entityType] ?? const <String>{};
     final cols = types.keys
-        .where((c) => row.containsKey(c) && !deviceLocalColumns.contains(c))
+        .where(
+          (c) => cloudRow.containsKey(c) && !deviceLocalColumns.contains(c),
+        )
         .toList();
 
     if (!cols.contains('id')) {
       return false;
     }
 
-    final values = [for (final c in cols) _toLocal(row[c], types[c]!, c)];
+    final values = [for (final c in cols) _toLocal(cloudRow[c], types[c]!, c)];
 
     // Echo guard: skip the write when local already holds these exact values.
     final existing = await db

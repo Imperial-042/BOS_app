@@ -6,7 +6,6 @@
 
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 
 import '../../features/transactions/presentation/screens/transaction_page.dart'
     show kCurrentBusinessId, ledgerVersionProvider;

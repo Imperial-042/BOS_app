@@ -4,6 +4,9 @@
 // // with `flutter test` on desktop/CI). NOT executed by the author: the
 // // sandbox had no Flutter toolchain. Run: flutter test test/core/audit
 
+// This suite is disabled until its commented implementation is updated.
+void main() {}
+
 // import 'package:bos_application/core/audit/audit_enums.dart';
 // import 'package:bos_application/core/audit/audit_log_service.dart';
 // import 'package:bos_application/core/audit/audit_repository.dart';

@@ -8,7 +8,6 @@
 // change is refused and `false` is returned so the UI can explain why.
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../../core/database/app_database.dart';
 

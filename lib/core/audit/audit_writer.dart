@@ -187,30 +187,54 @@ abstract final class AuditWriter {
     String? actorRole,
     String? deviceId,
   }) async {
-    final actorId = (userId != null && userId.isNotEmpty)
-        ? userId
-        : (SyncTracker.currentUserId ?? 'unknown');
+    if (businessId.trim().isEmpty) {
+      throw ArgumentError.value(
+        businessId,
+        'businessId',
+        'An audit event must belong to a business.',
+      );
+    }
+
+    final resolvedActionType =
+        actionType ?? AuditClassifier.actionTypeFor(action);
+    final cleanReason = reason?.trim();
+    if (resolvedActionType.requiresReason &&
+        (cleanReason == null || cleanReason.isEmpty)) {
+      throw ArgumentError.value(
+        reason,
+        'reason',
+        '${resolvedActionType.id} requires a reason.',
+      );
+    }
+
+    final explicitActor = userId?.trim();
+    final trackedActor = SyncTracker.currentUserId?.trim();
+    final actorId = (explicitActor != null && explicitActor.isNotEmpty)
+        ? explicitActor
+        : trackedActor;
+    if (actorId == null || actorId.isEmpty) {
+      throw StateError(
+        'Cannot record an audit event without a signed-in actor.',
+      );
+    }
 
     var name = actorName;
     var role = actorRole;
-    if (actorId != 'unknown') {
-      if (name == null) {
-        final u = await (db.select(
-          db.users,
-        )..where((t) => t.id.equals(actorId))).getSingleOrNull();
-        final dn = u?.displayName.trim() ?? '';
-        name = dn.isNotEmpty ? dn : u?.email;
-      }
-      if (role == null) {
-        final m =
-            await (db.select(db.businessMembers)..where(
-                  (t) =>
-                      t.businessId.equals(businessId) &
-                      t.userId.equals(actorId),
-                ))
-                .getSingleOrNull();
-        role = m?.role;
-      }
+    if (name == null) {
+      final u = await (db.select(
+        db.users,
+      )..where((t) => t.id.equals(actorId))).getSingleOrNull();
+      final dn = u?.displayName.trim() ?? '';
+      name = dn.isNotEmpty ? dn : u?.email;
+    }
+    if (role == null) {
+      final m =
+          await (db.select(db.businessMembers)..where(
+                (t) =>
+                    t.businessId.equals(businessId) & t.userId.equals(actorId),
+              ))
+              .getSingleOrNull();
+      role = m?.role;
     }
 
     var b = AuditRedactor.sanitize(before);
@@ -233,16 +257,13 @@ abstract final class AuditWriter {
             details: Value(_encode(AuditRedactor.sanitize(details))),
             createdAt: Value(occurredAt ?? DateTime.now()),
             module: Value((module ?? AuditClassifier.moduleFor(action)).id),
-            actionType: Value(
-              (actionType ?? AuditClassifier.actionTypeFor(action)).id,
-            ),
+            actionType: Value(resolvedActionType.id),
             entityLabel: Value(entityLabel),
             actorName: Value(name),
             actorRole: Value(role),
             deviceId: Value(deviceId ?? AuditDeviceId.current),
-            reason: Value(
-              reason?.trim().isEmpty ?? true ? null : reason!.trim(),
-            ),
+            source: const Value('client_reported'),
+            reason: Value(cleanReason?.isEmpty ?? true ? null : cleanReason),
             beforeJson: Value(_encode(b)),
             afterJson: Value(_encode(a)),
           ),

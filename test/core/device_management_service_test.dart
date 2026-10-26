@@ -1,5 +1,5 @@
 import 'package:bos_application/core/device/device_management_service.dart';
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   Map<String, dynamic> deviceResponse({bool? requiresReauthentication}) => {

@@ -46,6 +46,7 @@ import 'package:bos_application/core/database/database_provider.dart';
 import 'package:bos_application/core/device/device_session_watcher.dart';
 import 'package:bos_application/core/navigation/app_navigator.dart';
 import 'package:bos_application/core/navigation/nav_visibility.dart';
+import 'package:bos_application/core/settings/app_settings.dart';
 import 'package:bos_application/core/stock/stock_service.dart';
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
 import 'package:bos_application/core/supabase/employee_profile_service.dart';
@@ -72,6 +73,8 @@ import 'package:bos_application/features/transactions/presentation/screens/aging
 import 'package:bos_application/features/transactions/presentation/screens/income_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/expenses_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/sales_page.dart';
+import 'package:bos_application/features/transactions/presentation/screens/orders_page.dart';
+import 'package:bos_application/features/transactions/presentation/screens/returns_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/transfers_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/receivables_page.dart';
 import 'package:bos_application/features/transactions/presentation/screens/payables_page.dart';
@@ -122,26 +125,82 @@ Future<void> main() async {
   // is a local operation — it never blocks startup on network/cloud
   // availability, and it's a no-op when Supabase isn't configured.
   await SupabaseService.initialize();
-  runApp(const ProviderScope(child: BosApp()));
+  final preferences = await SharedPreferences.getInstance();
+  final initialSettings = AppSettingsController.load(preferences);
+  runApp(
+    ProviderScope(
+      overrides: [
+        appSettingsProvider.overrideWith(
+          (ref) => AppSettingsController(
+            preferences: preferences,
+            initialSettings: initialSettings,
+          ),
+        ),
+      ],
+      child: const BosApp(),
+    ),
+  );
 }
 
 // ============================================================
 // APP + THEME
 // ============================================================
 
-class BosApp extends StatelessWidget {
+class BosApp extends ConsumerWidget {
   const BosApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(appSettingsProvider);
+    final colorOption = AppTheme.colorOptions.firstWhere(
+      (option) => option.id == settings.colorId,
+    );
+    final fontFamily = switch (settings.fontFamily) {
+      'serif' => 'serif',
+      'monospace' => 'monospace',
+      _ => null,
+    };
     return MaterialApp(
       navigatorKey: appNavigatorKey,
       title: AppStrings.appName,
       debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
+      theme: AppTheme.light(
+        seedColor: colorOption.color,
+        fontFamily: fontFamily,
+      ),
+      darkTheme: AppTheme.dark(
+        seedColor: colorOption.color,
+        fontFamily: fontFamily,
+      ),
+      themeMode: settings.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+      builder: (context, child) {
+        final mediaQuery = MediaQuery.of(context);
+        return MediaQuery(
+          data: mediaQuery.copyWith(
+            textScaler: _PreferenceTextScaler(
+              mediaQuery.textScaler,
+              settings.textScale,
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const _AuthGate(),
     );
   }
+}
+
+class _PreferenceTextScaler extends TextScaler {
+  const _PreferenceTextScaler(this.parent, this.factor);
+
+  final TextScaler parent;
+  final double factor;
+
+  @override
+  double scale(double fontSize) => parent.scale(fontSize * factor);
+
+  @override
+  double get textScaleFactor => scale(1);
 }
 
 /// Thrown by startup when the account has no membership and no pending
@@ -495,64 +554,6 @@ class _AuthGateState extends ConsumerState<_AuthGate> {
       },
     );
   }
-}
-
-ThemeData _buildTheme() {
-  const seed = AppColors.primary;
-  final rounded16 = RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(16),
-  );
-  OutlineInputBorder inputBorder([BorderSide side = BorderSide.none]) =>
-      OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: side,
-      );
-
-  return ThemeData(
-    useMaterial3: true,
-    colorSchemeSeed: seed,
-    brightness: Brightness.light,
-    scaffoldBackgroundColor: const Color(0xFFF7F9F9),
-    appBarTheme: const AppBarTheme(
-      elevation: 0,
-      centerTitle: false,
-      scrolledUnderElevation: 0,
-    ),
-    navigationBarTheme: NavigationBarThemeData(
-      height: 68,
-      elevation: 0,
-      backgroundColor: Colors.white,
-      indicatorShape: rounded16,
-      labelTextStyle: const WidgetStatePropertyAll(
-        TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-    ),
-    navigationDrawerTheme: NavigationDrawerThemeData(
-      backgroundColor: Colors.white,
-      indicatorShape: rounded16,
-    ),
-    cardTheme: CardThemeData(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-    ),
-    // Every screen used to repeat `behavior: floating`; set it once.
-    snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
-    // 48dp minimum touch targets for primary actions.
-    filledButtonTheme: FilledButtonThemeData(
-      style: FilledButton.styleFrom(minimumSize: const Size(64, 48)),
-    ),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: OutlinedButton.styleFrom(minimumSize: const Size(64, 48)),
-    ),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: Colors.white,
-      border: inputBorder(),
-      enabledBorder: inputBorder(),
-      focusedBorder: inputBorder(const BorderSide(color: seed, width: 1.5)),
-    ),
-  );
 }
 
 // ============================================================
@@ -2462,6 +2463,7 @@ final List<BosDestination> bosDestinations = [
     label: 'Orders',
     description: 'Customer orders from start to finish.',
     icon: Icons.list_alt_rounded,
+    builder: (_) => const OrdersPage(),
   ),
   BosDestination(
     id: BosDest.returns,
@@ -2469,6 +2471,7 @@ final List<BosDestination> bosDestinations = [
     label: 'Returns',
     description: 'Refunds and returned items.',
     icon: Icons.assignment_return_outlined,
+    builder: (_) => const ReturnsPage(),
   ),
   // ---- People ----
   BosDestination(
@@ -2659,9 +2662,9 @@ const List<String> _accountShortcuts = [BosDest.profile, BosDest.settings];
 /// Permission required to OPEN each destination. Missing => owner-only.
 const Map<String, BosPermission> _destPermission = {
   BosDest.dashboard: BosPermission.dashboardView,
+
   // BosDest.myProfile: BosPermission.dashboardView,
   // BosDest.mySecurity: BosPermission.dashboardView,
-
   BosDest.journal: BosPermission.financeView,
   BosDest.cashflow: BosPermission.financeView,
   BosDest.reports: BosPermission.reportsView,
@@ -3217,10 +3220,11 @@ class _PhoneBottomBar extends StatelessWidget {
       ),
     );
 
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: Colors.white,
+      color: scheme.surface,
       elevation: 8,
-      shadowColor: Colors.black26,
+      shadowColor: scheme.shadow.withValues(alpha: 0.26),
       child: SafeArea(
         top: false,
         child: SizedBox(
@@ -3718,6 +3722,8 @@ class _BosDrawer extends ConsumerWidget {
     return SizedBox(
       width: _adaptiveDrawerWidth(context),
       child: NavigationDrawer(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
         selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
         onDestinationSelected: (i) {
           Navigator.of(context).pop();

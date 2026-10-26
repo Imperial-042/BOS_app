@@ -21,12 +21,13 @@ class ExpensesPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final canEdit = ref.watch(canProvider(BosPermission.financeCreate));
+    final canCreate = ref.watch(canProvider(BosPermission.financeCreate));
+    final canEdit = ref.watch(canProvider(BosPermission.financeEdit));
     final itemsAsync = ref.watch(expenseListProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Expenses')),
-      floatingActionButton: canEdit
+      floatingActionButton: canCreate
           ? FloatingActionButton.extended(
               onPressed: () {
                 Navigator.push(

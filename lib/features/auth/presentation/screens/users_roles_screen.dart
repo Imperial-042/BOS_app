@@ -15,6 +15,7 @@ import 'package:bos_application/features/transactions/presentation/screens/custo
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../core/auth/auth_providers.dart';
 import '../../../../core/auth/authorization_providers.dart';
@@ -1033,6 +1034,40 @@ class _InviteCodeSection extends ConsumerWidget {
     ).showSnackBar(const SnackBar(content: Text('Code copied.')));
   }
 
+  void _showQrCode(BuildContext context, BusinessInvite invite) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Scan to join'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _InviteQrCode(code: invite.code, size: 220),
+            const SizedBox(height: 12),
+            Text(
+              invite.code,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 6),
+            _RoleTag(invite.role),
+            const SizedBox(height: 6),
+            const Text('This invitation can only be used once.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _revoke(
     BuildContext context,
     WidgetRef ref,
@@ -1126,6 +1161,11 @@ class _InviteCodeSection extends ConsumerWidget {
                         icon: const Icon(Icons.copy_rounded, size: 20),
                         tooltip: 'Copy code',
                         onPressed: () => _copy(context, invite.code),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.qr_code_2_rounded, size: 20),
+                        tooltip: 'Show invitation QR code',
+                        onPressed: () => _showQrCode(context, invite),
                       ),
                       if (canManage)
                         IconButton(
@@ -1819,6 +1859,8 @@ class _InviteCodeSheetState extends ConsumerState<_InviteCodeSheet> {
                       children: [
                         _RoleTag(created.role),
                         const SizedBox(height: 12),
+                        _InviteQrCode(code: created.code, size: 200),
+                        const SizedBox(height: 12),
                         FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
@@ -1896,6 +1938,30 @@ class _InviteCodeSheetState extends ConsumerState<_InviteCodeSheet> {
                   ),
                 ],
         ),
+      ),
+    );
+  }
+}
+
+class _InviteQrCode extends StatelessWidget {
+  const _InviteQrCode({required this.code, required this.size});
+
+  final String code;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: QrImageView(
+        data: code,
+        size: size,
+        backgroundColor: Colors.white,
+        semanticsLabel: 'Invitation QR code',
       ),
     );
   }

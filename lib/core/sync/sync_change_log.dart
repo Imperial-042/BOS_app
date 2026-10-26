@@ -70,6 +70,8 @@ final List<_Synced> _syncedTables = [
   _Synced('pos_sale_items', (r) => _via('pos_sales', 'sale_id', r)),
   _Synced('pos_sale_payments', (r) => _via('pos_sales', 'sale_id', r)),
   _Synced('pos_sale_tenders', (r) => _via('pos_sales', 'sale_id', r)),
+  _Synced('pos_returns', _direct),
+  _Synced('pos_return_items', (r) => _via('pos_returns', 'return_id', r)),
   _Synced('pos_order_types', _direct),
   _Synced('pos_tables', _direct),
   _Synced('role_permission_overrides', _direct),
@@ -95,6 +97,36 @@ final List<_Synced> _syncedTables = [
 List<String> get syncedEntityTypes => [for (final t in _syncedTables) t.table];
 
 abstract final class SyncChangeLog {
+  /// Rewinds local feed cursors once when cursor semantics change, allowing a
+  /// client upgrade to recover feed entries it may have previously skipped.
+  static Future<void> ensurePullCursorVersion(
+    AppDatabase db, {
+    required String version,
+  }) async {
+    await db.transaction(() async {
+      await db.customStatement(
+        'CREATE TABLE IF NOT EXISTS sync_metadata ('
+        'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+      );
+      final storedVersion = await db
+          .customSelect(
+            'SELECT value FROM sync_metadata WHERE key = ?',
+            variables: [Variable.withString('pull_cursor_version')],
+          )
+          .getSingleOrNull();
+      if (storedVersion?.read<String>('value') == version) return;
+
+      await db.customStatement(
+        'UPDATE sync_checkpoints SET last_server_cursor = 0',
+      );
+      await db.customStatement(
+        'INSERT INTO sync_metadata (key, value) VALUES (?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        ['pull_cursor_version', version],
+      );
+    });
+  }
+
   /// Creates the log tables and triggers. Idempotent; runs on every open.
   static Future<void> install(AppDatabase db) async {
     await db.customStatement('''

@@ -1,14 +1,28 @@
 // lib/features/people/presentation/attendance_screen.dart
+//
+// People -> Attendance, now branch-aware:
+//   My time : clock in/out stamped with the branch you work in, a weekly
+//             hours chart, and your recent records (with branch tags)
+//   Team    : "branch pulse" strip (who is on the clock and how many hours per
+//             branch, tap to filter), branch tags on every record, and a
+//             branch picker when adding time manually
+//
+// Branch: clockIn / addManualAttendance take a branchId and save it with the
+// record (see HrService), so every record knows where the work happened.
+
 import 'dart:async';
 
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:bos_application/core/auth/bos_access.dart';
+import 'package:bos_application/core/branch/branch_providers.dart';
 import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/core/database/app_database.dart';
+import 'package:bos_application/features/branch_people.dart';
 import 'package:bos_application/features/people/hr_common.dart';
 import 'package:bos_application/features/people/hr_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 class AttendanceScreen extends ConsumerWidget {
   const AttendanceScreen({super.key});
@@ -45,18 +59,32 @@ class _MyTime extends ConsumerWidget {
         ref.watch(myAttendanceProvider).value ?? const <AttendanceRecord>[];
     final shifts =
         ref.watch(recentShiftsProvider).value ?? const <ScheduleShift>[];
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final byId = ref.watch(branchByIdProvider);
+
     final ws = weekStartOf(DateTime.now());
-    final week = history.where((r) => !dateOnly(r.workDate).isBefore(ws));
+    final week = history
+        .where((r) => !dateOnly(r.workDate).isBefore(ws))
+        .toList();
     final weekMin = week.fold<int>(
       0,
       (s, r) => s + workedMinutes(r.clockIn, r.clockOut, r.breakMinutes),
     );
-    final weekDays = {for (final r in week) dateOnly(r.workDate)}.length;
+    final perDay = <DateTime, int>{};
+    for (final r in week) {
+      final d = dateOnly(r.workDate);
+      perDay[d] =
+          (perDay[d] ?? 0) +
+          workedMinutes(r.clockIn, r.clockOut, r.breakMinutes);
+    }
+    final weekDays = perDay.keys.length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
       children: [
         _ClockCard(weekMinutes: weekMin, weekDays: weekDays),
+        const SizedBox(height: 16),
+        _WeekBars(weekStart: ws, minutes: perDay),
         const SizedBox(height: 24),
         const HrSectionLabel('Last 45 days'),
         if (history.isEmpty)
@@ -77,6 +105,7 @@ class _MyTime extends ConsumerWidget {
                     child: _RecordTile(
                       rec: history[i],
                       lateMinutes: lateMinutesFor(history[i], shifts),
+                      branch: multi ? byId[history[i].branchId] : null,
                     ),
                   ),
                 ],
@@ -126,6 +155,7 @@ class _ClockCardState extends ConsumerState<_ClockCard> {
           .clockIn(
             businessId: ref.read(selectedBusinessIdProvider),
             userId: me,
+            branchId: ref.read(selectedBranchIdProvider),
           );
     } catch (e) {
       if (mounted) hrSnack(context, hrError(e));
@@ -155,6 +185,14 @@ class _ClockCardState extends ConsumerState<_ClockCard> {
   Widget build(BuildContext context) {
     final open = ref.watch(myOpenClockProvider).value;
     final working = open != null;
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final byId = ref.watch(branchByIdProvider);
+    // While on the clock, show the branch the shift belongs to; otherwise the
+    // branch this device is working in (where a clock-in will be recorded).
+    final branch = working && open.branchId != null
+        ? byId[open.branchId]
+        : ref.watch(selectedBranchProvider);
+
     final now = DateTime.now();
     final elapsed = working ? now.difference(open.clockIn) : Duration.zero;
     String two(int n) => n.toString().padLeft(2, '0');
@@ -174,6 +212,16 @@ class _ClockCardState extends ConsumerState<_ClockCard> {
       ],
       child: Column(
         children: [
+          if (multi && branch != null) ...[
+            Center(
+              child: _WhereChip(
+                name: branch.name,
+                live: working,
+                label: working ? 'Working at' : 'Clocking in at',
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           Center(
             child: FittedBox(
               fit: BoxFit.scaleDown,
@@ -217,6 +265,190 @@ class _ClockCardState extends ConsumerState<_ClockCard> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Glass pill on the clock card: where the shift is / will be recorded.
+class _WhereChip extends StatelessWidget {
+  const _WhereChip({
+    required this.name,
+    required this.live,
+    required this.label,
+  });
+
+  final String name;
+  final bool live;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 14, 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            live ? Icons.location_on_rounded : Icons.place_outlined,
+            size: 16,
+            color: Colors.white,
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              '$label $name',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Seven bars, one per day of the current week. 8 hours = a full bar.
+class _WeekBars extends StatelessWidget {
+  const _WeekBars({required this.weekStart, required this.minutes});
+
+  final DateTime weekStart;
+  final Map<DateTime, int> minutes;
+
+  static String _hours(int m) {
+    if (m <= 0) return '';
+    final h = m / 60;
+    return '${h.toStringAsFixed(m % 60 == 0 ? 0 : 1)}h';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final today = dateOnly(DateTime.now());
+    final days = [for (var i = 0; i < 7; i++) addDays(weekStart, i)];
+    final total = days.fold<int>(0, (s, d) => s + (minutes[d] ?? 0));
+
+    return HrCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'This week',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                fmtDuration(total),
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: scheme.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 98,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final d in days)
+                  Expanded(
+                    child: _Bar(
+                      label: DateFormat('E').format(d).substring(0, 1),
+                      hours: _hours(minutes[d] ?? 0),
+                      fraction: ((minutes[d] ?? 0) / 480).clamp(0.0, 1.0),
+                      isToday: d == today,
+                      isFuture: d.isAfter(today),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Bar extends StatelessWidget {
+  const _Bar({
+    required this.label,
+    required this.hours,
+    required this.fraction,
+    required this.isToday,
+    required this.isFuture,
+  });
+
+  final String label;
+  final String hours;
+  final double fraction;
+  final bool isToday;
+  final bool isFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = isToday
+        ? AppColors.accent
+        : AppColors.primary.withValues(alpha: 0.6);
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        SizedBox(
+          height: 14,
+          child: Text(
+            hours,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: fraction),
+          duration: const Duration(milliseconds: 550),
+          curve: Curves.easeOutCubic,
+          builder: (context, v, child) => Container(
+            width: 18,
+            height: 4 + 54 * v,
+            decoration: BoxDecoration(
+              color: fraction == 0
+                  ? scheme.surfaceContainerHigh.withValues(
+                      alpha: isFuture ? 0.5 : 1,
+                    )
+                  : color,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: isToday ? FontWeight.w900 : FontWeight.w600,
+            color: isToday ? scheme.primary : scheme.onSurfaceVariant,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -286,6 +518,7 @@ class _RecordTile extends StatelessWidget {
     this.lateMinutes,
     this.onDelete,
     this.showBar = false,
+    this.branch,
   });
 
   final AttendanceRecord rec;
@@ -294,6 +527,9 @@ class _RecordTile extends StatelessWidget {
   final int? lateMinutes;
   final VoidCallback? onDelete;
   final bool showBar;
+
+  /// Shown as a tag under the times (null hides it).
+  final Branch? branch;
 
   @override
   Widget build(BuildContext context) {
@@ -310,6 +546,7 @@ class _RecordTile extends StatelessWidget {
               ? '${lateMinutes! ~/ 60}h ${lateMinutes! % 60}m'
               : '${lateMinutes}m')
         : '';
+    final b = branch;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
@@ -342,6 +579,10 @@ class _RecordTile extends StatelessWidget {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
+                if (b != null) ...[
+                  const SizedBox(height: 6),
+                  BranchTag.branch(b),
+                ],
                 if (showBar && !open) ...[
                   const SizedBox(height: 8),
                   ClipRRect(
@@ -405,6 +646,7 @@ class _TeamTime extends ConsumerStatefulWidget {
 
 class _TeamTimeState extends ConsumerState<_TeamTime> {
   DateTime _day = dateOnly(DateTime.now());
+  String? _branchId; // null = every branch you can see
 
   Future<void> _delete(AttendanceRecord rec) async {
     final ok = await showDialog<bool>(
@@ -437,16 +679,69 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
       ...(ref.watch(shiftsForWeekProvider(weekStartOf(_day))).value ??
           const <ScheduleShift>[]),
     ];
-    final open =
+    final openAll =
         ref.watch(openClocksProvider).value ?? const <AttendanceRecord>[];
-    final records =
+    final recordsAll =
         ref.watch(attendanceForDayProvider(_day)).value ??
         const <AttendanceRecord>[];
+
+    // ---- branches ----
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final branches = ref.watch(allowedBranchesProvider);
+    final businessId = ref.watch(selectedBusinessIdProvider);
+    final byId = ref.watch(branchByIdProvider);
+    final mainId = AppDatabase.mainBranchId(businessId);
+    final allowedIds = {for (final b in branches) b.id};
+    String branchOf(AttendanceRecord r) => r.branchId ?? mainId;
+
+    // What this person is allowed to see (everything for single-branch
+    // businesses, or while branches are still loading).
+    bool visible(AttendanceRecord r) =>
+        !multi || allowedIds.isEmpty || allowedIds.contains(branchOf(r));
+
+    final filter = multi && branches.any((b) => b.id == _branchId)
+        ? _branchId
+        : null;
+    bool inFilter(AttendanceRecord r) =>
+        visible(r) && (filter == null || branchOf(r) == filter);
+
+    final visibleRecords = recordsAll.where(visible).toList();
+    final visibleOpen = openAll.where(visible).toList();
+    final records = recordsAll.where(inFilter).toList();
+    final open = openAll.where(inFilter).toList();
+
     final totalMinutes = records.fold<int>(
       0,
       (s, r) => s + workedMinutes(r.clockIn, r.clockOut, r.breakMinutes),
     );
     final isToday = _day == dateOnly(DateTime.now());
+
+    // ---- branch pulse stats (always across everything visible) ----
+    final minsBy = <String, int>{};
+    final recBy = <String, int>{};
+    final liveBy = <String, int>{};
+    for (final r in visibleRecords) {
+      final k = branchOf(r);
+      minsBy[k] =
+          (minsBy[k] ?? 0) +
+          workedMinutes(r.clockIn, r.clockOut, r.breakMinutes);
+      recBy[k] = (recBy[k] ?? 0) + 1;
+    }
+    for (final r in visibleOpen) {
+      final k = branchOf(r);
+      liveBy[k] = (liveBy[k] ?? 0) + 1;
+    }
+    final stats = [
+      for (final b in branches)
+        BranchStat(
+          key: b.id,
+          title: b.name,
+          icon: branchIconOf(b),
+          color: branchColorOf(b),
+          value: fmtDuration(minsBy[b.id] ?? 0),
+          caption: '${liveBy[b.id] ?? 0} live · ${recBy[b.id] ?? 0} records',
+        ),
+    ];
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -463,7 +758,9 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
         children: [
           HrHero(
             icon: Icons.groups_rounded,
-            title: 'Team attendance',
+            title: filter == null
+                ? 'Team attendance'
+                : (byId[filter]?.name ?? 'Team attendance'),
             subtitle: isToday ? 'Today' : fmtShortDate(_day),
             stats: [
               HrStat('${open.length}', 'On the clock'),
@@ -483,6 +780,15 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
               if (d != null) setState(() => _day = dateOnly(d));
             },
           ),
+          if (multi && stats.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            BranchStatStrip(
+              title: 'Branch pulse',
+              stats: stats,
+              selected: filter,
+              onSelect: (k) => setState(() => _branchId = k),
+            ),
+          ],
           const SizedBox(height: 20),
           if (open.isNotEmpty) ...[
             HrSectionLabel('On the clock now (${open.length})'),
@@ -497,6 +803,7 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
                       name: names[open[i].userId] ?? 'Team member',
                       role: roles[open[i].userId],
                       lateMinutes: lateMinutesFor(open[i], shifts),
+                      branch: multi ? byId[branchOf(open[i])] : null,
                     ),
                   ],
                 ],
@@ -510,10 +817,12 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
                 : '${records.length} record${records.length == 1 ? '' : 's'}',
           ),
           if (records.isEmpty)
-            const HrEmpty(
+            HrEmpty(
               icon: Icons.event_busy_outlined,
               title: 'No time records',
-              message: 'Nobody clocked in on this day.',
+              message: filter == null
+                  ? 'Nobody clocked in on this day.'
+                  : 'Nobody clocked in at this branch on this day.',
             )
           else
             HrCard(
@@ -530,6 +839,7 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
                         role: roles[records[i].userId],
                         lateMinutes: lateMinutesFor(records[i], shifts),
                         showBar: true,
+                        branch: multi ? byId[branchOf(records[i])] : null,
                         onDelete: () => _delete(records[i]),
                       ),
                     ),
@@ -542,8 +852,9 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
     );
   }
 }
+
 // ============================================================================
-// TEAM
+// MANUAL ENTRY
 // ============================================================================
 
 class _ManualEntryDialog extends ConsumerStatefulWidget {
@@ -557,6 +868,7 @@ class _ManualEntryDialog extends ConsumerStatefulWidget {
 
 class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
   String? _userId;
+  String? _branchId;
   late DateTime _date = widget.day;
   TimeOfDay _in = const TimeOfDay(hour: 8, minute: 0);
   TimeOfDay _out = const TimeOfDay(hour: 17, minute: 0);
@@ -564,6 +876,12 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
   final _note = TextEditingController();
   String? _error;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _branchId = ref.read(selectedBranchIdProvider);
+  }
 
   @override
   void dispose() {
@@ -593,6 +911,7 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
             breakMinutes: int.tryParse(_break.text.trim()) ?? 0,
             note: _note.text,
             enteredBy: ref.read(authenticatedUserIdProvider),
+            branchId: _branchId ?? ref.read(selectedBranchIdProvider),
           );
       if (mounted) Navigator.pop(context);
     } catch (e) {
@@ -605,9 +924,17 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
   @override
   Widget build(BuildContext context) {
     final people = ref.watch(hrPeopleProvider).value ?? const <HrPerson>[];
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final branches = ref.watch(allowedBranchesProvider);
+    final scheme = Theme.of(context).colorScheme;
 
     return AlertDialog(
-      title: const Text('Add time record'),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      icon: const Icon(Icons.more_time_rounded),
+      title: const Text(
+        'Add time record',
+        style: TextStyle(fontWeight: FontWeight.w900),
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -622,7 +949,40 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
               ],
               onChanged: (v) => setState(() => _userId = v),
             ),
-            const SizedBox(height: 10),
+            if (multi && branches.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Branch',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final b in branches)
+                    ChoiceChip(
+                      showCheckmark: false,
+                      avatar: Icon(
+                        branchIconOf(b),
+                        size: 16,
+                        color: branchColorOf(b),
+                      ),
+                      selectedColor: branchColorOf(b).withValues(alpha: 0.16),
+                      label: Text(b.name),
+                      selected: _branchId == b.id,
+                      onSelected: _busy
+                          ? null
+                          : (_) => setState(() => _branchId = b.id),
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: () async {
                 final d = await pickDate(context, _date);
@@ -679,7 +1039,7 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
               Text(
                 _error!,
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
+                  color: scheme.error,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),

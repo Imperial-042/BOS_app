@@ -17,6 +17,7 @@ import 'package:share_plus/share_plus.dart' show Share, XFile;
 import 'package:uuid/uuid.dart';
 
 import '../../../../core/auth/authorization_providers.dart';
+import '../../../../core/auth/authorization_service.dart';
 import '../../../../core/auth/bos_access.dart';
 import '../../../../core/branding/branding.dart';
 import '../../../../core/database/app_database.dart';
@@ -26,7 +27,7 @@ import 'transaction_page.dart' show kCurrentBusinessId, ledgerVersionProvider;
 
 /// A CSV cell: quote anything containing commas, quotes, or newlines.
 String _csvCell(String value) {
-  if (RegExp(r'[",\n]').hasMatch(value)) {
+  if (RegExp(r'[",\r\n]').hasMatch(value)) {
     return '"${value.replaceAll('"', '""')}"';
   }
   return value;
@@ -136,10 +137,11 @@ class ImportExportPage extends ConsumerWidget {
     _Dataset dataset,
   ) async {
     try {
-      final db = ref.read(databaseProvider);
-      final csv = await dataset.build(db);
-
-      // Fail closed: an export that cannot be recorded does not happen.
+      ref
+          .read(authorizationServiceProvider)
+          .require(BosPermission.reportsView, businessId: kCurrentBusinessId);
+      final csv = await dataset.build(ref.read(databaseProvider));
+      final dataRows = _parseCsv(csv).length - 1;
       await ref
           .read(auditLogServiceProvider)
           .record(
@@ -152,7 +154,7 @@ class ImportExportPage extends ConsumerWidget {
               entityLabel: dataset.title,
               details: {
                 'dataset': dataset.id,
-                'rows': csv.isEmpty ? 0 : '\n'.allMatches(csv).length,
+                'rows': dataRows < 0 ? 0 : dataRows,
               },
             ),
           );
@@ -163,10 +165,11 @@ class ImportExportPage extends ConsumerWidget {
           .split('.')
           .first;
       final name = '${dataset.filename}_${kCurrentBusinessId}_$timestamp.csv';
-
-      await Share.shareXFiles([
-        XFile.fromData(utf8.encode(csv), mimeType: 'text/csv', name: name),
-      ], subject: name);
+      await Share.shareXFiles(
+        [XFile.fromData(utf8.encode(csv), mimeType: 'text/csv', name: name)],
+        fileNameOverrides: [name],
+        subject: name,
+      );
     } catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
@@ -199,29 +202,29 @@ class ImportExportPage extends ConsumerWidget {
   }
 
   Future<void> _restore(BuildContext context, WidgetRef ref) async {
-    ref
-        .read(authorizationServiceProvider)
-        .require(
-          BosPermission.businessSettings,
-          businessId: kCurrentBusinessId,
-        );
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-      withData: true,
-    );
-    final file = result?.files.firstOrNull;
-    if (file == null || !context.mounted) return;
-
-    final bytes = file.bytes;
-    if (bytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not read that file.')),
-      );
-      return;
-    }
-
     try {
+      ref
+          .read(authorizationServiceProvider)
+          .require(
+            BosPermission.businessSettings,
+            businessId: kCurrentBusinessId,
+          );
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      final file = result?.files.firstOrNull;
+      if (file == null || !context.mounted) return;
+
+      final bytes = file.bytes;
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not read that file.')),
+        );
+        return;
+      }
+
       final restored = await ref
           .read(backupServiceProvider)
           .restoreBusiness(kCurrentBusinessId, utf8.decode(bytes));
@@ -247,206 +250,256 @@ class ImportExportPage extends ConsumerWidget {
           ),
         ),
       );
+    } on PermissionDeniedException catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
     } on BackupException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
+    } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Restore failed. Is this a valid backup?'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Restore failed: $error')));
     }
   }
 
   Future<void> _import(BuildContext context, WidgetRef ref, String kind) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-      withData: true,
-    );
-    final file = result?.files.firstOrNull;
-    if (file == null || !context.mounted) return;
+    try {
+      final permission = switch (kind) {
+        'customer' => BosPermission.customersCreate,
+        'supplier' => BosPermission.suppliersCreate,
+        _ => throw ArgumentError.value(kind, 'kind'),
+      };
+      ref
+          .read(authorizationServiceProvider)
+          .require(permission, businessId: kCurrentBusinessId);
 
-    final bytes = file.bytes;
-    if (bytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not read that file.')),
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+        withData: true,
       );
-      return;
-    }
+      final file = result?.files.firstOrNull;
+      if (file == null || !context.mounted) return;
 
-    final lines = utf8
-        .decode(bytes)
-        .split(RegExp(r'\r?\n'))
-        .where((line) => line.trim().isNotEmpty)
-        .toList();
-
-    if (lines.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('That file has no data rows (only a header).'),
-        ),
-      );
-      return;
-    }
-
-    final header = _parseCsvLine(lines.first);
-    final nameIndex = header.indexWhere(
-      (cell) => cell.trim().toLowerCase() == 'name',
-    );
-    final phoneIndex = header.indexWhere(
-      (cell) => cell.trim().toLowerCase() == 'phone',
-    );
-    final notesIndex = header.indexWhere(
-      (cell) => cell.trim().toLowerCase() == 'notes',
-    );
-
-    if (nameIndex < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('The file needs a "name" column in its header.'),
-        ),
-      );
-      return;
-    }
-
-    final db = ref.read(databaseProvider);
-    final audit = ref.read(auditLogServiceProvider);
-    var imported = 0;
-    var skipped = 0;
-
-    await db.transaction(() async {
-      for (final line in lines.skip(1)) {
-        final cells = _parseCsvLine(line);
-        final name = nameIndex < cells.length ? cells[nameIndex].trim() : '';
-        if (name.isEmpty) {
-          skipped++;
-          continue;
-        }
-
-        final phone = phoneIndex >= 0 && phoneIndex < cells.length
-            ? cells[phoneIndex].trim()
-            : '';
-        final notes = notesIndex >= 0 && notesIndex < cells.length
-            ? cells[notesIndex].trim()
-            : '';
-
-        final exists = kind == 'customer'
-            ? await (db.select(db.customers)..where(
-                    (c) =>
-                        c.businessId.equals(kCurrentBusinessId) &
-                        c.name.equals(name),
-                  ))
-                  .getSingleOrNull()
-            : await (db.select(db.suppliers)..where(
-                    (s) =>
-                        s.businessId.equals(kCurrentBusinessId) &
-                        s.name.equals(name),
-                  ))
-                  .getSingleOrNull();
-        if (exists != null) {
-          skipped++;
-          continue;
-        }
-
-        if (kind == 'customer') {
-          await db
-              .into(db.customers)
-              .insert(
-                CustomersCompanion.insert(
-                  id: const Uuid().v4(),
-                  businessId: kCurrentBusinessId,
-                  name: name,
-                  phone: Value(phone.isEmpty ? null : phone),
-                  notes: Value(notes.isEmpty ? null : notes),
-                ),
-              );
-        } else {
-          await db
-              .into(db.suppliers)
-              .insert(
-                SuppliersCompanion.insert(
-                  id: const Uuid().v4(),
-                  businessId: kCurrentBusinessId,
-                  name: name,
-                  phone: Value(phone.isEmpty ? null : phone),
-                  notes: Value(notes.isEmpty ? null : notes),
-                ),
-              );
-        }
-        imported++;
+      final bytes = file.bytes;
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not read that file.')),
+        );
+        return;
       }
-      if (imported > 0) {
-        await audit.record(
-          AuditEvent(
-            businessId: kCurrentBusinessId,
-            module: AuditModule.administration,
-            actionType: AuditActionType.create,
-            action: kind == 'customer'
-                ? 'data.customers_imported'
-                : 'data.suppliers_imported',
-            entityType: kind == 'customer' ? 'customers' : 'suppliers',
-            entityLabel: file.name,
-            details: {
-              'imported': imported,
-              'skipped': skipped,
-              'file': file.name,
-            },
-          ),
+
+      final csv = utf8.decode(bytes).replaceFirst('\uFEFF', '');
+      final records = _parseCsv(csv);
+      if (records.length < 2) {
+        throw const FormatException(
+          'That file has no data rows (only a header).',
         );
       }
-    });
 
-    ref.read(ledgerVersionProvider.notifier).state++;
+      final header = records.first;
+      final nameIndex = header.indexWhere(
+        (cell) => cell.trim().toLowerCase() == 'name',
+      );
+      final phoneIndex = header.indexWhere(
+        (cell) => cell.trim().toLowerCase() == 'phone',
+      );
+      final notesIndex = header.indexWhere(
+        (cell) => cell.trim().toLowerCase() == 'notes',
+      );
+      if (nameIndex < 0) {
+        throw const FormatException(
+          'The file needs a "name" column in its header.',
+        );
+      }
 
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Imported $imported ${kind == 'customer' ? 'customer' : 'supplier'}'
-          '${imported == 1 ? '' : 's'}'
-          '${skipped > 0 ? ', skipped $skipped duplicate${skipped == 1 ? '' : 's'}' : ''}.',
+      final db = ref.read(databaseProvider);
+      final audit = ref.read(auditLogServiceProvider);
+      var imported = 0;
+      var skipped = 0;
+
+      await db.transaction(() async {
+        for (final cells in records.skip(1)) {
+          final name = nameIndex < cells.length ? cells[nameIndex].trim() : '';
+          if (name.isEmpty) {
+            skipped++;
+            continue;
+          }
+          final phone = phoneIndex >= 0 && phoneIndex < cells.length
+              ? cells[phoneIndex].trim()
+              : '';
+          final notes = notesIndex >= 0 && notesIndex < cells.length
+              ? cells[notesIndex].trim()
+              : '';
+
+          final exists = kind == 'customer'
+              ? await (db.select(db.customers)..where(
+                      (c) =>
+                          c.businessId.equals(kCurrentBusinessId) &
+                          c.name.equals(name),
+                    ))
+                    .getSingleOrNull()
+              : await (db.select(db.suppliers)..where(
+                      (s) =>
+                          s.businessId.equals(kCurrentBusinessId) &
+                          s.name.equals(name),
+                    ))
+                    .getSingleOrNull();
+          if (exists != null) {
+            skipped++;
+            continue;
+          }
+
+          if (kind == 'customer') {
+            await db
+                .into(db.customers)
+                .insert(
+                  CustomersCompanion.insert(
+                    id: const Uuid().v4(),
+                    businessId: kCurrentBusinessId,
+                    name: name,
+                    phone: Value(phone.isEmpty ? null : phone),
+                    notes: Value(notes.isEmpty ? null : notes),
+                  ),
+                );
+          } else {
+            await db
+                .into(db.suppliers)
+                .insert(
+                  SuppliersCompanion.insert(
+                    id: const Uuid().v4(),
+                    businessId: kCurrentBusinessId,
+                    name: name,
+                    phone: Value(phone.isEmpty ? null : phone),
+                    notes: Value(notes.isEmpty ? null : notes),
+                  ),
+                );
+          }
+          imported++;
+        }
+        if (imported > 0) {
+          await audit.record(
+            AuditEvent(
+              businessId: kCurrentBusinessId,
+              module: AuditModule.administration,
+              actionType: AuditActionType.create,
+              action: kind == 'customer'
+                  ? 'data.customers_imported'
+                  : 'data.suppliers_imported',
+              entityType: kind == 'customer' ? 'customers' : 'suppliers',
+              entityLabel: file.name,
+              details: {
+                'imported': imported,
+                'skipped': skipped,
+                'file': file.name,
+              },
+            ),
+          );
+        }
+      });
+
+      ref.read(ledgerVersionProvider.notifier).state++;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Imported $imported ${kind == 'customer' ? 'customer' : 'supplier'}'
+            '${imported == 1 ? '' : 's'}'
+            '${skipped > 0 ? ', skipped $skipped duplicate${skipped == 1 ? '' : 's'}' : ''}.',
+          ),
         ),
-      ),
-    );
+      );
+    } on FormatException catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Invalid CSV: ${error.message}')));
+    } on PermissionDeniedException catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Import failed: $error')));
+    }
   }
 
-  /// A small, forgiving CSV line parser (handles quoted cells).
-  List<String> _parseCsvLine(String line) {
-    final cells = <String>[];
+  List<List<String>> _parseCsv(String input) {
+    final rows = <List<String>>[];
+    var row = <String>[];
     final buffer = StringBuffer();
     var inQuotes = false;
-    var i = 0;
-    while (i < line.length) {
-      final char = line[i];
+    var closedQuote = false;
+    void finishField() {
+      row.add(buffer.toString());
+      buffer.clear();
+      closedQuote = false;
+    }
+
+    void finishRow() {
+      finishField();
+      if (row.any((cell) => cell.isNotEmpty)) rows.add(row);
+      row = <String>[];
+    }
+
+    for (var i = 0; i < input.length; i++) {
+      final char = input[i];
       if (char == '"') {
-        if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+        if (inQuotes && i + 1 < input.length && input[i + 1] == '"') {
           buffer.write('"');
-          i += 2;
+          i++;
           continue;
         }
-        inQuotes = !inQuotes;
+        if (inQuotes) {
+          inQuotes = false;
+          closedQuote = true;
+        } else if (buffer.isEmpty && !closedQuote) {
+          inQuotes = true;
+        } else {
+          throw const FormatException('Unexpected quote in a CSV field.');
+        }
       } else if (char == ',' && !inQuotes) {
-        cells.add(buffer.toString());
-        buffer.clear();
+        finishField();
+      } else if ((char == '\n' || char == '\r') && !inQuotes) {
+        finishRow();
+        if (char == '\r' && i + 1 < input.length && input[i + 1] == '\n') {
+          i++;
+        }
       } else {
+        if (closedQuote) {
+          throw const FormatException(
+            'Unexpected text after a quoted CSV field.',
+          );
+        }
         buffer.write(char);
       }
-      i++;
     }
-    cells.add(buffer.toString());
-    return cells;
+    if (inQuotes) {
+      throw const FormatException('A quoted CSV field was not closed.');
+    }
+    if (buffer.isNotEmpty || row.isNotEmpty) finishRow();
+    return rows;
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final canExport = ref.watch(canProvider(BosPermission.reportsView));
-    final canImport = ref.watch(canProvider(BosPermission.customersCreate));
+    final canImportCustomers = ref.watch(
+      canProvider(BosPermission.customersCreate),
+    );
+    final canImportSuppliers = ref.watch(
+      canProvider(BosPermission.suppliersCreate),
+    );
     final canRestore = ref.watch(canProvider(BosPermission.businessSettings));
 
     return Scaffold(
@@ -491,7 +544,9 @@ class ImportExportPage extends ConsumerWidget {
                   ),
                   subtitle: Text(dataset.description),
                   trailing: const Icon(Icons.download_outlined),
-                  onTap: canRestore ? () => _restore(context, ref) : null,
+                  onTap: canExport
+                      ? () => _export(context, ref, dataset)
+                      : null,
                 ),
               ),
             ),
@@ -552,7 +607,7 @@ class ImportExportPage extends ConsumerWidget {
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: const Text('From a backup'),
-                    onTap: canImport ? () => _restore(context, ref) : null,
+                    onTap: canRestore ? () => _restore(context, ref) : null,
                   ),
                 ),
               ),
@@ -595,7 +650,9 @@ class ImportExportPage extends ConsumerWidget {
               ),
               subtitle: const Text('Import a customer list from CSV.'),
               trailing: const Icon(Icons.upload_outlined),
-              onTap: canImport ? () => _import(context, ref, 'customer') : null,
+              onTap: canImportCustomers
+                  ? () => _import(context, ref, 'customer')
+                  : null,
             ),
           ),
           const SizedBox(height: 8),
@@ -617,7 +674,9 @@ class ImportExportPage extends ConsumerWidget {
               ),
               subtitle: const Text('Import a supplier list from CSV.'),
               trailing: const Icon(Icons.upload_outlined),
-              onTap: canImport ? () => _import(context, ref, 'supplier') : null,
+              onTap: canImportSuppliers
+                  ? () => _import(context, ref, 'supplier')
+                  : null,
             ),
           ),
         ],
