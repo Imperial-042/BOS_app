@@ -23,7 +23,7 @@ import 'package:bos_application/features/transactions/presentation/screens/custo
 import 'package:bos_application/features/transactions/presentation/screens/suppliers_page.dart'
     show SupplierService;
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
-    show TransactionService, kCurrentBusinessId;
+    show TransactionService;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
