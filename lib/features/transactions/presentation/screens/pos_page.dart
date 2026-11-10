@@ -19,6 +19,7 @@
 //   * Optional: scan a GCash/GoTyme/etc. screenshot to record the reference
 //     no., amount and date. Duplicate references are rejected.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bos_application/core/auth/authorization_providers.dart';
@@ -43,6 +44,7 @@ import '../../../transactions/presentation/providers/product_catalog_providers.d
 import '../../domain/pos_session_service.dart' show currentPosSessionProvider;
 import '../widgets/pos_category_bar.dart';
 import '../widgets/pos_session_widgets.dart';
+import '../widgets/product_customization_sheet.dart';
 import 'pos_checkout_sheet.dart';
 import 'pos_history_page.dart';
 import 'orders_page.dart';
@@ -1038,16 +1040,30 @@ class _POSTileCardState extends ConsumerState<_POSTileCard>
 
   void _onTapCancel() => _controller.reverse();
 
-  void _onTapUp(TapUpDetails _) {
+  Future<void> _onTapUp(TapUpDetails _) async {
     _controller.reverse();
 
     // Last line of defence: never add anything that isn't sellable, even if
     // a stale tap arrives right as the tile's state changes.
     if (!widget.availability.canSell) return;
 
-    final added = ref
-        .read(posOrderProvider.notifier)
-        .addOrIncrement(widget.product, maxUnits: widget.maxUnits);
+    final options = await showProductCustomizationSheet(
+      context,
+      ref,
+      widget.product,
+    );
+    if (!mounted || options == null) return;
+    final added = options.isEmpty
+        ? ref
+              .read(posOrderProvider.notifier)
+              .addOrIncrement(widget.product, maxUnits: widget.maxUnits)
+        : ref
+              .read(posOrderProvider.notifier)
+              .addConfigured(
+                widget.product,
+                options,
+                maxUnits: widget.maxUnits,
+              );
 
     if (!added) {
       ScaffoldMessenger.of(context)
@@ -1141,7 +1157,7 @@ class _POSTileCardState extends ConsumerState<_POSTileCard>
                 onTapUp: canSell
                     ? (d) {
                         HapticFeedback.selectionClick();
-                        _onTapUp(d);
+                        unawaited(_onTapUp(d));
                       }
                     : null,
                 onTap: canSell || availability == _Availability.checking

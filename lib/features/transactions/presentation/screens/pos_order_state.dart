@@ -10,6 +10,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/database/app_database.dart';
+import '../../domain/product_variants.dart';
 
 class POSLineItem {
   final String productId;
@@ -17,6 +18,7 @@ class POSLineItem {
   final String unit;
   final int unitPriceCents;
   final int quantity;
+  final List<ProductOptionSelection> options;
 
   const POSLineItem({
     required this.productId,
@@ -24,9 +26,14 @@ class POSLineItem {
     required this.unit,
     required this.unitPriceCents,
     required this.quantity,
+    this.options = const [],
   });
 
   int get lineTotal => unitPriceCents * quantity;
+  String get configurationKey =>
+      '$productId:${options.map((option) => option.choiceId).join(",")}';
+  String get optionsLabel =>
+      options.map((option) => option.choiceName).join(', ');
 
   POSLineItem copyWith({int? quantity}) {
     return POSLineItem(
@@ -35,6 +42,7 @@ class POSLineItem {
       unit: unit,
       unitPriceCents: unitPriceCents,
       quantity: quantity ?? this.quantity,
+      options: options,
     );
   }
 }
@@ -45,7 +53,9 @@ class POSOrderNotifier extends StateNotifier<List<POSLineItem>> {
   /// Returns false (and changes nothing) if adding one more would exceed
   /// [maxUnits].
   bool addOrIncrement(Product product, {int? maxUnits}) {
-    final index = state.indexWhere((line) => line.productId == product.id);
+    final index = state.indexWhere(
+      (line) => line.productId == product.id && line.options.isEmpty,
+    );
     final current = index >= 0 ? state[index].quantity : 0;
 
     if (maxUnits != null && current + 1 > maxUnits) return false;
@@ -73,6 +83,47 @@ class POSOrderNotifier extends StateNotifier<List<POSLineItem>> {
     return true;
   }
 
+  bool addConfigured(
+    Product product,
+    List<ProductOptionSelection> options, {
+    int? maxUnits,
+  }) {
+    final configured = POSLineItem(
+      productId: product.id,
+      name: product.name,
+      unit: product.unit,
+      unitPriceCents: product.sellPrice ?? 0,
+      quantity: 1,
+      options: options,
+    );
+    final index = state.indexWhere(
+      (line) => line.configurationKey == configured.configurationKey,
+    );
+    final current = index >= 0 ? state[index].quantity : 0;
+    if (maxUnits != null && current + 1 > maxUnits) return false;
+    final price =
+        (product.sellPrice ?? 0) +
+        options.fold<int>(0, (sum, option) => sum + option.priceDeltaCents);
+    if (index >= 0) {
+      state = [
+        ...state.sublist(0, index),
+        state[index].copyWith(quantity: current + 1),
+        ...state.sublist(index + 1),
+      ];
+    } else {
+      state = [...state, configured.copyWith()];
+      state[state.length - 1] = POSLineItem(
+        productId: configured.productId,
+        name: configured.name,
+        unit: configured.unit,
+        unitPriceCents: price,
+        quantity: 1,
+        options: options,
+      );
+    }
+    return true;
+  }
+
   /// Returns false (and changes nothing) if [quantity] exceeds [maxUnits].
   /// Lowering a quantity is always allowed.
   bool updateQuantity(String productId, int quantity, {int? maxUnits}) {
@@ -80,6 +131,7 @@ class POSOrderNotifier extends StateNotifier<List<POSLineItem>> {
       removeItem(productId);
       return true;
     }
+
     final index = state.indexWhere((l) => l.productId == productId);
     if (index < 0) return false;
 
@@ -96,8 +148,38 @@ class POSOrderNotifier extends StateNotifier<List<POSLineItem>> {
     return true;
   }
 
+  bool updateLineQuantity(POSLineItem line, int quantity, {int? maxUnits}) {
+    if (quantity <= 0) {
+      removeLine(line);
+      return true;
+    }
+    final index = state.indexWhere(
+      (candidate) => candidate.configurationKey == line.configurationKey,
+    );
+    if (index < 0) return false;
+    if (quantity > state[index].quantity &&
+        maxUnits != null &&
+        quantity > maxUnits) {
+      return false;
+    }
+    state = [
+      ...state.sublist(0, index),
+      state[index].copyWith(quantity: quantity),
+      ...state.sublist(index + 1),
+    ];
+    return true;
+  }
+
   void removeItem(String productId) {
     state = state.where((line) => line.productId != productId).toList();
+  }
+
+  void removeLine(POSLineItem line) {
+    final index = state.indexWhere(
+      (candidate) => candidate.configurationKey == line.configurationKey,
+    );
+    if (index < 0) return;
+    state = [...state.sublist(0, index), ...state.sublist(index + 1)];
   }
 
   void removeItems(Iterable<String> productIds) {

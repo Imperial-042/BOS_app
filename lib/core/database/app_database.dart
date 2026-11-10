@@ -1450,7 +1450,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 51;
+  int get schemaVersion => 55;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -1472,6 +1472,10 @@ class AppDatabase extends _$AppDatabase {
       await _createCustomerIndexes();
       await _ensureBranchCityColumns();
       await _ensureBranchAddressColumns();
+      await _ensureBranchStorefrontColumns();
+      await _ensureLocationTables();
+      await _ensureBranchCatalogTable();
+      await _ensureProductVariantTables();
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -1509,6 +1513,10 @@ class AppDatabase extends _$AppDatabase {
       await _ensureCustomerLocationColumns();
       await _ensureBranchCityColumns();
       await _ensureBranchAddressColumns();
+      await _ensureBranchStorefrontColumns();
+      await _ensureLocationTables();
+      await _ensureBranchCatalogTable();
+      await _ensureProductVariantTables();
       await SyncChangeLog.install(this);
       await AuditSchemaGuard.install(this);
     },
@@ -2019,6 +2027,18 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 51) {
         await _ensureBranchAddressColumns();
+      }
+      if (from < 52) {
+        await _ensureCustomerLocationColumns();
+      }
+      if (from < 53) {
+        await _ensureBranchStorefrontColumns();
+      }
+      if (from < 54) {
+        await _ensureBranchCatalogTable();
+      }
+      if (from < 55) {
+        await _ensureProductVariantTables();
       }
     },
   );
@@ -2617,8 +2637,12 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> _ensureCustomerLocationColumns() async {
     for (final (table, column) in [
+      ('customer_profiles', 'phone'),
       ('customer_profiles', 'city'),
       ('customer_profiles', 'address'),
+      ('customer_profiles', 'latitude'),
+      ('customer_profiles', 'longitude'),
+      ('customer_profiles', 'location_accuracy_meters'),
       ('customer_storefronts', 'opening_hours'),
     ]) {
       final rows = await customSelect('PRAGMA table_info("$table")').get();
@@ -2664,6 +2688,206 @@ class AppDatabase extends _$AppDatabase {
         await customStatement('ALTER TABLE branches ADD COLUMN "$column" TEXT');
       }
     }
+  }
+
+  Future<void> _ensureBranchStorefrontColumns() async {
+    final rows = await customSelect(
+      'PRAGMA table_info("customer_store_branches")',
+    ).get();
+    final columns = rows.map((r) => r.read<String>('name')).toSet();
+    if (!columns.contains('phone')) {
+      await customStatement(
+        'ALTER TABLE customer_store_branches ADD COLUMN phone TEXT',
+      );
+    }
+
+    if (!columns.contains('opening_hours')) {
+      await customStatement(
+        "ALTER TABLE customer_store_branches "
+        "ADD COLUMN opening_hours TEXT NOT NULL DEFAULT '{}'",
+      );
+    }
+  }
+
+  Future<void> _ensureLocationTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS branch_locations (
+        branch_id TEXT PRIMARY KEY NOT NULL,
+        business_id TEXT NOT NULL,
+        country TEXT,
+        region TEXT,
+        province TEXT,
+        city TEXT,
+        barangay TEXT,
+        street_address TEXT,
+        building_or_unit TEXT,
+        postal_code TEXT,
+        landmark TEXT,
+        formatted_address TEXT,
+        latitude REAL,
+        longitude REAL,
+        location_accuracy_meters REAL,
+        location_verified TEXT NOT NULL DEFAULT 'unverified',
+        location_updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS customer_addresses (
+        id TEXT PRIMARY KEY NOT NULL,
+        customer_user_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        recipient_name TEXT NOT NULL,
+        contact_number TEXT NOT NULL,
+        country TEXT,
+        region TEXT,
+        province TEXT,
+        city TEXT,
+        barangay TEXT,
+        street_address TEXT,
+        building_or_unit TEXT,
+        postal_code TEXT,
+        landmark TEXT,
+        formatted_address TEXT,
+        latitude REAL,
+        longitude REAL,
+        location_accuracy_meters REAL,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        FOREIGN KEY (customer_user_id) REFERENCES customer_profiles(id)
+          ON DELETE CASCADE
+      )
+    ''');
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS customer_addresses_default_idx '
+      'ON customer_addresses(customer_user_id) WHERE is_default = 1',
+    );
+    await _ensureCustomerOrderLocationColumns();
+  }
+
+  Future<void> _ensureCustomerOrderLocationColumns() async {
+    final rows = await customSelect(
+      'PRAGMA table_info("customer_orders")',
+    ).get();
+    final columns = rows.map((row) => row.read<String>('name')).toSet();
+
+    // Older builds briefly created this column with a misspelled name. Repair
+    // it before ensuring the canonical column so existing order data survives.
+    if (columns.contains('fullfillment_type') &&
+        !columns.contains('fulfillment_type')) {
+      await customStatement(
+        'ALTER TABLE customer_orders '
+        'RENAME COLUMN fullfillment_type TO fulfillment_type',
+      );
+      columns
+        ..remove('fullfillment_type')
+        ..add('fulfillment_type');
+    }
+
+    const declarations = {
+      'fulfillment_type': "TEXT NOT NULL DEFAULT 'pickup'",
+      'delivery_address_snapshot': 'TEXT',
+      'delivery_latitude': 'REAL',
+      'delivery_longitude': 'REAL',
+      'delivery_accuracy_meters': 'REAL',
+    };
+    for (final entry in declarations.entries) {
+      if (!columns.contains(entry.key)) {
+        await customStatement(
+          'ALTER TABLE customer_orders '
+          'ADD COLUMN "${entry.key}" ${entry.value}',
+        );
+        columns.add(entry.key);
+      }
+    }
+  }
+
+  Future<void> _ensureBranchCatalogTable() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS customer_branch_catalog (
+        branch_id TEXT NOT NULL,
+        catalog_item_id TEXT NOT NULL,
+        business_id TEXT NOT NULL,
+        PRIMARY KEY (branch_id, catalog_item_id)
+      )
+    ''');
+  }
+
+  Future<void> _ensureProductVariantTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS product_option_groups (
+        id TEXT PRIMARY KEY NOT NULL,
+        business_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        is_required INTEGER NOT NULL DEFAULT 0,
+        allow_multiple INTEGER NOT NULL DEFAULT 0,
+        min_selections INTEGER NOT NULL DEFAULT 0,
+        max_selections INTEGER,
+        is_add_on INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+    final groupColumns = await customSelect(
+      'PRAGMA table_info(product_option_groups)',
+    ).get();
+    if (!groupColumns.any((row) => row.read<String>('name') == 'is_add_on')) {
+      await customStatement(
+        'ALTER TABLE product_option_groups '
+        'ADD COLUMN is_add_on INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS product_option_choices (
+        id TEXT PRIMARY KEY NOT NULL,
+        business_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        price_delta_cents INTEGER NOT NULL DEFAULT 0,
+        inventory_product_id TEXT,
+        inventory_supply_id TEXT,
+        inventory_quantity REAL NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+    final choiceColumns = await customSelect(
+      'PRAGMA table_info(product_option_choices)',
+    ).get();
+    if (!choiceColumns.any(
+      (row) => row.read<String>('name') == 'inventory_supply_id',
+    )) {
+      await customStatement(
+        'ALTER TABLE product_option_choices ADD COLUMN inventory_supply_id TEXT',
+      );
+    }
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS pos_sale_item_options (
+        id TEXT PRIMARY KEY NOT NULL,
+        sale_item_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        choice_id TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        choice_name TEXT NOT NULL,
+        price_delta_cents INTEGER NOT NULL,
+        quantity REAL NOT NULL DEFAULT 1
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS product_option_groups_product_idx '
+      'ON product_option_groups(product_id, is_active)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS product_option_choices_product_idx '
+      'ON product_option_choices(product_id, is_active)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS pos_sale_item_options_item_idx '
+      'ON pos_sale_item_options(sale_item_id)',
+    );
   }
 
   /// Adds a column only when it isn't already present. Some device

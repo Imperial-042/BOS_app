@@ -11,11 +11,21 @@ import 'package:bos_application/core/database/database_provider.dart';
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
 import 'package:bos_application/core/supabase/supabase_service.dart';
 import 'package:bos_application/features/people/hr_common.dart';
+import 'package:bos_application/features/branch_people.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
+
+bool _visibleEmployee(Ref ref, String employeeId) {
+  return employeeVisibleToViewer(
+    employeeId: employeeId,
+    viewerId: ref.watch(authenticatedUserIdProvider),
+    ownerId: ref.watch(currentBusinessProvider).value?.ownerUserId,
+    assigned: ref.watch(assignedBranchesByUserProvider),
+  );
+}
 
 // ============================================================================
 // PEOPLE
@@ -64,6 +74,9 @@ final hrRosterSyncProvider = Provider<void>((ref) {
 final hrPeopleProvider = StreamProvider<List<HrPerson>>((ref) {
   final db = ref.watch(databaseProvider);
   final businessId = ref.watch(selectedBusinessIdProvider);
+  final viewerId = ref.watch(authenticatedUserIdProvider);
+  final ownerId = ref.watch(currentBusinessProvider).value?.ownerUserId;
+  final assigned = ref.watch(assignedBranchesByUserProvider);
   ref.watch(hrRosterSyncProvider); // loads other members' names once
   final labels =
       ref.watch(roleLabelsProvider).value ?? const <String, String>{};
@@ -80,20 +93,30 @@ final hrPeopleProvider = StreamProvider<List<HrPerson>>((ref) {
       );
 
   return query.watch().map((rows) {
-    final list = rows.map((row) {
-      final m = row.readTable(db.businessMembers);
-      final u = row.readTableOrNull(db.users);
-      final display = (u?.displayName ?? '').trim();
-      final email = (u?.email ?? '').trim();
-      final name = display.isNotEmpty
-          ? display
-          : (email.isNotEmpty ? email.split('@').first : 'Team member');
-      return HrPerson(
-        userId: m.userId,
-        name: name,
-        roleLabel: roleLabelFor(labels, m.role),
-      );
-    }).toList();
+    final list = rows
+        .map((row) {
+          final m = row.readTable(db.businessMembers);
+          final u = row.readTableOrNull(db.users);
+          final display = (u?.displayName ?? '').trim();
+          final email = (u?.email ?? '').trim();
+          final name = display.isNotEmpty
+              ? display
+              : (email.isNotEmpty ? email.split('@').first : 'Team member');
+          return HrPerson(
+            userId: m.userId,
+            name: name,
+            roleLabel: roleLabelFor(labels, m.role),
+          );
+        })
+        .where((person) {
+          return employeeVisibleToViewer(
+            employeeId: person.userId,
+            viewerId: viewerId,
+            ownerId: ownerId,
+            assigned: assigned,
+          );
+        })
+        .toList();
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return list;
   });
@@ -121,10 +144,10 @@ class HrService {
   // ---------------- attendance ----------------
 
   Future<void> clockIn({
-  required String businessId,
-  required String userId,
-  String? branchId, // NEW
-}) async {
+    required String businessId,
+    required String userId,
+    String? branchId, // NEW
+  }) async {
     final open =
         await (db.select(db.attendanceRecords)..where(
               (a) =>
@@ -136,19 +159,20 @@ class HrService {
     if (open.isNotEmpty) throw StateError('You are already clocked in.');
 
     final now = DateTime.now();
-    await db.into(db.attendanceRecords).insert(
-    AttendanceRecordsCompanion.insert(
-      id: _uuid.v4(),
-      businessId: businessId,
-      userId: userId,
-      workDate: dateOnly(now),
-      clockIn: now,
-      branchId: Value(branchId), // NEW
-      createdBy: Value(userId),
-    ),
-  );
-}
-
+    await db
+        .into(db.attendanceRecords)
+        .insert(
+          AttendanceRecordsCompanion.insert(
+            id: _uuid.v4(),
+            businessId: businessId,
+            userId: userId,
+            workDate: dateOnly(now),
+            clockIn: now,
+            branchId: Value(branchId), // NEW
+            createdBy: Value(userId),
+          ),
+        );
+  }
 
   Future<void> clockOut(String recordId, {int breakMinutes = 0}) async {
     final rec = await (db.select(
@@ -172,17 +196,17 @@ class HrService {
     );
   }
 
-Future<void> addManualAttendance({
-  required String businessId,
-  required String userId,
-  required DateTime date,
-  required int inMinutes,
-  required int outMinutes,
-  required int breakMinutes,
-  String? note,
-  String? enteredBy,
-  String? branchId, // NEW
-}) async {
+  Future<void> addManualAttendance({
+    required String businessId,
+    required String userId,
+    required DateTime date,
+    required int inMinutes,
+    required int outMinutes,
+    required int breakMinutes,
+    String? note,
+    String? enteredBy,
+    String? branchId, // NEW
+  }) async {
     if (outMinutes <= inMinutes) {
       throw StateError('The time out must be after the time in.');
     }
@@ -677,6 +701,68 @@ final myAttendanceProvider = StreamProvider<List<AttendanceRecord>>((ref) {
       .watch();
 });
 
+/// All attendance records for one employee in the selected business,
+/// newest first.
+final employeeAttendanceProvider = StreamProvider.autoDispose
+    .family<List<AttendanceRecord>, String>((ref, userId) {
+      final db = ref.watch(databaseProvider);
+      final b = ref.watch(selectedBusinessIdProvider);
+      return (db.select(db.attendanceRecords)
+            ..where((a) => a.businessId.equals(b) & a.userId.equals(userId))
+            ..orderBy([(a) => OrderingTerm.desc(a.clockIn)]))
+          .watch();
+    });
+
+/// All leave requests for one employee, newest first.
+final employeeLeaveProvider = StreamProvider.autoDispose
+    .family<List<LeaveRequest>, String>((ref, userId) {
+      final db = ref.watch(databaseProvider);
+      final b = ref.watch(selectedBusinessIdProvider);
+      return (db.select(db.leaveRequests)
+            ..where((l) => l.businessId.equals(b) & l.userId.equals(userId))
+            ..orderBy([(l) => OrderingTerm.desc(l.startDate)]))
+          .watch()
+          .map(
+            (rows) =>
+                rows.where((row) => _visibleEmployee(ref, row.userId)).toList(),
+          );
+    });
+
+class EmployeePayEntry {
+  const EmployeePayEntry({required this.item, required this.run});
+  final PayrollItem item;
+  final PayrollRun run;
+}
+
+/// Every pay-run line for one employee, newest period first.
+final employeePayHistoryProvider = StreamProvider.autoDispose
+    .family<List<EmployeePayEntry>, String>((ref, userId) {
+      final db = ref.watch(databaseProvider);
+      final b = ref.watch(selectedBusinessIdProvider);
+      final query =
+          db.select(db.payrollItems).join([
+              innerJoin(
+                db.payrollRuns,
+                db.payrollRuns.id.equalsExp(db.payrollItems.runId),
+              ),
+            ])
+            ..where(
+              db.payrollItems.userId.equals(userId) &
+                  db.payrollRuns.businessId.equals(b),
+            )
+            ..orderBy([OrderingTerm.desc(db.payrollRuns.periodStart)]);
+      return query.watch().map(
+        (rows) => [
+          for (final r in rows)
+            if (_visibleEmployee(ref, r.readTable(db.payrollItems).userId))
+              EmployeePayEntry(
+                item: r.readTable(db.payrollItems),
+                run: r.readTable(db.payrollRuns),
+              ),
+        ],
+      );
+    });
+
 /// Everyone currently clocked in.
 final openClocksProvider = StreamProvider<List<AttendanceRecord>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -729,7 +815,11 @@ final leaveRequestsProvider = StreamProvider<List<LeaveRequest>>((ref) {
   return (db.select(db.leaveRequests)
         ..where((l) => l.businessId.equals(b))
         ..orderBy([(l) => OrderingTerm.desc(l.createdAt)]))
-      .watch();
+      .watch()
+      .map(
+        (rows) =>
+            rows.where((row) => _visibleEmployee(ref, row.userId)).toList(),
+      );
 });
 
 final payrollProfilesProvider = StreamProvider<List<PayrollProfile>>((ref) {
@@ -737,16 +827,34 @@ final payrollProfilesProvider = StreamProvider<List<PayrollProfile>>((ref) {
   final b = ref.watch(selectedBusinessIdProvider);
   return (db.select(
     db.payrollProfiles,
-  )..where((p) => p.businessId.equals(b))).watch();
+  )..where((p) => p.businessId.equals(b))).watch().map(
+    (rows) => rows.where((row) => _visibleEmployee(ref, row.userId)).toList(),
+  );
 });
 
 final payrollRunsProvider = StreamProvider<List<PayrollRun>>((ref) {
   final db = ref.watch(databaseProvider);
   final b = ref.watch(selectedBusinessIdProvider);
-  return (db.select(db.payrollRuns)
-        ..where((r) => r.businessId.equals(b))
-        ..orderBy([(r) => OrderingTerm.desc(r.periodStart)]))
-      .watch();
+  final query =
+      db.select(db.payrollRuns).join([
+          leftOuterJoin(
+            db.payrollItems,
+            db.payrollItems.runId.equalsExp(db.payrollRuns.id),
+          ),
+        ])
+        ..where(db.payrollRuns.businessId.equals(b))
+        ..orderBy([OrderingTerm.desc(db.payrollRuns.periodStart)]);
+  return query.watch().map((rows) {
+    final visible = <String, PayrollRun>{};
+    for (final row in rows) {
+      final run = row.readTable(db.payrollRuns);
+      final item = row.readTableOrNull(db.payrollItems);
+      if (item != null && _visibleEmployee(ref, item.userId)) {
+        visible[run.id] = run;
+      }
+    }
+    return visible.values.toList();
+  });
 });
 
 final payrollItemsProvider = StreamProvider.family<List<PayrollItem>, String>((
@@ -757,7 +865,11 @@ final payrollItemsProvider = StreamProvider.family<List<PayrollItem>, String>((
   return (db.select(db.payrollItems)
         ..where((i) => i.runId.equals(runId))
         ..orderBy([(i) => OrderingTerm.asc(i.userName)]))
-      .watch();
+      .watch()
+      .map(
+        (rows) =>
+            rows.where((row) => _visibleEmployee(ref, row.userId)).toList(),
+      );
 });
 
 /// Shifts from the last 60 days onward, for lateness checks.

@@ -41,6 +41,7 @@ enum BosPermission {
   salesDiscount('sales.discount'),
   salesStockOnly('sales.stock_only'),
   salesOnCredit('sales.on_credit'),
+  onlineStoreManage('online_store.manage'),
 
   customersView('customers.view'),
   customersCreate('customers.create'),
@@ -170,6 +171,7 @@ abstract final class RolePermissions {
       // BosPermission.dashboardView,
       BosPermission.salesView,
       BosPermission.salesCreate,
+      BosPermission.onlineStoreManage,
       BosPermission.customersView,
       BosPermission.customersCreate,
       BosPermission.hrSelf,

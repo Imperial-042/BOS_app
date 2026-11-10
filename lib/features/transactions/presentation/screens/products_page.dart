@@ -21,6 +21,7 @@ import 'package:bos_application/features/transactions/presentation/providers/pro
 import 'package:bos_application/features/transactions/presentation/widgets/product_catalog_widgets.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
 import 'package:bos_application/features/customer/presentation/customer_storefront_management_screen.dart';
+import 'product_options_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -31,6 +32,7 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 import '../../domain/production_service.dart';
 import '../../domain/costing_service.dart';
+import '../../domain/product_variants.dart';
 import '../../domain/unit_options.dart';
 import '../../../transactions/presentation/screens/transaction_page.dart'
     show ledgerVersionProvider, kCurrentBusinessId, ledgerServiceProvider;
@@ -158,6 +160,51 @@ final suppliesForPickerProvider = StreamProvider<List<Supply>>((ref) {
       .watch();
 });
 
+final addOnGroupsProvider = FutureProvider<List<ProductOptionGroup>>((
+  ref,
+) async {
+  ref.watch(productVariantVersionProvider);
+  final db = ref.watch(databaseProvider);
+  final businessId = ref.watch(selectedBusinessIdProvider);
+  final rows = await db
+      .customSelect(
+        'SELECT g.*, p.name AS product_name '
+        'FROM product_option_groups g '
+        'JOIN products p ON p.id = g.product_id '
+        'WHERE g.business_id = ? AND g.is_active = 1 AND g.is_add_on = 1 '
+        'ORDER BY p.name, g.sort_order, g.name',
+        variables: [Variable.withString(businessId)],
+      )
+      .get();
+  final variantService = ref.read(productVariantServiceProvider);
+  final groupsByProduct = <String, List<ProductOptionGroup>>{};
+  for (final row in rows) {
+    final productId = row.read<String>('product_id');
+    groupsByProduct[productId] ??= await variantService.loadGroups(productId);
+  }
+  return [
+    for (final row in rows)
+      (() {
+        final loaded = groupsByProduct[row.read<String>('product_id')]!
+            .firstWhere((group) => group.id == row.read<String>('id'));
+        return ProductOptionGroup(
+          id: row.read<String>('id'),
+          productId: row.read<String>('product_id'),
+          businessId: row.read<String>('business_id'),
+          name:
+              '${row.read<String>('product_name')} · ${row.read<String>('name')}',
+          required: row.read<bool>('is_required'),
+          multiple: row.read<bool>('allow_multiple'),
+          minSelections: row.read<int>('min_selections'),
+          maxSelections: row.read<int?>('max_selections'),
+          isAddOn: true,
+          sortOrder: row.read<int>('sort_order'),
+          choices: loaded.choices.where((choice) => choice.isActive).toList(),
+        );
+      })(),
+  ];
+});
+
 // ============================================================
 // PAGE — Products list
 // ============================================================
@@ -179,95 +226,111 @@ class ProductsPage extends ConsumerWidget {
     final listingsAsync = ref.watch(productListingsProvider);
     final totalAsync = ref.watch(productTotalCountProvider);
 
-    return Scaffold(
-      backgroundColor: scheme.surface,
-      appBar: AppBar(
-        titleSpacing: 20,
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        backgroundColor: scheme.surface,
+        appBar: AppBar(
+          titleSpacing: 20,
+          title: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Products & Recipes',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
+              SizedBox(height: 2),
+              Text(
+                'Production-aware inventory',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          actions: [
+            if (ref.watch(canProvider(BosPermission.onlineStoreManage)))
+              IconButton(
+                tooltip: 'Online store and orders',
+                icon: const Icon(Icons.storefront_outlined),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const CustomerStorefrontManagementScreen(),
+                  ),
+                ),
+              ),
+          ],
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Products'),
+              Tab(text: 'Add-ons'),
+            ],
+          ),
+        ),
+        body: TabBarView(
           children: [
-            Text(
-              'Products & Recipes',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            listingsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Error: $e')),
+              data: (listings) {
+                // True when zero products exist in the database at all.
+                final totalCount = totalAsync.maybeWhen(
+                  data: (n) => n,
+                  orElse: () => listings.length,
+                );
+
+                if (totalCount == 0) {
+                  return _EmptyState(
+                    canAdd: canCreate,
+                    onAdd: () => _openAddProductSheet(context, ref),
+                  );
+                }
+
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                  children: [
+                    // Search box + category chips + filter/sort button.
+                    ProductFilterBar(
+                      onScan: () => Navigator.of(context).push<String>(
+                        MaterialPageRoute(
+                          builder: (_) => const BarcodeScannerPage(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    if (listings.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: Center(
+                          child: Text(
+                            'No products match your filters.',
+                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      )
+                    else
+                      ...listings.map(
+                        (listing) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _ProductCard(product: listing.product),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
-            SizedBox(height: 2),
-            Text(
-              'Production-aware inventory',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-            ),
+            const _AddOnsTab(),
           ],
         ),
-        actions: [
-          if (ref.watch(canProvider(BosPermission.businessSettings)))
-            IconButton(
-              tooltip: 'Customer storefront and orders',
-              icon: const Icon(Icons.storefront_outlined),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const CustomerStorefrontManagementScreen(),
-                ),
-              ),
-            ),
-        ],
+        floatingActionButton: canCreate
+            ? FloatingActionButton(
+                heroTag: 'add_product',
+                backgroundColor: AppColors.primary,
+                onPressed: () => _openAddProductSheet(context, ref),
+                child: const Icon(Icons.add_rounded, color: Colors.white),
+              )
+            : null,
       ),
-      body: listingsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (listings) {
-          // True when zero products exist in the database at all.
-          final totalCount = totalAsync.maybeWhen(
-            data: (n) => n,
-            orElse: () => listings.length,
-          );
-
-          if (totalCount == 0) {
-            return _EmptyState(
-              canAdd: canCreate,
-              onAdd: () => _openAddProductSheet(context, ref),
-            );
-          }
-
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-            children: [
-              // Search box + category chips + filter/sort button.
-              ProductFilterBar(
-                onScan: () => Navigator.of(context).push<String>(
-                  MaterialPageRoute(builder: (_) => const BarcodeScannerPage()),
-                ),
-              ),
-              const SizedBox(height: 14),
-
-              if (listings.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 32),
-                  child: Center(
-                    child: Text(
-                      'No products match your filters.',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ),
-                )
-              else
-                ...listings.map(
-                  (listing) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _ProductCard(product: listing.product),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-      floatingActionButton: canCreate
-          ? FloatingActionButton(
-              heroTag: 'add_product',
-              backgroundColor: AppColors.primary,
-              onPressed: () => _openAddProductSheet(context, ref),
-              child: const Icon(Icons.add_rounded, color: Colors.white),
-            )
-          : null,
     );
   }
 
@@ -279,6 +342,61 @@ class ProductsPage extends ConsumerWidget {
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (_) => const _ProductForm(),
+    );
+  }
+}
+
+class _AddOnsTab extends ConsumerWidget {
+  const _AddOnsTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final addOns = ref.watch(addOnGroupsProvider);
+    return addOns.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, _) =>
+          Center(child: Text('Unable to load add-ons: $error')),
+      data: (groups) => groups.isEmpty
+          ? const Center(
+              child: Text(
+                'No dedicated add-ons yet. Mark an option group as an add-on to see it here.',
+              ),
+            )
+          : ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              itemCount: groups.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (_, index) {
+                final group = groups[index];
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.add_circle_outline),
+                    title: Text(group.name),
+                    subtitle: Text(
+                      '${group.required ? 'Required' : 'Optional'} · '
+                      '${group.choices.length} choices · '
+                      '${group.choices.map((choice) => choice.name).join(', ')}',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      final db = ref.read(databaseProvider);
+                      final products = await (db.select(
+                        db.products,
+                      )..where((p) => p.id.equals(group.productId))).get();
+                      if (products.isEmpty || !context.mounted) return;
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ProductOptionsPage(product: products.first),
+                        ),
+                      );
+                      ref.invalidate(addOnGroupsProvider);
+                    },
+                  ),
+                );
+              },
+            ),
     );
   }
 }
@@ -450,6 +568,16 @@ class _ProductCard extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Variants and add-ons',
+                icon: const Icon(Icons.tune_rounded),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => ProductOptionsPage(product: product),
+                  ),
+                ),
+              ),
               producibilityAsync.when(
                 data: (result) => _ProducibilityBadge(
                   maxUnits: result.maxUnits,

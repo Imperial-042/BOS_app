@@ -23,8 +23,11 @@ import 'package:bos_application/core/branding/branding.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/database/database_provider.dart';
 import 'package:bos_application/core/supabase/employee_profile_service.dart';
+import 'package:bos_application/core/supabase/supabase_service.dart';
 import 'package:bos_application/features/auth/presentation/screens/users_roles_screen.dart';
 import 'package:bos_application/features/branches/branches_screen.dart';
+import 'package:bos_application/features/people/hr_providers.dart';
+import 'package:bos_application/features/people/member_history.dart';
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
     show ledgerVersionProvider;
 import 'package:drift/drift.dart' hide Column, Table;
@@ -148,6 +151,20 @@ final _rosterProvider = FutureProvider.autoDispose<List<_Member>>((ref) async {
   final db = ref.watch(databaseProvider);
   final me = ref.watch(authenticatedUserIdProvider);
   final ownerId = ref.watch(currentBusinessProvider).value?.ownerUserId;
+  Set<String>? visibleCloudIds;
+  final client = ref.read(supabaseClientProvider);
+  try {
+    final rows = await client.rpc(
+      'bos_visible_employee_ids',
+      params: {'p_business': businessId},
+    );
+    visibleCloudIds = {
+      for (final row in rows)
+        if (row['user_id'] is String) row['user_id'] as String,
+    };
+  } on Object {
+    // Offline or before the migration is deployed: use the local scope.
+  }
 
   // Cloud profiles are best effort: offline or blocked by permissions, the
   // roster still loads from the local members table.
@@ -174,35 +191,41 @@ final _rosterProvider = FutureProvider.autoDispose<List<_Member>>((ref) async {
 
   final rows = await query.get();
 
-  final members = rows.map((row) {
-    final m = row.readTable(db.businessMembers);
-    final u = row.readTableOrNull(db.users);
-    final userId = _s(m.userId);
-    final profile = profiles[userId];
+  final members = rows
+      .where((row) {
+        final userId = _s(row.readTable(db.businessMembers).userId);
+        return visibleCloudIds == null || visibleCloudIds.contains(userId);
+      })
+      .map((row) {
+        final m = row.readTable(db.businessMembers);
+        final u = row.readTableOrNull(db.users);
+        final userId = _s(m.userId);
+        final profile = profiles[userId];
 
-    final email = _s(u?.email);
-    final profileName = _s(profile?.fullName);
-    final rawName = _s(u?.displayName);
-    final name = profileName.isNotEmpty
-        ? profileName
-        : rawName.isNotEmpty
-        ? rawName
-        : (email.isNotEmpty ? email.split('@').first : 'Team member');
+        final email = _s(u?.email);
+        final profileName = _s(profile?.fullName);
+        final rawName = _s(u?.displayName);
+        final name = profileName.isNotEmpty
+            ? profileName
+            : rawName.isNotEmpty
+            ? rawName
+            : (email.isNotEmpty ? email.split('@').first : 'Team member');
 
-    final roleId = _s(m.role);
-    return _Member(
-      userId: userId,
-      name: name,
-      email: email,
-      roleId: roleId,
-      roleLabel: roleLabelFor(labels, roleId),
-      status: _s(m.status),
-      joinedAt: m.joinedAt,
-      isOwner: ownerId != null && userId == ownerId,
-      isYou: me != null && userId == me,
-      profile: profile,
-    );
-  }).toList();
+        final roleId = _s(m.role);
+        return _Member(
+          userId: userId,
+          name: name,
+          email: email,
+          roleId: roleId,
+          roleLabel: roleLabelFor(labels, roleId),
+          status: _s(m.status),
+          joinedAt: m.joinedAt,
+          isOwner: ownerId != null && userId == ownerId,
+          isYou: me != null && userId == me,
+          profile: profile,
+        );
+      })
+      .toList();
 
   members.sort((a, b) {
     if (a.isOwner != b.isOwner) return a.isOwner ? -1 : 1;
@@ -241,6 +264,29 @@ final _assignedBranchesProvider = Provider<Map<String, List<Branch>>>((ref) {
 
 bool _unrestricted(_Member m, Map<String, List<Branch>> assigned) =>
     m.isOwner || (assigned[m.userId]?.isEmpty ?? true);
+
+List<_Member> _visibleToViewer({
+  required List<_Member> members,
+  required Map<String, List<Branch>> assigned,
+  required String? viewerId,
+  required String? ownerId,
+}) {
+  if (viewerId == null || viewerId == ownerId) return members;
+
+  final viewerBranches = {
+    for (final branch in assigned[viewerId] ?? const <Branch>[]) branch.id,
+  };
+  if (viewerBranches.isEmpty) return members;
+
+  return [
+    for (final member in members)
+      if (_unrestricted(member, assigned) ||
+          (assigned[member.userId] ?? const <Branch>[]).any(
+            (branch) => viewerBranches.contains(branch.id),
+          ))
+        member,
+  ];
+}
 
 // ============================================================
 // SCREEN
@@ -316,6 +362,8 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
     final async = ref.watch(_rosterProvider);
     final branches = ref.watch(branchesProvider); // active, main first
     final assigned = ref.watch(_assignedBranchesProvider);
+    final viewerId = ref.watch(authenticatedUserIdProvider);
+    final ownerId = ref.watch(currentBusinessProvider).value?.ownerUserId;
     final canManageBranches = ref.watch(
       canProvider(BosPermission.branchManage),
     );
@@ -335,26 +383,56 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
         error: (e, _) =>
             _ErrorState(onRetry: () => ref.invalidate(_rosterProvider)),
         data: (all) {
-          if (all.isEmpty) {
+          final visible = _visibleToViewer(
+            members: all,
+            assigned: assigned,
+            viewerId: viewerId,
+            ownerId: ownerId,
+          );
+          final viewerBranchIds = {
+            for (final branch in assigned[viewerId] ?? const <Branch>[])
+              branch.id,
+          };
+          final visibleBranches =
+              viewerId == null || viewerId == ownerId || viewerBranchIds.isEmpty
+              ? branches
+              : [
+                  for (final branch in branches)
+                    if (viewerBranchIds.contains(branch.id)) branch,
+                ];
+          final visibleMulti = visibleBranches.length >= 2;
+
+          if (visible.isEmpty) {
             return _EmptyState(
               onRefresh: () => ref.invalidate(_rosterProvider),
             );
           }
 
-          final shown = _apply(all, assigned, branchFilter, multi);
-          final roles = <String>{for (final m in all) m.roleLabel}.toList()
+          final scopedBranchFilter =
+              branchFilter != null &&
+                  (branchFilter == _anyBranchKey ||
+                      visibleBranches.any((b) => b.id == branchFilter))
+              ? branchFilter
+              : null;
+          final shown = _apply(
+            visible,
+            assigned,
+            scopedBranchFilter,
+            visibleMulti,
+          );
+          final roles = <String>{for (final m in visible) m.roleLabel}.toList()
             ..sort();
-          final hasInactive = all.any((m) => !m.isActive);
+          final hasInactive = visible.any((m) => !m.isActive);
           final filtering =
               _query.trim().isNotEmpty ||
               _roleFilter != null ||
-              branchFilter != null;
+              scopedBranchFilter != null;
 
           // Strip data: active members per branch + unrestricted people.
           final byBranch = <String, List<_Member>>{
             for (final b in branches)
               b.id: [
-                for (final m in all)
+                for (final m in visible)
                   if (m.isActive &&
                       !m.isOwner &&
                       (assigned[m.userId]?.any((x) => x.id == b.id) ?? false))
@@ -362,7 +440,7 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
               ],
           };
           final unrestricted = [
-            for (final m in all)
+            for (final m in visible)
               if (m.isActive && _unrestricted(m, assigned)) m,
           ];
 
@@ -383,8 +461,8 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
                       padding: EdgeInsets.fromLTRB(pad, 16, pad, 0),
                       sliver: SliverToBoxAdapter(
                         child: _TeamHero(
-                          members: all,
-                          branchCount: multi ? branches.length : 0,
+                          members: visible,
+                          branchCount: multi ? visibleBranches.length : 0,
                           onBranches: canManageBranches
                               ? () => Navigator.push(
                                   context,
@@ -396,17 +474,17 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
                         ),
                       ),
                     ),
-                    if (multi)
+                    if (visibleMulti)
                       SliverToBoxAdapter(
                         child: Padding(
                           padding: const EdgeInsets.only(top: 18),
                           child: MediaQuery.withClampedTextScaling(
                             maxScaleFactor: 1.2,
                             child: _BranchStrip(
-                              branches: branches,
+                              branches: visibleBranches,
                               byBranch: byBranch,
                               unrestricted: unrestricted,
-                              selected: branchFilter,
+                              selected: scopedBranchFilter,
                               pad: pad,
                               onSelect: (v) => setState(
                                 () => _branchFilter = _branchFilter == v
@@ -428,7 +506,7 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
                           hasInactive: hasInactive,
                           selected: _roleFilter,
                           onSelect: (v) => setState(() => _roleFilter = v),
-                          showViewToggle: multi,
+                          showViewToggle: visibleMulti,
                           byBranch: _byBranch,
                           onToggleView: (v) => setState(() => _byBranch = v),
                         ),
@@ -1509,7 +1587,7 @@ class _Tag extends StatelessWidget {
   }
 }
 
-class _MemberCard extends StatelessWidget {
+class _MemberCard extends ConsumerWidget {
   const _MemberCard({
     required this.member,
     required this.branches,
@@ -1521,69 +1599,76 @@ class _MemberCard extends StatelessWidget {
   final bool showBranches;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final accent = member.isActive ? _roleColor(member.roleId) : scheme.outline;
     final jobTitle = _s(member.profile?.jobTitle);
+    final live = ref.watch(
+      openClocksProvider.select(
+        (a) => a.value?.any((r) => r.userId == member.userId) ?? false,
+      ),
+    );
 
-    final branchTags = <Widget>[];
-    if (showBranches) {
-      if (member.isOwner || branches.isEmpty) {
-        branchTags.add(
-          const _Tag('Any branch', _slate, icon: Icons.all_inclusive_rounded),
-        );
-      } else {
-        for (final b in branches.take(2)) {
-          branchTags.add(
+    final tags = <Widget>[
+      if (member.isOwner)
+        const _Tag('Owner', _amber, icon: Icons.workspace_premium_rounded)
+      else
+        _Tag(member.roleLabel, accent),
+      if (!member.isActive) _Tag(member.statusLabel, member.statusColor),
+      if (showBranches)
+        if (member.isOwner || branches.isEmpty)
+          const _Tag('Any branch', _slate, icon: Icons.all_inclusive_rounded)
+        else ...[
+          for (final b in branches.take(2))
             _Tag(b.name, _branchColor(b), icon: Icons.storefront_outlined),
-          );
-        }
-        if (branches.length > 2) {
-          branchTags.add(_Tag('+${branches.length - 2}', _slate));
-        }
-      }
-    }
+          if (branches.length > 2) _Tag('+${branches.length - 2}', _slate),
+        ],
+    ];
 
     return Opacity(
-      opacity: member.isActive ? 1 : 0.72,
-      child: Container(
+      opacity: member.isActive ? 1 : 0.6,
+      child: Material(
+        color: scheme.surface,
         clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: scheme.surface,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.5),
+          side: BorderSide(
+            color: live
+                ? _green.withValues(alpha: 0.55)
+                : scheme.outlineVariant.withValues(alpha: 0.45),
+            width: live ? 1.4 : 1,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            onTap: () => _showMemberSheet(context, member),
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(width: 5, color: accent),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-                      child: Row(
+        child: InkWell(
+          onTap: () => _showMemberSheet(context, member),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(2.5),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: live ? _green : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: _Avatar(member: member, radius: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _Avatar(member: member, showStatus: true),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
                                   member.name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -1592,59 +1677,38 @@ class _MemberCard extends StatelessWidget {
                                     letterSpacing: -0.2,
                                   ),
                                 ),
-                                if (jobTitle.isNotEmpty)
-                                  Text(
-                                    jobTitle,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                if (member.email.isNotEmpty)
-                                  Text(
-                                    member.email,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: scheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                const SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  children: [
-                                    if (member.isOwner)
-                                      const _Tag(
-                                        'Owner',
-                                        _amber,
-                                        icon: Icons.workspace_premium_rounded,
-                                      ),
-                                    _Tag(member.roleLabel, accent),
-                                    if (!member.isActive)
-                                      _Tag(
-                                        member.statusLabel,
-                                        member.statusColor,
-                                      ),
-                                    if (member.isYou)
-                                      _Tag('You', scheme.tertiary),
-                                    ...branchTags,
-                                  ],
-                                ),
+                              ),
+                              if (member.isYou) ...[
+                                const SizedBox(width: 6),
+                                _Tag('You', scheme.tertiary),
                               ],
-                            ),
+                            ],
                           ),
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            color: scheme.onSurfaceVariant,
+                          Text(
+                            jobTitle.isNotEmpty ? jobTitle : member.roleLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
+                    if (live)
+                      const _Tag('On the clock', _green, icon: Icons.circle)
+                    else
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                  ],
+                ),
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(spacing: 6, runSpacing: 6, children: tags),
                 ],
-              ),
+              ],
             ),
           ),
         ),
@@ -1663,7 +1727,13 @@ void _showMemberSheet(BuildContext context, _Member member) {
     isScrollControlled: true,
     useSafeArea: true,
     clipBehavior: Clip.antiAlias,
-    constraints: const BoxConstraints(maxWidth: 600),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    constraints: BoxConstraints(
+      maxWidth: 600,
+      maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+    ),
     builder: (_) => _MemberSheet(member: member),
   );
 }
@@ -1685,6 +1755,8 @@ class _MemberSheet extends ConsumerWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final canManageUsers = ref.watch(canProvider(BosPermission.usersView));
+    final canHr = ref.watch(canProvider(BosPermission.hrManage));
+    final canPay = ref.watch(canProvider(BosPermission.employeesManage));
     final multi = ref.watch(branchesProvider).length >= 2;
     final p = member.profile;
 
@@ -1734,96 +1806,110 @@ class _MemberSheet extends ConsumerWidget {
         ),
     ];
 
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Header stays pinned.
+        _SheetHeader(member: member),
+
+        // Only the details scroll.
         Flexible(
           child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(
+              parent: AlwaysScrollableScrollPhysics(),
+            ),
+            padding: EdgeInsets.fromLTRB(16, 14, 16, 24 + bottomInset),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _SheetHeader(member: member),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (member.email.isNotEmpty)
-                            _QuickAction(
-                              icon: Icons.email_outlined,
-                              label: 'Copy email',
-                              onTap: () =>
-                                  _copy(context, 'Email', member.email),
-                            ),
-                          if (phone != null)
-                            _QuickAction(
-                              icon: Icons.phone_outlined,
-                              label: 'Copy phone',
-                              onTap: () => _copy(context, 'Phone', phone),
-                            ),
-                          if (canManageUsers && !member.isYou)
-                            _QuickAction(
-                              icon: Icons.manage_accounts_outlined,
-                              label: 'Manage access',
-                              onTap: () {
-                                final nav = Navigator.of(context);
-                                nav.pop();
-                                nav.push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => const UsersRolesScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                        ],
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (member.email.isNotEmpty)
+                      _QuickAction(
+                        icon: Icons.email_outlined,
+                        label: 'Copy email',
+                        onTap: () => _copy(context, 'Email', member.email),
                       ),
-                      if (multi) ...[
-                        const SizedBox(height: 22),
-                        _BranchAccess(member: member),
-                      ],
-                      const SizedBox(height: 22),
-                      _DetailGroup(title: 'Account', rows: account),
-                      const SizedBox(height: 18),
-                      if (personal.isNotEmpty)
-                        _DetailGroup(title: 'Personal details', rows: personal)
-                      else
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHigh,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.info_outline_rounded,
-                                size: 20,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  member.isYou
-                                      ? 'Complete your profile to see your '
-                                            'personal details here.'
-                                      : 'No personal details have been added '
-                                            'by this member yet, or you don\'t '
-                                            'have access to them.',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ),
-                            ],
+                    if (phone != null)
+                      _QuickAction(
+                        icon: Icons.phone_outlined,
+                        label: 'Copy phone',
+                        onTap: () => _copy(context, 'Phone', phone),
+                      ),
+                    if (canManageUsers && !member.isYou)
+                      _QuickAction(
+                        icon: Icons.manage_accounts_outlined,
+                        label: 'Manage access',
+                        onTap: () {
+                          final nav = Navigator.of(context);
+                          nav.pop();
+                          nav.push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const UsersRolesScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+                if (multi) ...[
+                  const SizedBox(height: 22),
+                  _BranchAccess(member: member),
+                ],
+                Builder(
+                  builder: (_) {
+                    final kinds = [
+                      if (canHr || member.isYou) MemberHistoryKind.attendance,
+                      if (canPay || member.isYou) MemberHistoryKind.pay,
+                      if (canHr || member.isYou) MemberHistoryKind.leave,
+                    ];
+                    if (kinds.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 22),
+                      child: MemberHistory(userId: member.userId, kinds: kinds),
+                    );
+                  },
+                ),
+                const SizedBox(height: 22),
+                _DetailGroup(title: 'Account', rows: account),
+                const SizedBox(height: 18),
+                if (personal.isNotEmpty)
+                  _DetailGroup(title: 'Personal details', rows: personal)
+                else
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          size: 20,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            member.isYou
+                                ? 'Complete your profile to see your '
+                                      'personal details here.'
+                                : 'No personal details have been added '
+                                      'by this member yet, or you don\'t '
+                                      'have access to them.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -1840,102 +1926,136 @@ class _SheetHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final jobTitle = _s(member.profile?.jobTitle);
+    final scheme = Theme.of(context).colorScheme;
+    final subtitle = _s(member.profile?.jobTitle).isNotEmpty
+        ? _s(member.profile?.jobTitle)
+        : member.email;
 
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: AppColors.heroGradient,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Stack(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned(
-            top: -60,
-            right: -40,
-            child: Container(
-              width: 190,
-              height: 190,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.08),
-              ),
+          // Drag handle
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: scheme.outlineVariant,
+              borderRadius: BorderRadius.circular(4),
             ),
           ),
-          Positioned(
-            bottom: -40,
-            left: -30,
-            child: Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.06),
+          const SizedBox(height: 12),
+
+          // Compact profile card
+          Container(
+            width: double.infinity,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: AppColors.heroGradient,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.22),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
-            child: Column(
+            child: Stack(
               children: [
-                Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: _Avatar(member: member, radius: 38, showStatus: true),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  member.name,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 21,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.4,
-                  ),
-                ),
-                if (jobTitle.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      jobTitle,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.88),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
+                Positioned(
+                  top: -40,
+                  right: -20,
+                  child: Container(
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.09),
                     ),
                   ),
-                const SizedBox(height: 12),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    if (member.isOwner)
-                      const _GlassTag(
-                        'Owner',
-                        icon: Icons.workspace_premium_rounded,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 6, 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                        child: _Avatar(
+                          member: member,
+                          radius: 28,
+                          showStatus: true,
+                        ),
                       ),
-                    _GlassTag(member.roleLabel),
-                    _GlassTag(member.statusLabel),
-                    if (member.isYou) const _GlassTag('You'),
-                  ],
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 2),
+                            Text(
+                              member.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 19,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -0.4,
+                              ),
+                            ),
+                            if (subtitle.isNotEmpty)
+                              Text(
+                                subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                if (member.isOwner)
+                                  const _GlassTag(
+                                    'Owner',
+                                    icon: Icons.workspace_premium_rounded,
+                                  )
+                                else
+                                  _GlassTag(member.roleLabel),
+                                _GlassTag(member.statusLabel),
+                                if (member.isYou) const _GlassTag('You'),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

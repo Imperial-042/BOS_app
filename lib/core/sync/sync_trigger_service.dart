@@ -17,6 +17,7 @@ import 'package:bos_application/features/transactions/domain/pos_session_service
 import 'package:bos_application/features/transactions/presentation/screens/pos_order_state.dart';
 import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:bos_application/core/business/current_business.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -327,9 +328,10 @@ class SyncTriggerService with WidgetsBindingObserver {
         [businessId],
       );
     });
-    kCurrentBusinessId = businessId;
-    _ref.read(ledgerVersionProvider.notifier).state++;
-    _ref.invalidate(selectedBusinessIdProvider);
+       final changed = applyCurrentBusiness(_ref, businessId);
+       // Keep the old behaviour: the ledger version always bumps once, even
+       // when re-selecting the business that is already open.
+       if (!changed) _ref.read(ledgerVersionProvider.notifier).state++;
     _ref.invalidate(currentBusinessMembershipProvider);
     _ref.invalidate(posOrderProvider); // cart
     _ref.invalidate(heldOrdersProvider); // held orders

@@ -710,17 +710,12 @@ class _OrderLineRow extends ConsumerWidget {
       noteColor = Colors.orange.shade800;
     }
 
-    void remove() =>
-        ref.read(posOrderProvider.notifier).removeItem(line.productId);
+    void remove() => ref.read(posOrderProvider.notifier).removeLine(line);
 
     void increase() {
       final ok = ref
           .read(posOrderProvider.notifier)
-          .updateQuantity(
-            line.productId,
-            line.quantity + 1,
-            maxUnits: maxUnits,
-          );
+          .updateLineQuantity(line, line.quantity + 1, maxUnits: maxUnits);
       if (!ok) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -752,7 +747,7 @@ class _OrderLineRow extends ConsumerWidget {
       final target = maxUnits != null && value > maxUnits ? maxUnits : value;
       ref
           .read(posOrderProvider.notifier)
-          .updateQuantity(line.productId, target, maxUnits: maxUnits);
+          .updateLineQuantity(line, target, maxUnits: maxUnits);
 
       if (target != value) {
         ScaffoldMessenger.of(context)
@@ -770,7 +765,7 @@ class _OrderLineRow extends ConsumerWidget {
     }
 
     return Dismissible(
-      key: ValueKey('line-${line.productId}'),
+      key: ValueKey('line-${line.configurationKey}'),
       direction: DismissDirection.endToStart,
       onDismissed: (_) => remove(),
       background: Container(
@@ -801,6 +796,20 @@ class _OrderLineRow extends ConsumerWidget {
                       color: unavailable ? scheme.onSurfaceVariant : null,
                     ),
                   ),
+                  if (line.options.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        line.optionsLabel,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 2),
                   Text(
                     note ?? sub,
@@ -831,7 +840,7 @@ class _OrderLineRow extends ConsumerWidget {
                   HapticFeedback.selectionClick();
                   ref
                       .read(posOrderProvider.notifier)
-                      .updateQuantity(line.productId, line.quantity - 1);
+                      .updateLineQuantity(line, line.quantity - 1);
                 },
                 onIncrease: () {
                   HapticFeedback.selectionClick();

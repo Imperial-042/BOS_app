@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to unlock Business OS.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Use your location when you choose a map pin or nearby branch.</string>
 </dict>
 </plist>

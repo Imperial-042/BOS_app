@@ -499,6 +499,7 @@ class _PaymentSheetState extends ConsumerState<_PaymentSheet> {
             unit: l.unit,
             unitPriceCents: l.unitPriceCents,
             quantity: l.quantity.toDouble(),
+            options: l.options,
           ),
         )
         .toList();

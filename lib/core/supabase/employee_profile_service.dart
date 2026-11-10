@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'supabase_service.dart';
+import '../location/location_models.dart';
 
 class EmployeeProfileException implements Exception {
   final String message;
@@ -21,6 +22,7 @@ class EmployeeProfile {
   final String? jobTitle;
   final String? phone;
   final String? address;
+  final GeoCoordinate? coordinate;
   final DateTime? birthDate;
   final String? emergencyContactName;
   final String? emergencyContactPhone;
@@ -32,6 +34,7 @@ class EmployeeProfile {
     this.jobTitle,
     this.phone,
     this.address,
+    this.coordinate,
     this.birthDate,
     this.emergencyContactName,
     this.emergencyContactPhone,
@@ -46,6 +49,14 @@ class EmployeeProfile {
       jobTitle: m['job_title'] as String?,
       phone: m['phone'] as String?,
       address: m['address'] as String?,
+      coordinate: m['latitude'] == null || m['longitude'] == null
+          ? null
+          : GeoCoordinate(
+              latitude: (m['latitude'] as num).toDouble(),
+              longitude: (m['longitude'] as num).toDouble(),
+              accuracyMeters: (m['location_accuracy_meters'] as num?)
+                  ?.toDouble(),
+            ),
       birthDate: date(m['birth_date']),
       emergencyContactName: m['emergency_contact_name'] as String?,
       emergencyContactPhone: m['emergency_contact_phone'] as String?,
@@ -73,6 +84,9 @@ class EmployeeProfile {
       'job_title': jobTitle,
       'phone': phone,
       'address': address,
+      'latitude': coordinate?.latitude,
+      'longitude': coordinate?.longitude,
+      'location_accuracy_meters': coordinate?.accuracyMeters,
       'birth_date': birth,
       'emergency_contact_name': emergencyContactName,
       'emergency_contact_phone': emergencyContactPhone,

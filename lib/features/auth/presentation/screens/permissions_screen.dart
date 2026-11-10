@@ -36,6 +36,7 @@ import '../../../../core/database/database_provider.dart';
 const Map<String, String> _groupLabels = {
   'dashboard': 'Dashboard',
   'sales': 'Sales',
+  'online_store': 'Online store',
   'customers': 'Customers',
   'inventory': 'Inventory',
   'purchasing': 'Purchasing',
@@ -124,6 +125,10 @@ const Map<BosPermission, (String, String)> _info = {
   BosPermission.salesOnCredit: (
     'Sell on credit',
     'Let customers pay later (creates receivables).',
+  ),
+  BosPermission.onlineStoreManage: (
+    'Manage online store',
+    'Publish this branch online, manage its products and handle online orders.',
   ),
   BosPermission.customersView: (
     'View customers',

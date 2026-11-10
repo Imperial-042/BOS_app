@@ -97,6 +97,24 @@ bool matchesBranchFilter(
   return mine.any((b) => b.id == filter);
 }
 
+bool employeeVisibleToViewer({
+  required String employeeId,
+  required String? viewerId,
+  required String? ownerId,
+  required Map<String, List<Branch>> assigned,
+}) {
+  if (viewerId == null || viewerId == ownerId || employeeId == viewerId) {
+    return true;
+  }
+  final viewerBranches = {
+    for (final branch in assigned[viewerId] ?? const <Branch>[]) branch.id,
+  };
+  if (viewerBranches.isEmpty) return true;
+  final employeeBranches = assigned[employeeId] ?? const <Branch>[];
+  return employeeBranches.isEmpty ||
+      employeeBranches.any((branch) => viewerBranches.contains(branch.id));
+}
+
 // ----------------------------------------------------------------- tags --
 
 class BranchTag extends StatelessWidget {
@@ -206,7 +224,11 @@ class BranchFilterChips extends StatelessWidget {
           showCheckmark: false,
           selected: isSelected,
           selectedColor: (color ?? scheme.primary).withValues(alpha: 0.16),
-          avatar: Icon(icon, size: 16, color: isSelected ? color ?? scheme.primary : c),
+          avatar: Icon(
+            icon,
+            size: 16,
+            color: isSelected ? color ?? scheme.primary : c,
+          ),
           label: Text(label),
           onSelected: (_) =>
               onSelect(value != null && selected == value ? null : value),
@@ -309,7 +331,7 @@ class BranchStatStrip extends StatelessWidget {
             ),
           ),
           SizedBox(
-            height: 128,
+            height: 140,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: EdgeInsets.symmetric(horizontal: pad),
@@ -385,8 +407,8 @@ class _StatCard extends StatelessWidget {
                 Row(
                   children: [
                     Container(
-                      width: 32,
-                      height: 32,
+                      width: 30,
+                      height: 30,
                       decoration: BoxDecoration(
                         color: color.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(10),

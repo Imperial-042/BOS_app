@@ -24,6 +24,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+bool _sameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// "Mon, Oct 26 · 8:00 AM"
+String _stamp(DateTime d) =>
+    '${DateFormat('EEE, MMM d').format(d)} · ${fmtTime(d)}';
+
 class AttendanceScreen extends ConsumerWidget {
   const AttendanceScreen({super.key});
 
@@ -517,6 +524,7 @@ class _RecordTile extends StatelessWidget {
     this.role,
     this.lateMinutes,
     this.onDelete,
+    this.onTap,
     this.showBar = false,
     this.branch,
   });
@@ -526,9 +534,8 @@ class _RecordTile extends StatelessWidget {
   final String? role;
   final int? lateMinutes;
   final VoidCallback? onDelete;
+  final VoidCallback? onTap;
   final bool showBar;
-
-  /// Shown as a tag under the times (null hides it).
   final Branch? branch;
 
   @override
@@ -536,11 +543,7 @@ class _RecordTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final open = rec.clockOut == null;
     final mins = workedMinutes(rec.clockIn, rec.clockOut, rec.breakMinutes);
-    final range =
-        '${fmtTime(rec.clockIn)} – ${open ? 'now' : fmtTime(rec.clockOut!)}';
-    final brk = rec.breakMinutes > 0 ? ' · ${rec.breakMinutes}m break' : '';
     final late = (lateMinutes ?? 0) > 0;
-    final roleText = (role ?? '').isEmpty ? '' : '$role · ';
     final lateText = late
         ? (lateMinutes! >= 60
               ? '${lateMinutes! ~/ 60}h ${lateMinutes! % 60}m'
@@ -548,87 +551,148 @@ class _RecordTile extends StatelessWidget {
         : '';
     final b = branch;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-      child: Row(
-        children: [
-          name == null
-              ? HrDateBadge(rec.workDate)
-              : HrAvatar(name: name!, seed: rec.userId, radius: 24),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name ?? range,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
+    final outText = open
+        ? 'Still on the clock'
+        : _sameDay(rec.clockIn, rec.clockOut!)
+        ? _stamp(rec.clockOut!)
+        : '${_stamp(rec.clockOut!)} (next day)';
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+        child: Row(
+          children: [
+            name == null
+                ? HrDateBadge(rec.workDate)
+                : HrAvatar(name: name!, seed: rec.userId, radius: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (name != null)
+                    Text(
+                      name!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                  if ((role ?? '').isNotEmpty)
+                    Text(
+                      role!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  if (name != null) const SizedBox(height: 4),
+                  _StampLine(
+                    icon: Icons.login_rounded,
+                    label: 'In',
+                    text: _stamp(rec.clockIn),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  name == null
-                      ? '${fmtShortDate(rec.workDate)}$brk'
-                      : '$roleText$range$brk',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: scheme.onSurfaceVariant,
+                  const SizedBox(height: 2),
+                  _StampLine(
+                    icon: Icons.logout_rounded,
+                    label: 'Out',
+                    text: outText,
                   ),
-                ),
-                if (b != null) ...[
-                  const SizedBox(height: 6),
-                  BranchTag.branch(b),
+                  if (rec.breakMinutes > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        '${rec.breakMinutes}m break',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  if (b != null) ...[
+                    const SizedBox(height: 6),
+                    BranchTag.branch(b),
+                  ],
+                  if (showBar && !open) ...[
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        minHeight: 6,
+                        value: (mins / 480).clamp(0.0, 1.0).toDouble(),
+                        backgroundColor: scheme.surfaceContainerHigh,
+                      ),
+                    ),
+                  ],
                 ],
-                if (showBar && !open) ...[
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      minHeight: 6,
-                      value: (mins / 480).clamp(0.0, 1.0).toDouble(),
-                      backgroundColor: scheme.surfaceContainerHigh,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (open)
+                  HrTag('Live', Colors.green.shade700)
+                else
+                  Text(
+                    fmtDuration(mins),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 15,
                     ),
                   ),
+                if (late) ...[
+                  const SizedBox(height: 4),
+                  HrTag('Late $lateText', Colors.red.shade700),
+                ],
+                if (rec.source == 'manual') ...[
+                  const SizedBox(height: 4),
+                  HrTag('Manual', Colors.orange.shade800),
                 ],
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (open)
-                HrTag('Live', Colors.green.shade700)
-              else
-                Text(
-                  fmtDuration(mins),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                  ),
-                ),
-              if (late) ...[
-                const SizedBox(height: 4),
-                HrTag('Late $lateText', Colors.red.shade700),
-              ],
-              if (rec.source == 'manual') ...[
-                const SizedBox(height: 4),
-                HrTag('Manual', Colors.orange.shade800),
-              ],
-            ],
-          ),
-          if (onDelete != null)
-            IconButton(
-              tooltip: 'Delete',
-              icon: const Icon(Icons.delete_outline_rounded, size: 20),
-              onPressed: onDelete,
-            ),
-        ],
+            if (onDelete != null)
+              IconButton(
+                tooltip: 'Delete',
+                icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                onPressed: onDelete,
+              ),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+class _StampLine extends StatelessWidget {
+  const _StampLine({
+    required this.icon,
+    required this.label,
+    required this.text,
+  });
+
+  final IconData icon;
+  final String label;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Row(
+      children: [
+        Icon(icon, size: 13, color: c),
+        const SizedBox(width: 5),
+        Text(
+          '$label  ',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: c),
+        ),
+        Flexible(
+          child: Text(text, style: TextStyle(fontSize: 12.5, color: c)),
+        ),
+      ],
     );
   }
 }
@@ -804,6 +868,15 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
                       role: roles[open[i].userId],
                       lateMinutes: lateMinutesFor(open[i], shifts),
                       branch: multi ? byId[branchOf(open[i])] : null,
+                      onTap: () => Navigator.of(context).push(
+  MaterialPageRoute<void>(
+    builder: (_) => EmployeeAttendanceHistoryScreen(
+      userId: open[i].userId,
+      name: names[open[i].userId] ?? 'Team member',
+      role: roles[open[i].userId],
+    ),
+  ),
+),
                     ),
                   ],
                 ],
@@ -840,6 +913,15 @@ class _TeamTimeState extends ConsumerState<_TeamTime> {
                         lateMinutes: lateMinutesFor(records[i], shifts),
                         showBar: true,
                         branch: multi ? byId[branchOf(records[i])] : null,
+                        onTap: () => Navigator.of(context).push(
+  MaterialPageRoute<void>(
+    builder: (_) => EmployeeAttendanceHistoryScreen(
+      userId: open[i].userId,
+      name: names[open[i].userId] ?? 'Team member',
+      role: roles[open[i].userId],
+    ),
+  ),
+),
                         onDelete: () => _delete(records[i]),
                       ),
                     ),
@@ -1058,6 +1140,112 @@ class _ManualEntryDialogState extends ConsumerState<_ManualEntryDialog> {
           child: const Text('Save'),
         ),
       ],
+    );
+  }
+}
+
+class EmployeeAttendanceHistoryScreen extends ConsumerWidget {
+  const EmployeeAttendanceHistoryScreen({
+    super.key,
+    required this.userId,
+    required this.name,
+    this.role,
+  });
+
+  final String userId;
+  final String name;
+  final String? role;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final records =
+        ref.watch(employeeAttendanceProvider(userId)).value ??
+        const <AttendanceRecord>[];
+    final shifts =
+        ref.watch(recentShiftsProvider).value ?? const <ScheduleShift>[];
+    final multi = ref.watch(branchesProvider).length >= 2;
+    final byId = ref.watch(branchByIdProvider);
+    final theme = Theme.of(context);
+
+    int mins(AttendanceRecord r) =>
+        workedMinutes(r.clockIn, r.clockOut, r.breakMinutes);
+    final totalMin = records.fold<int>(0, (s, r) => s + mins(r));
+    final days = {for (final r in records) dateOnly(r.clockIn)}.length;
+
+    final months = <String, List<AttendanceRecord>>{};
+    for (final r in records) {
+      months
+          .putIfAbsent(DateFormat('MMMM yyyy').format(r.clockIn), () => [])
+          .add(r);
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: Text(name)),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+        children: [
+          HrHero(
+            icon: Icons.history_rounded,
+            title: 'Attendance history',
+            subtitle: role ?? 'Team member',
+            stats: [
+              HrStat('${records.length}', 'Records'),
+              HrStat('$days', 'Days worked'),
+              HrStat(fmtDuration(totalMin), 'Total hours'),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (records.isEmpty)
+            const HrEmpty(
+              icon: Icons.event_busy_outlined,
+              title: 'No attendance yet',
+              message: 'Time records will appear here once they clock in.',
+            )
+          else
+            for (final e in months.entries) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8, top: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        e.key,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      fmtDuration(
+                        e.value.fold<int>(0, (s, r) => s + mins(r)),
+                      ),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              HrCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (var i = 0; i < e.value.length; i++) ...[
+                      if (i > 0) const Divider(height: 1, indent: 74),
+                      _RecordTile(
+                        rec: e.value[i],
+                        lateMinutes: lateMinutesFor(e.value[i], shifts),
+                        branch: multi ? byId[e.value[i].branchId] : null,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+        ],
+      ),
     );
   }
 }

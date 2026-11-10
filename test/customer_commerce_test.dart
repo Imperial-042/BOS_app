@@ -27,6 +27,19 @@ void main() {
     expect(businessIdFromStorefrontInvite('https://store/$businessId'), isNull);
   });
 
+  test('store QR payload can carry a branch id', () {
+    const businessId = '01234567-89ab-cdef-0123-456789abcdef';
+    const branchId = 'fedcba98-7654-3210-fedc-ba9876543210';
+    final payload = storefrontInvitePayload(businessId, branchId: branchId);
+
+    expect(businessIdFromStorefrontInvite(payload), businessId);
+    expect(branchIdFromStorefrontInvite(payload), branchId);
+    expect(
+      branchIdFromStorefrontInvite(storefrontInvitePayload(businessId)),
+      isNull,
+    );
+  });
+
   test(
     'local branch location columns are available after database open',
     () async {
@@ -143,13 +156,45 @@ void main() {
     expect(storefrontIsOpen(store, at: DateTime(2026, 1, 5, 17)), isFalse);
     expect(storefrontIsOpen(store, at: DateTime(2026, 1, 6, 12)), isFalse);
     expect(
-      () => serializeStoreHours({1: (open: '17:00', close: '09:00')}),
-      throwsFormatException,
+      hoursJsonIsOpen(
+        serializeStoreHours({1: (open: '17:00', close: '09:00')}),
+        at: DateTime(2026, 1, 5, 23),
+      ),
+      isTrue,
+    );
+    expect(
+      hoursJsonIsOpen(
+        serializeStoreHours({1: (open: '17:00', close: '09:00')}),
+        at: DateTime(2026, 1, 6, 8),
+      ),
+      isTrue,
+    );
+    expect(
+      hoursJsonIsOpen(
+        serializeStoreHours({1: (open: '17:00', close: '09:00')}),
+        at: DateTime(2026, 1, 6, 10),
+      ),
+      isFalse,
+    );
+  });
+
+  test('store hours accept the published 9 AM to 12 PM window', () {
+    final hours = serializeStoreHours({7: (open: '09:00', close: '12:00')});
+
+    expect(hoursJsonIsOpen(hours, at: DateTime(2026, 1, 11, 9)), isTrue);
+    expect(hoursJsonIsOpen(hours, at: DateTime(2026, 1, 11, 11, 59)), isTrue);
+    expect(hoursJsonIsOpen(hours, at: DateTime(2026, 1, 11, 12)), isFalse);
+    expect(
+      hoursJsonIsOpen(
+        '{"7":{"open":"9:00 AM","close":"12:00 PM"}}',
+        at: DateTime(2026, 1, 11, 9, 30),
+      ),
+      isTrue,
     );
   });
 
   test(
-    'offline catalog reads are available only when enabled by the store',
+    'offline catalog reads are per branch and only when enabled by the store',
     () async {
       const businessId = 'offline-store';
       await db
@@ -162,34 +207,56 @@ void main() {
               isPublished: Value(true),
             ),
           );
-      await db
-          .into(db.customerStoreBranches)
-          .insert(
-            CustomerStoreBranchesCompanion.insert(
-              id: 'offline-branch',
-              businessId: businessId,
-              name: 'Offline pickup',
-            ),
-          );
+      for (final id in ['offline-branch', 'other-branch']) {
+        await db
+            .into(db.customerStoreBranches)
+            .insert(
+              CustomerStoreBranchesCompanion.insert(
+                id: id,
+                businessId: businessId,
+                name: id,
+              ),
+            );
+        await db.customStatement(
+          'UPDATE customer_store_branches '
+          'SET city = ?, storefront_published = 1 WHERE id = ?',
+          ['New York', id],
+        );
+      }
+      for (final id in ['offline-item', 'other-item']) {
+        await db
+            .into(db.customerCatalogItems)
+            .insert(
+              CustomerCatalogItemsCompanion.insert(
+                id: id,
+                businessId: businessId,
+                name: id == 'offline-item' ? 'Published item' : 'Other item',
+                unit: 'each',
+                priceCents: Value(250),
+              ),
+            );
+      }
+      // Each branch sells its own product.
       await db.customStatement(
-        'UPDATE customer_store_branches '
-        'SET city = ?, storefront_published = 1 WHERE id = ?',
-        ['New York', 'offline-branch'],
+        'INSERT INTO customer_branch_catalog '
+        '(branch_id, catalog_item_id, business_id) VALUES (?, ?, ?)',
+        ['offline-branch', 'offline-item', businessId],
       );
-      await db
-          .into(db.customerCatalogItems)
-          .insert(
-            CustomerCatalogItemsCompanion.insert(
-              id: 'offline-item',
-              businessId: businessId,
-              name: 'Published item',
-              unit: 'each',
-              priceCents: Value(250),
-            ),
-          );
+      await db.customStatement(
+        'INSERT INTO customer_branch_catalog '
+        '(branch_id, catalog_item_id, business_id) VALUES (?, ?, ?)',
+        ['other-branch', 'other-item', businessId],
+      );
       final service = CustomerCommerceService(db);
 
-      expect(await service.loadCatalog(businessId, city: 'New York'), isEmpty);
+      expect(
+        await service.loadCatalog(
+          businessId,
+          city: 'New York',
+          branchId: 'offline-branch',
+        ),
+        isEmpty,
+      );
 
       await (db.update(
         db.customerStorefronts,
@@ -201,10 +268,26 @@ void main() {
         (await service.loadCatalog(
           businessId,
           city: 'New York',
+          branchId: 'offline-branch',
         )).map((item) => item.name),
         ['Published item'],
       );
-      expect(await service.loadCatalog(businessId, city: 'Boston'), isEmpty);
+      expect(
+        (await service.loadCatalog(
+          businessId,
+          city: 'New York',
+          branchId: 'other-branch',
+        )).map((item) => item.name),
+        ['Other item'],
+      );
+      expect(
+        await service.loadCatalog(
+          businessId,
+          city: 'Boston',
+          branchId: 'offline-branch',
+        ),
+        isEmpty,
+      );
     },
   );
 

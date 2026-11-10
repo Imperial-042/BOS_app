@@ -23,6 +23,7 @@ import 'pos_session_service.dart'
 import 'package:bos_application/core/stock/stock_service.dart';
 
 import '../../../core/database/app_database.dart';
+import 'product_variants.dart';
 
 // ============================================================
 // UNIT CONVERSION
@@ -168,6 +169,7 @@ class SaleLineInput {
   final String unit;
   final int unitPriceCents;
   final double quantity;
+  final List<ProductOptionSelection> options;
 
   const SaleLineInput({
     required this.productId,
@@ -175,6 +177,7 @@ class SaleLineInput {
     required this.unit,
     required this.unitPriceCents,
     required this.quantity,
+    this.options = const [],
   });
 }
 
@@ -343,6 +346,37 @@ class ProductionService {
           saleId,
           notes,
         );
+        for (final option in line.options) {
+          final inventoryProductId = option.inventoryProductId;
+          final inventorySupplyId = option.inventorySupplyId;
+          if (option.inventoryQuantity <= 0) {
+            continue;
+          }
+          if (inventorySupplyId != null) {
+            await _deductSupplyForOption(
+              supplyId: inventorySupplyId,
+              quantity: line.quantity * option.inventoryQuantity,
+              referenceType: stockOnly
+                  ? 'pos_stock_only_option'
+                  : 'pos_sale_option',
+              saleId: saleId,
+              notes: notes,
+            );
+          } else if (inventoryProductId != null) {
+            await _deductForSale(
+              SaleLineInput(
+                productId: inventoryProductId,
+                productName: option.choiceName,
+                unit: line.unit,
+                unitPriceCents: 0,
+                quantity: line.quantity * option.inventoryQuantity,
+              ),
+              stockOnly ? 'pos_stock_only_option' : 'pos_sale_option',
+              saleId,
+              notes,
+            );
+          }
+        }
         totalCents += (line.unitPriceCents * line.quantity).round();
       }
 
@@ -482,11 +516,12 @@ class ProductionService {
       }
 
       for (final line in lines) {
+        final saleItemId = const Uuid().v4();
         await db
             .into(db.posSaleItems)
             .insert(
               PosSaleItemsCompanion.insert(
-                id: const Uuid().v4(),
+                id: saleItemId,
                 saleId: saleId,
                 productId: Value(line.productId),
                 productName: line.productName,
@@ -497,6 +532,23 @@ class ProductionService {
                 lineTotal: (line.unitPriceCents * line.quantity).round(),
               ),
             );
+        for (final option in line.options) {
+          await db.customStatement(
+            'INSERT INTO pos_sale_item_options '
+            '(id, sale_item_id, group_id, choice_id, group_name, choice_name, '
+            'price_delta_cents, quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              const Uuid().v4(),
+              saleItemId,
+              option.groupId,
+              option.choiceId,
+              option.groupName,
+              option.choiceName,
+              option.priceDeltaCents,
+              option.inventoryQuantity,
+            ],
+          );
+        }
       }
 
       await AuditWriter.write(
@@ -1001,12 +1053,45 @@ class ProductionService {
     }
   }
 
+  Future<void> _deductSupplyForOption({
+    required String supplyId,
+    required double quantity,
+    required String referenceType,
+    required String saleId,
+    required String? notes,
+  }) async {
+    final supply = await (db.select(
+      db.supplies,
+    )..where((item) => item.id.equals(supplyId))).getSingleOrNull();
+    if (supply == null || !supply.isActive) {
+      throw StateError('The selected ingredient is no longer available.');
+    }
+    final onHand = await _stock.supplyQty(branchId, supplyId);
+    if (onHand - quantity < -1e-9) {
+      throw StateError(
+        'Not enough "${supply.name}" in stock — need '
+        '${StockShortage._n(quantity)} ${supply.stockUnit}, have '
+        '${StockShortage._n(onHand)} ${supply.stockUnit}.',
+      );
+    }
+    await _stock.moveSupply(
+      branchId: branchId,
+      supplyId: supplyId,
+      type: 'pos_sale_option',
+      quantity: -quantity,
+      referenceType: referenceType,
+      referenceId: saleId,
+      notes: notes,
+    );
+  }
+
   /// Whole-order check before saving. Returns plain-language problems
   /// (empty list = OK to sell). Covers recipe, stocked and untracked
   /// products, and ingredients shared between products in the same order.
   Future<List<String>> checkOrder(List<SaleLineInput> lines) async {
     final problems = <String>[];
     final recipeLines = <SaleLineInput>[];
+    final optionSupplyNeed = <String, double>{};
 
     for (final l in lines) {
       final p = await (db.select(
@@ -1015,6 +1100,15 @@ class ProductionService {
       if (p == null || !p.isActive) {
         problems.add('"${l.productName}" is no longer available.');
         continue;
+      }
+      for (final option in l.options) {
+        if (option.inventorySupplyId != null && option.inventoryQuantity > 0) {
+          optionSupplyNeed.update(
+            option.inventorySupplyId!,
+            (value) => value + l.quantity * option.inventoryQuantity,
+            ifAbsent: () => l.quantity * option.inventoryQuantity,
+          );
+        }
       }
 
       switch (p.trackingType) {
@@ -1052,6 +1146,21 @@ class ProductionService {
         problems.add(
           'Shared ingredient is short for the whole order: ${s.message}',
         );
+      }
+    }
+    if (problems.isEmpty && optionSupplyNeed.isNotEmpty) {
+      final supplies = await (db.select(
+        db.supplies,
+      )..where((s) => s.id.isIn(optionSupplyNeed.keys.toList()))).get();
+      for (final supply in supplies) {
+        final required = optionSupplyNeed[supply.id]!;
+        final available = await _stock.supplyQty(branchId, supply.id);
+        if (required > available + 1e-9) {
+          problems.add(
+            'Not enough ${supply.name} for add-ons: only '
+            '${StockShortage._n(available)} ${supply.stockUnit} left.',
+          );
+        }
       }
     }
     return problems;

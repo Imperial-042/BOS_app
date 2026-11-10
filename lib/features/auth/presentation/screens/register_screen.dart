@@ -6,12 +6,17 @@
 // link — so they must redeem an invite code an existing member generated
 // for them in Users & Roles, which is how they attach to that business.
 
+import 'package:bos_application/core/device/device_management_service.dart';
+import 'package:bos_application/core/device/device_providers.dart';
 import 'package:bos_application/core/supabase/cloud_membership_bootstrap.dart';
 import 'package:bos_application/features/customer/domain/customer_commerce_service.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/barcode_scanner_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../../core/location/location_models.dart';
+import '../../../../core/location/location_picker_map.dart';
+import '../../../../core/location/location_services.dart';
 
 import '../../../../core/auth/auth_providers.dart';
 import '../../../../core/auth/auth_service.dart';
@@ -38,6 +43,10 @@ class RegisterScreen extends ConsumerStatefulWidget {
 class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _addressController = TextEditingController();
+  GeoCoordinate? _coordinate;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
@@ -77,6 +86,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _phoneController.dispose();
+    _cityController.dispose();
+    _addressController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
@@ -96,6 +108,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     final cloudBusiness = ref.read(cloudBusinessServiceProvider);
     final cloudAvailable = ref.read(supabaseAvailableProvider);
     final sessionNotifier = ref.read(authenticatedUserIdProvider.notifier);
+    final deviceService = ref.read(deviceManagementServiceProvider);
 
     final needsCode = !widget.customerMode && _role != BosRole.owner;
     final code = _inviteCodeController.text;
@@ -152,11 +165,18 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       }
 
       if (widget.customerMode) {
+        final phone = _phoneController.text.trim();
+        final city = _cityController.text.trim();
+        final address = _addressController.text.trim();
         final email = _emailController.text.trim();
         if (cloudAvailable && !sessionEstablished) {
           await CustomerCommerceService(db).ensureCustomerProfile(
             userId: userId,
             displayName: _nameController.text,
+            phone: phone,
+            city: city,
+            address: address,
+            coordinate: _coordinate,
           );
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(
@@ -169,6 +189,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               .ensureCustomerProfile(
                 userId: userId,
                 displayName: _nameController.text,
+                phone: phone,
+                city: city,
+                address: address,
+                coordinate: _coordinate,
               );
         }
       }
@@ -206,6 +230,11 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         return;
       }
 
+      if (cloudAvailable) {
+        // ← add
+        await deviceService.registerCurrentDevice(); // ← add
+      } // ← add
+
       await SessionStore.saveUserId(userId);
       sessionNotifier.state = userId;
       if (mounted) Navigator.of(context).pop();
@@ -214,6 +243,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     } on CloudAuthException catch (e) {
       setState(() => _error = e.message);
     } on CloudBusinessException catch (e) {
+      setState(() => _error = e.message);
+    } on DeviceManagementException catch (e) {
       setState(() => _error = e.message);
     } on StateError catch (e) {
       setState(() => _error = e.message);
@@ -324,6 +355,53 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                                 : null,
                           ),
                           const SizedBox(height: 16),
+                          if (widget.customerMode) ...[
+                            TextFormField(
+                              controller: _phoneController,
+                              keyboardType: TextInputType.phone,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Phone number',
+                                prefixIcon: Icon(Icons.phone_outlined),
+                              ),
+                              validator: (value) =>
+                                  value == null || value.trim().length < 5
+                                  ? 'Enter a valid phone number.'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _cityController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'City or area',
+                                prefixIcon: Icon(Icons.location_city_outlined),
+                              ),
+                              validator: (value) =>
+                                  value == null || value.trim().isEmpty
+                                  ? 'Enter your city or area.'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _addressController,
+                              maxLines: 2,
+                              decoration: const InputDecoration(
+                                labelText: 'Address (optional)',
+                                prefixIcon: Icon(Icons.home_outlined),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text('Pin your location'),
+                            const SizedBox(height: 8),
+                            LocationPickerMap(
+                              provider: const OpenStreetMapTileProvider(),
+                              selected: _coordinate,
+                              onSelected: (coordinate) =>
+                                  setState(() => _coordinate = coordinate),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                           if (widget.customerMode)
                             Card(
                               child: Padding(

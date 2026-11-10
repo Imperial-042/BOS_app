@@ -1,6 +1,7 @@
 import 'package:bos_application/core/auth/authorization_providers.dart';
 import 'package:bos_application/core/database/database_provider.dart';
 import 'package:bos_application/core/supabase/supabase_service.dart';
+import 'package:bos_application/features/transactions/presentation/screens/startup_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -53,36 +54,26 @@ class _CustomerModeGateState extends ConsumerState<CustomerModeGate> {
     return FutureBuilder<({bool hasBusiness, bool hasCustomer})>(
       future: _modes,
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Scaffold(
-            appBar: AppBar(title: const Text('Account access')),
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Could not check your account modes. Connect to the '
-                      'internet and try again.',
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: _retry,
-                      child: const Text('Try again'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }
-        if (!snapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
+if (snapshot.hasError) {
+  return StartupPanel(
+    icon: Icons.wifi_off_rounded,
+    tone: Theme.of(context).colorScheme.error,
+    title: 'Couldn’t check your account',
+    message: 'Connect to the internet and try again.',
+    children: [
+      FilledButton(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(52),
+        ),
+        onPressed: _retry,
+        child: const Text('Try again'),
+      ),
+    ],
+  );
+}
+if (!snapshot.hasData) {
+  return const StartupLoadingScreen();
+}
 
         final modes = snapshot.data!;
         final selectedMode = ref.watch(selectedAccountModeProvider);

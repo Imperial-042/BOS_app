@@ -10,6 +10,8 @@ import 'package:uuid/uuid.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/database_provider.dart';
 import '../../../core/supabase/supabase_service.dart';
+import '../../../core/location/location_models.dart';
+import '../../transactions/domain/product_variants.dart';
 
 const _uuid = Uuid();
 
@@ -22,14 +24,18 @@ class CustomerLocationProfile {
   const CustomerLocationProfile({
     required this.id,
     required this.displayName,
+    required this.phone,
     required this.city,
     required this.address,
+    this.coordinate,
   });
 
   final String id;
   final String displayName;
+  final String? phone;
   final String? city;
   final String? address;
+  final GeoCoordinate? coordinate;
 }
 
 class CustomerStorefrontWithHours extends CustomerStorefront {
@@ -53,51 +59,92 @@ class CustomerStorefrontWithHours extends CustomerStorefront {
   final String openingHoursJson;
 }
 
-class CustomerStoreBranchWithCity extends CustomerStoreBranch {
-  CustomerStoreBranchWithCity({
-    required CustomerStoreBranch branch,
-    required this.city,
-    required this.storefrontPublished,
-  }) : super(
-         id: branch.id,
-         businessId: branch.businessId,
-         name: branch.name,
-         address: branch.address,
-         isActive: branch.isActive,
-         updatedAt: branch.updatedAt,
-       );
-
-  final String? city;
-  final bool storefrontPublished;
-}
-
 String storefrontOpeningHoursJson(CustomerStorefront store) =>
     store is CustomerStorefrontWithHours ? store.openingHoursJson : '{}';
 
 Map<int, StoreHours> parseStoreHours(String value) {
   final decoded = jsonDecode(value);
-  if (decoded is! Map<String, dynamic>) {
+  if (decoded is! Map) {
     throw const FormatException('Store hours must be a JSON object.');
   }
   final hours = <int, StoreHours>{};
   for (final entry in decoded.entries) {
     final day = int.tryParse(entry.key);
     final times = entry.value;
-    if (day == null || day < 1 || day > 7 || times is! Map<String, dynamic>) {
+    if (day == null || day < 1 || day > 7 || times is! Map) {
       throw const FormatException('Store hours contain an invalid day.');
     }
     final open = times['open'];
     final close = times['close'];
-    if (open is! String ||
-        close is! String ||
-        !RegExp(r'^([01][0-9]|2[0-3]):[0-5][0-9]$').hasMatch(open) ||
-        !RegExp(r'^([01][0-9]|2[0-3]):[0-5][0-9]$').hasMatch(close) ||
-        open.compareTo(close) >= 0) {
+    final normalizedOpen = _normalizeStoreTime(open);
+    final normalizedClose = _normalizeStoreTime(close);
+    if (normalizedOpen == null || normalizedClose == null) {
       throw const FormatException('Store hours contain an invalid time.');
     }
-    hours[day] = (open: open, close: close);
+    hours[day] = (open: normalizedOpen, close: normalizedClose);
   }
   return hours;
+}
+
+String? _normalizeStoreTime(Object? value) {
+  if (value is! String) return null;
+  final trimmed = value.trim().toUpperCase();
+  final match = RegExp(
+    r'^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$',
+  ).firstMatch(trimmed);
+  if (match == null) return null;
+  var hour = int.parse(match.group(1)!);
+  final minute = int.parse(match.group(2)!);
+  final meridiem = match.group(3);
+  if (minute > 59) return null;
+  if (meridiem != null) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem == 'AM') {
+      hour = hour == 12 ? 0 : hour;
+    } else {
+      hour = hour == 12 ? 12 : hour + 12;
+    }
+  } else if (hour > 23) {
+    return null;
+  }
+  return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+}
+
+int _storeTimeMinutes(String value) {
+  final parts = value.split(':');
+  return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+}
+
+String _dateOnly(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';
+
+String? _cleanText(String? value) {
+  final text = value?.trim();
+  return text == null || text.isEmpty ? null : text;
+}
+
+StoreAvailabilityOverride? _availabilityFromValue(Object? value) {
+  if (value is! Map) return null;
+  final start = DateTime.tryParse(value['start_date']?.toString() ?? '');
+  final end = DateTime.tryParse(value['end_date']?.toString() ?? '');
+  final mode = value['mode']?.toString();
+  if (start == null ||
+      end == null ||
+      end.isBefore(start) ||
+      (mode != StoreAvailabilityMode.open.name &&
+          mode != StoreAvailabilityMode.closed.name)) {
+    return null;
+  }
+  return StoreAvailabilityOverride(
+    mode: mode == StoreAvailabilityMode.open.name
+        ? StoreAvailabilityMode.open
+        : StoreAvailabilityMode.closed,
+    startDate: start,
+    endDate: end,
+    reason: value['reason']?.toString(),
+  );
 }
 
 String serializeStoreHours(Map<int, StoreHours> hours) {
@@ -109,27 +156,153 @@ String serializeStoreHours(Map<int, StoreHours> hours) {
   return value;
 }
 
-bool storefrontIsOpen(CustomerStorefront store, {DateTime? at}) {
-  final value = storefrontOpeningHoursJson(store);
+bool hoursJsonIsOpen(String value, {DateTime? at}) {
   if (value == '{}') return true;
   final hours = parseStoreHours(value);
   final now = at ?? DateTime.now();
+  final time = now.hour * 60 + now.minute;
   final today = hours[now.weekday];
-  if (today == null) return false;
-  final time =
-      '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-  return time.compareTo(today.open) >= 0 && time.compareTo(today.close) < 0;
+  if (today != null && _isStoreTimeInWindow(today, time)) return true;
+
+  final previousDay = now.weekday == DateTime.monday
+      ? DateTime.sunday
+      : now.weekday - 1;
+  final previous = hours[previousDay];
+  return previous != null &&
+      _storeTimeMinutes(previous.open) > _storeTimeMinutes(previous.close) &&
+      time < _storeTimeMinutes(previous.close);
 }
 
-String storefrontHoursToday(CustomerStorefront store, {DateTime? at}) {
-  final value = storefrontOpeningHoursJson(store);
-  if (value == '{}') {
-    return 'No hours set · orders accepted anytime';
-  }
-  final hours = parseStoreHours(value);
-  final today = hours[(at ?? DateTime.now()).weekday];
+bool _isStoreTimeInWindow(StoreHours hours, int time) {
+  final open = _storeTimeMinutes(hours.open);
+  final close = _storeTimeMinutes(hours.close);
+  if (open == close) return true;
+  if (open < close) return time >= open && time < close;
+  return time >= open || time < close;
+}
+
+String hoursJsonToday(String value, {DateTime? at}) {
+  if (value == '{}') return 'No hours set · orders accepted anytime';
+  final today = parseStoreHours(value)[(at ?? DateTime.now()).weekday];
   return today == null ? 'Closed today' : 'Today: ${today.open}–${today.close}';
 }
+
+bool storefrontIsOpen(CustomerStorefront store, {DateTime? at}) =>
+    hoursJsonIsOpen(storefrontOpeningHoursJson(store), at: at);
+
+String storefrontHoursToday(CustomerStorefront store, {DateTime? at}) =>
+    hoursJsonToday(storefrontOpeningHoursJson(store), at: at);
+
+bool branchIsOpen(CustomerStoreBranchWithCity b, {DateTime? at}) =>
+    b.availabilityOverride?.isActive(at ?? DateTime.now()) == true
+    ? b.availabilityOverride!.mode == StoreAvailabilityMode.open
+    : hoursJsonIsOpen(b.openingHoursJson, at: at);
+
+String branchHoursToday(CustomerStoreBranchWithCity b, {DateTime? at}) =>
+    hoursJsonToday(b.openingHoursJson, at: at);
+
+class CustomerStoreBranchWithCity extends CustomerStoreBranch {
+  CustomerStoreBranchWithCity({
+    required CustomerStoreBranch branch,
+    required this.city,
+    required this.storefrontPublished,
+    this.phone,
+    this.openingHoursJson = '{}',
+    this.availabilityOverride,
+    this.coordinate,
+  }) : super(
+         id: branch.id,
+         businessId: branch.businessId,
+         name: branch.name,
+         address: branch.address,
+         isActive: branch.isActive,
+         updatedAt: branch.updatedAt,
+       );
+
+  final String? city;
+  final bool storefrontPublished;
+  final String? phone;
+  final String openingHoursJson;
+  final StoreAvailabilityOverride? availabilityOverride;
+  final GeoCoordinate? coordinate;
+}
+
+enum StoreAvailabilityMode { open, closed }
+
+class StoreAvailabilityOverride {
+  const StoreAvailabilityOverride({
+    required this.mode,
+    required this.startDate,
+    required this.endDate,
+    this.reason,
+  });
+
+  final StoreAvailabilityMode mode;
+  final DateTime startDate;
+  final DateTime endDate;
+  final String? reason;
+
+  bool isActive(DateTime date) {
+    final day = DateTime(date.year, date.month, date.day);
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    return !day.isBefore(start) && !day.isAfter(end);
+  }
+
+  Map<String, dynamic> toJson() => {
+    'mode': mode.name,
+    'start_date': _dateOnly(startDate),
+    'end_date': _dateOnly(endDate),
+    'reason': _cleanText(reason),
+  };
+}
+
+class BranchStorefrontSettings {
+  const BranchStorefrontSettings({
+    required this.published,
+    required this.phone,
+    required this.openingHours,
+    this.productIds = const <String>{},
+    this.availabilityOverride,
+  });
+  final bool published;
+  final String phone;
+  final Map<int, StoreHours> openingHours;
+
+  /// Products this branch sells on its storefront.
+  final Set<String> productIds;
+  final StoreAvailabilityOverride? availabilityOverride;
+}
+
+class ManagedBranchStorefront {
+  const ManagedBranchStorefront({
+    required this.id,
+    required this.name,
+    required this.address,
+    required this.city,
+    required this.isActive,
+    required this.published,
+    required this.phone,
+    required this.openingHours,
+    required this.productIds,
+    this.availabilityOverride,
+  });
+  final String id;
+  final String name;
+  final String? address;
+  final String? city;
+  final bool isActive;
+  final bool published;
+  final String phone;
+  final Map<int, StoreHours> openingHours;
+  final Set<String> productIds;
+  final StoreAvailabilityOverride? availabilityOverride;
+}
+
+typedef StoreBranchListing = ({
+  CustomerStorefront storefront,
+  CustomerStoreBranchWithCity branch,
+});
 
 class CustomerCommerceService {
   CustomerCommerceService(this.db, {SupabaseClient? client}) : _client = client;
@@ -137,9 +310,93 @@ class CustomerCommerceService {
   final AppDatabase db;
   final SupabaseClient? _client;
 
+  Future<List<ManagedBranchStorefront>> loadManagedBranches(
+    String businessId, {
+    Set<String>? allowedBranchIds,
+  }) async {
+    final scopedBranchIds = allowedBranchIds;
+    final local = await db
+        .customSelect(
+          'SELECT id, name, address, phone, city, is_active FROM branches '
+          'WHERE business_id = ? ORDER BY is_headquarters DESC, name',
+          variables: [Variable<String>(businessId)],
+        )
+        .get();
+    final scopedLocal = scopedBranchIds == null
+        ? local
+        : local
+              .where((row) => scopedBranchIds.contains(row.read<String>('id')))
+              .toList();
+
+    var cloud = <String, Map<String, dynamic>>{};
+    final links = <String, Set<String>>{};
+    final client = _client;
+    if (client != null) {
+      try {
+        final branchQuery = client
+            .from('customer_store_branches')
+            .select(
+              'id, storefront_published, phone, opening_hours, '
+              'availability_override',
+            )
+            .eq('business_id', businessId);
+        final rows = scopedBranchIds == null
+            ? await branchQuery
+            : await branchQuery.inFilter('id', scopedBranchIds.toList());
+        cloud = {for (final r in rows) r['id'] as String: r};
+        final linkRows = await client
+            .from('customer_branch_catalog_items')
+            .select('branch_id, catalog_item_id')
+            .eq('business_id', businessId);
+        for (final r in linkRows) {
+          (links[r['branch_id'] as String] ??= <String>{}).add(
+            r['catalog_item_id'] as String,
+          );
+        }
+      } on SocketException {
+        // fall through with local data only
+      } on HttpException {
+        // fall through with local data only
+      } on TimeoutException {
+        // fall through with local data only
+      }
+    }
+
+    return [
+      for (final row in scopedLocal)
+        () {
+          final id = row.read<String>('id');
+          final remote = cloud[id];
+          return ManagedBranchStorefront(
+            id: id,
+            name: row.read<String>('name'),
+            address: row.read<String?>('address'),
+            city: row.read<String?>('city'),
+            isActive: row.read<bool>('is_active'),
+            published: (remote?['storefront_published'] as bool?) ?? false,
+            phone:
+                (remote?['phone'] as String?) ??
+                row.read<String?>('phone') ??
+                '',
+            openingHours: parseStoreHours(
+              _openingHoursJson(remote?['opening_hours']),
+            ),
+            productIds: links[id] ?? <String>{},
+            availabilityOverride: _availabilityFromValue(
+              remote?['availability_override'],
+            ),
+          );
+        }(),
+    ];
+  }
+
   Future<void> ensureCustomerProfile({
     required String userId,
     required String displayName,
+    String? phone,
+    String? city,
+    String? address,
+    GeoCoordinate? coordinate,
   }) async {
     final name = displayName.trim();
     if (name.isEmpty) throw StateError('Enter your name.');
@@ -148,6 +405,12 @@ class CustomerCommerceService {
       await _client.from('customer_profiles').upsert({
         'id': userId,
         'display_name': name,
+        'phone': _nullIfBlank(phone),
+        'city': _nullIfBlank(city),
+        'address': _nullIfBlank(address),
+        'latitude': coordinate?.latitude,
+        'longitude': coordinate?.longitude,
+        'location_accuracy_meters': coordinate?.accuracyMeters,
       });
     }
 
@@ -160,6 +423,19 @@ class CustomerCommerceService {
             updatedAt: Value(DateTime.now()),
           ),
         );
+    if (_nullIfBlank(phone) != null) {
+      await db.customStatement(
+        'UPDATE customer_profiles SET phone = ? WHERE id = ?',
+        [_nullIfBlank(phone), userId],
+      );
+    }
+    await _writeLocalCustomerLocation(
+      userId,
+      _nullIfBlank(city),
+      _nullIfBlank(address),
+      _nullIfBlank(phone),
+      coordinate,
+    );
   }
 
   Future<bool> hasCustomerProfile(String userId) async {
@@ -171,7 +447,10 @@ class CustomerCommerceService {
 
     final row = await _client
         .from('customer_profiles')
-        .select('id, display_name, city, address')
+        .select(
+          'id, display_name, phone, city, address, latitude, longitude, '
+          'location_accuracy_meters',
+        )
         .eq('id', userId)
         .maybeSingle();
     if (row == null) return false;
@@ -187,6 +466,8 @@ class CustomerCommerceService {
       userId,
       row['city'] as String?,
       row['address'] as String?,
+      row['phone'] as String?,
+      _coordinateFromMap(row),
     );
     return true;
   }
@@ -197,7 +478,10 @@ class CustomerCommerceService {
       try {
         remote = await _client
             .from('customer_profiles')
-            .select('id, display_name, city, address')
+            .select(
+              'id, display_name, phone, city, address, latitude, longitude, '
+              'location_accuracy_meters',
+            )
             .eq('id', userId)
             .maybeSingle();
         if (remote != null) {
@@ -213,6 +497,8 @@ class CustomerCommerceService {
             userId,
             remote['city'] as String?,
             remote['address'] as String?,
+            remote['phone'] as String?,
+            _coordinateFromMap(remote),
           );
         }
       } on SocketException {
@@ -227,8 +513,10 @@ class CustomerCommerceService {
       return CustomerLocationProfile(
         id: userId,
         displayName: remote['display_name'] as String,
+        phone: remote['phone'] as String?,
         city: remote['city'] as String?,
         address: remote['address'] as String?,
+        coordinate: _coordinateFromMap(remote),
       );
     }
     final profile = await (db.select(
@@ -237,22 +525,85 @@ class CustomerCommerceService {
     if (profile == null) return null;
     final location = await db
         .customSelect(
-          'SELECT city, address FROM customer_profiles WHERE id = ?',
+          'SELECT phone, city, address, latitude, longitude, '
+          'location_accuracy_meters FROM customer_profiles WHERE id = ?',
           variables: [Variable<String>(userId)],
         )
         .getSingleOrNull();
     return CustomerLocationProfile(
       id: userId,
       displayName: profile.displayName,
+      phone: location?.read<String?>('phone'),
       city: location?.read<String?>('city'),
       address: location?.read<String?>('address'),
+      coordinate: _coordinateFromRow(location),
     );
+  }
+
+  Future<void> updateCustomerProfile({
+    required String userId,
+    required String displayName,
+    required String phone,
+    required String city,
+    required String address,
+    GeoCoordinate? coordinate,
+  }) async {
+    final cleanName = displayName.trim();
+    final cleanCity = _nullIfBlank(city);
+    if (cleanName.isEmpty) throw StateError('Enter your name.');
+    if (cleanCity == null) throw StateError('Enter your city or area.');
+    final cleanPhone = _nullIfBlank(phone);
+    final cleanAddress = _nullIfBlank(address);
+    final profile = await (db.select(
+      db.customerProfiles,
+    )..where((value) => value.id.equals(userId))).getSingleOrNull();
+    if (profile == null) throw StateError('Customer profile not found.');
+
+    final client = _client;
+    if (client != null) {
+      final rows = await client
+          .from('customer_profiles')
+          .update({
+            'display_name': cleanName,
+            'phone': cleanPhone,
+            'city': cleanCity,
+            'address': cleanAddress,
+            'latitude': coordinate?.latitude,
+            'longitude': coordinate?.longitude,
+            'location_accuracy_meters': coordinate?.accuracyMeters,
+          })
+          .eq('id', userId)
+          .select('id');
+      if (rows.isEmpty) throw StateError('Customer profile not found.');
+    }
+    await db.transaction(() async {
+      await (db.update(
+        db.customerProfiles,
+      )..where((value) => value.id.equals(userId))).write(
+        CustomerProfilesCompanion(
+          displayName: Value(cleanName),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+      await db.customStatement(
+        'UPDATE customer_profiles SET phone = ?, city = ?, address = ?, '
+        'updated_at = ? WHERE id = ?',
+        [
+          cleanPhone,
+          cleanCity,
+          cleanAddress,
+          DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          userId,
+        ],
+      );
+    });
   }
 
   Future<void> updateCustomerLocation({
     required String userId,
     required String city,
     required String address,
+    GeoCoordinate? coordinate,
   }) async {
     final cleanCity = _nullIfBlank(city);
     final cleanAddress = _nullIfBlank(address);
@@ -266,23 +617,48 @@ class CustomerCommerceService {
     if (client != null) {
       final rows = await client
           .from('customer_profiles')
-          .update({'city': cleanCity, 'address': cleanAddress})
+          .update({
+            'city': cleanCity,
+            'address': cleanAddress,
+            'latitude': coordinate?.latitude,
+            'longitude': coordinate?.longitude,
+            'location_accuracy_meters': coordinate?.accuracyMeters,
+          })
           .eq('id', userId)
           .select('id');
       if (rows.isEmpty) throw StateError('Customer profile not found.');
     }
-    await _writeLocalCustomerLocation(userId, cleanCity, cleanAddress);
+    await _writeLocalCustomerLocation(
+      userId,
+      cleanCity,
+      cleanAddress,
+      null,
+      coordinate,
+    );
   }
 
   Future<void> _writeLocalCustomerLocation(
     String userId,
     String? city,
-    String? address,
-  ) async {
+    String? address, [
+    String? phone,
+    GeoCoordinate? coordinate,
+  ]) async {
     await db.customStatement(
-      'UPDATE customer_profiles SET city = ?, address = ?, updated_at = ? '
+      'UPDATE customer_profiles SET phone = COALESCE(?, phone), city = ?, '
+      'address = ?, latitude = ?, longitude = ?, '
+      'location_accuracy_meters = ?, updated_at = ? '
       'WHERE id = ?',
-      [city, address, DateTime.now().millisecondsSinceEpoch ~/ 1000, userId],
+      [
+        phone,
+        city,
+        address,
+        coordinate?.latitude,
+        coordinate?.longitude,
+        coordinate?.accuracyMeters,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        userId,
+      ],
     );
   }
 
@@ -309,6 +685,39 @@ class CustomerCommerceService {
     return memberships.isNotEmpty;
   }
 
+  Future<bool> hasOwnerBusinessMembership(String userId) async {
+    final owned = await (db.select(
+      db.businesses,
+    )..where((business) => business.ownerUserId.equals(userId))).get();
+    if (owned.isNotEmpty) return true;
+
+    final localOwner =
+        await (db.select(db.businessMembers)..where(
+              (member) =>
+                  member.userId.equals(userId) &
+                  member.role.equals('owner') &
+                  member.status.equals('active'),
+            ))
+            .getSingleOrNull();
+    if (localOwner != null) return true;
+    if (_client == null) return false;
+
+    final memberships = await _client
+        .from('business_memberships')
+        .select('business_id')
+        .eq('user_id', userId)
+        .eq('role', 'owner')
+        .eq('status', 'active')
+        .limit(1);
+    return memberships.isNotEmpty;
+  }
+
+  Future<bool> hasTeamBusinessMembership(String userId) async {
+    if (!await hasBusinessMembership(userId)) return false;
+    if (await hasOwnerBusinessMembership(userId)) return false;
+    return true;
+  }
+
   Future<List<CustomerStorefront>> discoverStores({
     required String city,
   }) async {
@@ -321,7 +730,8 @@ class CustomerCommerceService {
       final branchRows = await _client
           .from('customer_store_branches')
           .select('business_id, city')
-          .eq('is_active', true);
+          .eq('is_active', true)
+          .eq('storefront_published', true);
       final businessIds = branchRows
           .where(
             (branch) =>
@@ -448,12 +858,23 @@ class CustomerCommerceService {
   Future<List<CustomerCatalogItem>> loadCatalog(
     String businessId, {
     required String city,
+    required String branchId,
   }) async {
     final storefront = await loadStorefrontForCity(businessId, city: city);
     if (storefront == null) return const [];
 
     if (_client != null) {
       try {
+        final links = await _client
+            .from('customer_branch_catalog_items')
+            .select('catalog_item_id')
+            .eq('business_id', businessId)
+            .eq('branch_id', branchId);
+        final ids = links.map((r) => r['catalog_item_id'] as String).toList();
+        if (ids.isEmpty) {
+          await _cacheBranchCatalog(businessId, branchId, const []);
+          return const [];
+        }
         final rows = await _client
             .from('customer_catalog_items')
             .select(
@@ -462,19 +883,97 @@ class CustomerCommerceService {
             )
             .eq('business_id', businessId)
             .eq('is_available', true)
+            .inFilter('id', ids)
             .order('name');
         final items = rows.map(_catalogItemFromCloud).toList();
-        await _cacheCatalog(businessId, items);
+        await _cacheBranchCatalog(businessId, branchId, items);
         return items;
       } on SocketException {
-        return _offlineCatalog(storefront);
+        return _offlineCatalog(storefront, branchId);
       } on HttpException {
-        return _offlineCatalog(storefront);
+        return _offlineCatalog(storefront, branchId);
       } on TimeoutException {
-        return _offlineCatalog(storefront);
+        return _offlineCatalog(storefront, branchId);
       }
     }
-    return _offlineCatalog(storefront);
+    return _offlineCatalog(storefront, branchId);
+  }
+
+  Future<List<ProductOptionGroup>> loadCustomerProductOptions(
+    String productId,
+  ) async {
+    final client = _client;
+    if (client != null) {
+      final groups = await client
+          .from('product_option_groups')
+          .select(
+            'id, product_id, business_id, name, is_required, allow_multiple, '
+            'min_selections, max_selections, is_add_on, sort_order, is_active',
+          )
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .order('sort_order');
+      final choices = await client
+          .from('product_option_choices')
+          .select(
+            'id, product_id, group_id, name, price_delta_cents, '
+            'inventory_product_id, inventory_supply_id, inventory_quantity, '
+            'sort_order, is_active',
+          )
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .order('sort_order');
+      return [
+        for (final group in groups)
+          ProductOptionGroup(
+            id: group['id'] as String,
+            productId: productId,
+            businessId: group['business_id'] as String,
+            name: group['name'] as String,
+            required: group['is_required'] as bool,
+            multiple: group['allow_multiple'] as bool,
+            minSelections: (group['min_selections'] as num).toInt(),
+            maxSelections: (group['max_selections'] as num?)?.toInt(),
+            isAddOn: group['is_add_on'] as bool,
+            sortOrder: (group['sort_order'] as num).toInt(),
+            isActive: group['is_active'] as bool,
+            choices: [
+              for (final choice in choices)
+                if ((choice['group_id'] as String) == group['id'])
+                  ProductOptionChoice(
+                    id: choice['id'] as String,
+                    groupId: group['id'] as String,
+                    name: choice['name'] as String,
+                    priceDeltaCents: (choice['price_delta_cents'] as num)
+                        .toInt(),
+                    inventoryProductId:
+                        choice['inventory_product_id'] as String?,
+                    inventorySupplyId: choice['inventory_supply_id'] as String?,
+                    inventoryQuantity: (choice['inventory_quantity'] as num)
+                        .toDouble(),
+                    sortOrder: (choice['sort_order'] as num).toInt(),
+                    isActive: choice['is_active'] as bool,
+                  ),
+            ],
+          ),
+      ];
+    }
+    return ProductVariantService(db).loadGroups(productId, activeOnly: true);
+  }
+
+  /// One entry per (store, branch) so Discover can show each branch as its
+  /// own storefront.
+  Future<List<StoreBranchListing>> discoverBranchStores({
+    required String city,
+  }) async {
+    final stores = await discoverStores(city: city);
+    final perStore = await Future.wait(
+      stores.map((store) async {
+        final branches = await loadStoreBranches(store.businessId, city: city);
+        return [for (final b in branches) (storefront: store, branch: b)];
+      }),
+    );
+    return [for (final list in perStore) ...list];
   }
 
   Stream<List<CustomerStoreFollow>> watchFollows(String userId) async* {
@@ -637,17 +1136,34 @@ class CustomerCommerceService {
         final rows = await _client
             .from('customer_store_branches')
             .select(
-              'id, business_id, name, address, city, storefront_published, '
-              'is_active, updated_at',
+              'id, business_id, name, address, city, phone, opening_hours, '
+              'storefront_published, is_active, availability_override, updated_at',
             )
             .eq('business_id', businessId)
             .eq('is_active', true)
             .order('name');
+        final locationRows = await _client
+            .from('branch_locations')
+            .select('branch_id, latitude, longitude, location_accuracy_meters')
+            .inFilter(
+              'branch_id',
+              rows.map((row) => row['id'] as String).toList(),
+            );
+        final coordinates = {
+          for (final row in locationRows)
+            row['branch_id'] as String: GeoCoordinate(
+              latitude: (row['latitude'] as num).toDouble(),
+              longitude: (row['longitude'] as num).toDouble(),
+              accuracyMeters: (row['location_accuracy_meters'] as num?)
+                  ?.toDouble(),
+            ),
+        };
         final branches = rows
-            .map(_branchFromCloud)
+            .map((row) => _branchFromCloud(row, coordinates[row['id']]))
             .where(
-              (branch) =>
-                  normalizeStoreCity(branch.city ?? '') == normalizedCity,
+              (b) =>
+                  b.storefrontPublished &&
+                  normalizeStoreCity(b.city ?? '') == normalizedCity,
             )
             .toList();
         await _cacheStoreBranches(branches);
@@ -663,33 +1179,56 @@ class CustomerCommerceService {
     return _offlineBranches(businessId, normalizedCity);
   }
 
+  Future<void> updateBranchStorefrontAddress({
+    required String businessId,
+    required String branchId,
+    required String address,
+    required String city,
+  }) async {
+    final cleanAddress = _nullIfBlank(address);
+    final cleanCity = _nullIfBlank(city);
+    await db.customStatement(
+      'UPDATE customer_store_branches SET address = ?, city = ?, '
+      'updated_at = ? WHERE id = ? AND business_id = ?',
+      [
+        cleanAddress,
+        cleanCity,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        branchId,
+        businessId,
+      ],
+    );
+    final client = _client;
+    if (client == null) return;
+    await client
+        .from('customer_store_branches')
+        .update({'address': cleanAddress, 'city': cleanCity})
+        .eq('id', branchId)
+        .eq('business_id', businessId);
+  }
+
   Future<void> publishStorefront({
     required String businessId,
     required String name,
     required String description,
-    required String phone,
-    required String address,
-    required String city,
     required String currencyCode,
-    required bool isPublished,
     required bool offlineEnabled,
     required int pointsPerCurrencyUnit,
-    required Map<int, StoreHours> openingHours,
-    required Set<String> publishedProductIds,
+    required Map<String, BranchStorefrontSettings> branchSettings,
   }) async {
     final client = _client;
     if (client == null) {
       throw StateError('Connect to the cloud to publish a storefront.');
     }
+    final publishedProductIds = <String>{
+      for (final s in branchSettings.values) ...s.productIds,
+    };
     if (pointsPerCurrencyUnit < 0 || pointsPerCurrencyUnit > 1000) {
       throw ArgumentError.value(
         pointsPerCurrencyUnit,
         'pointsPerCurrencyUnit',
         'Must be between 0 and 1000.',
       );
-    }
-    if (isPublished && name.trim().isEmpty) {
-      throw StateError('Enter a storefront name before publishing.');
     }
     final business = await (db.select(
       db.businesses,
@@ -709,50 +1248,60 @@ class CustomerCommerceService {
       for (final row in cityRows)
         row.read<String>('id'): row.read<String?>('city'),
     };
-    final activeBranches = branches.where((branch) => branch.isActive).toList();
-    if (isPublished &&
-        (activeBranches.isEmpty ||
-            activeBranches.any(
-              (branch) =>
-                  normalizeStoreCity(branchCities[branch.id] ?? '').isEmpty,
-            ))) {
+
+    bool isLive(Branch b) =>
+        b.isActive && (branchSettings[b.id]?.published ?? false);
+    final isPublished = branches.any(isLive);
+
+    if (isPublished && name.trim().isEmpty) {
+      throw StateError('Enter a storefront name before publishing.');
+    }
+    final missingCity = branches
+        .where(isLive)
+        .where((b) => normalizeStoreCity(branchCities[b.id] ?? '').isEmpty)
+        .map((b) => b.name)
+        .toList();
+    if (missingCity.isNotEmpty) {
       throw StateError(
-        'Add a city to every active branch before publishing the storefront.',
+        'Add a city to ${missingCity.join(', ')} before publishing it.',
       );
     }
 
+    // Business-level fields only. Phone, address, city and hours are
+    // per-branch now, so they are intentionally not sent here.
     await client.from('customer_storefronts').upsert({
       'business_id': businessId,
       'name': name.trim(),
       'description': _nullIfBlank(description),
-      'phone': _nullIfBlank(phone),
-      'address': _nullIfBlank(address),
-      'city': _nullIfBlank(city),
       'currency_code': currencyCode,
       'is_published': isPublished,
       'offline_enabled': offlineEnabled,
       'points_per_currency_unit': pointsPerCurrencyUnit,
-      'opening_hours': jsonDecode(serializeStoreHours(openingHours)),
     });
 
-    if (branches.isNotEmpty) {
-      await client
-          .from('customer_store_branches')
-          .upsert(
-            branches
-                .map(
-                  (branch) => {
-                    'id': branch.id,
-                    'business_id': businessId,
-                    'name': branch.name,
-                    'address': _nullIfBlank(branch.address),
-                    'city': _nullIfBlank(branchCities[branch.id]),
-                    'storefront_published': isPublished,
-                    'is_active': branch.isActive,
-                  },
-                )
-                .toList(),
-          );
+    final branchRows = [
+      for (final branch in branches)
+        {
+          'id': branch.id,
+          'business_id': businessId,
+          'name': branch.name,
+          'address': _nullIfBlank(branch.address),
+          'city': _nullIfBlank(branchCities[branch.id]),
+          'phone': _nullIfBlank(branchSettings[branch.id]?.phone),
+          'opening_hours': jsonDecode(
+            serializeStoreHours(
+              branchSettings[branch.id]?.openingHours ?? const {},
+            ),
+          ),
+          'availability_override': branchSettings[branch.id]
+              ?.availabilityOverride
+              ?.toJson(),
+          'storefront_published': isLive(branch),
+          'is_active': branch.isActive,
+        },
+    ];
+    if (branchRows.isNotEmpty) {
+      await client.from('customer_store_branches').upsert(branchRows);
     }
     await _cacheStoreBranches([
       for (final branch in branches)
@@ -766,10 +1315,16 @@ class CustomerCommerceService {
             updatedAt: branch.updatedAt,
           ),
           city: branchCities[branch.id],
-          storefrontPublished: isPublished,
+          storefrontPublished: isLive(branch),
+          phone: _nullIfBlank(branchSettings[branch.id]?.phone),
+          openingHoursJson: serializeStoreHours(
+            branchSettings[branch.id]?.openingHours ?? const {},
+          ),
+          availabilityOverride: branchSettings[branch.id]?.availabilityOverride,
         ),
     ]);
 
+    // ... selectedProducts / catalog upsert code stays exactly as it is ...
     final selectedProducts = publishedProductIds.isEmpty
         ? const <Product>[]
         : await (db.select(db.products)..where(
@@ -821,22 +1376,65 @@ class CustomerCommerceService {
           .eq('business_id', businessId)
           .inFilter('id', staleIds);
     }
+    // Per-branch catalog: exactly the products each branch sells.
+    final desired = <String, Set<String>>{
+      for (final branch in branches)
+        branch.id: <String>{
+          for (final id
+              in branchSettings[branch.id]?.productIds ?? const <String>{})
+            if (selectedProductIds.contains(id)) id,
+        },
+    };
+    final linkRows = [
+      for (final e in desired.entries)
+        for (final id in e.value)
+          {
+            'branch_id': e.key,
+            'catalog_item_id': id,
+            'business_id': businessId,
+          },
+    ];
+    if (linkRows.isNotEmpty) {
+      await client
+          .from('customer_branch_catalog_items')
+          .upsert(linkRows, onConflict: 'branch_id,catalog_item_id');
+    }
+    final existingLinks = await client
+        .from('customer_branch_catalog_items')
+        .select('branch_id, catalog_item_id')
+        .eq('business_id', businessId);
+    final staleByBranch = <String, List<String>>{};
+    for (final row in existingLinks) {
+      final b = row['branch_id'] as String;
+      final i = row['catalog_item_id'] as String;
+      if (!(desired[b]?.contains(i) ?? false)) {
+        (staleByBranch[b] ??= []).add(i);
+      }
+    }
+    for (final e in staleByBranch.entries) {
+      await client
+          .from('customer_branch_catalog_items')
+          .delete()
+          .eq('business_id', businessId)
+          .eq('branch_id', e.key)
+          .inFilter('catalog_item_id', e.value);
+    }
 
     final cached = CustomerStorefrontWithHours(
       storefront: CustomerStorefront(
         businessId: businessId,
         name: name.trim(),
         description: _nullIfBlank(description),
-        phone: _nullIfBlank(phone),
-        address: _nullIfBlank(address),
-        city: _nullIfBlank(city),
+        phone: _nullIfBlank(null),
+        address: _nullIfBlank(null),
+        city: _nullIfBlank(null),
         currencyCode: currencyCode,
         isPublished: isPublished,
         offlineEnabled: offlineEnabled,
         pointsPerCurrencyUnit: pointsPerCurrencyUnit,
         updatedAt: DateTime.now(),
       ),
-      openingHoursJson: serializeStoreHours(openingHours),
+      openingHoursJson: '{}',
     );
     await _cacheStorefronts([cached]);
     await _cacheCatalog(
@@ -860,6 +1458,224 @@ class CustomerCommerceService {
     );
   }
 
+  /// Publishes ONE branch: its switch, hours, phone and product list.
+  /// Other branches are never touched.
+  Future<void> publishBranchStorefront({
+    required String businessId,
+    required String branchId,
+    required String name,
+    required String description,
+    required String currencyCode,
+    required bool offlineEnabled,
+    required int pointsPerCurrencyUnit,
+    required BranchStorefrontSettings settings,
+    required Set<String> allowedBranchIds,
+  }) async {
+    final client = _client;
+    if (client == null) {
+      throw StateError('Connect to the cloud to publish a storefront.');
+    }
+    if (pointsPerCurrencyUnit < 0 || pointsPerCurrencyUnit > 1000) {
+      throw ArgumentError.value(
+        pointsPerCurrencyUnit,
+        'pointsPerCurrencyUnit',
+        'Must be between 0 and 1000.',
+      );
+    }
+    final branch =
+        await (db.select(db.branches)..where(
+              (b) => b.id.equals(branchId) & b.businessId.equals(businessId),
+            ))
+            .getSingleOrNull();
+    if (branch == null) throw StateError('Branch not found.');
+    if (!allowedBranchIds.contains(branchId)) {
+      throw StateError('You are not assigned to this branch.');
+    }
+    final cityRow = await db
+        .customSelect(
+          'SELECT city FROM branches WHERE id = ?',
+          variables: [Variable<String>(branchId)],
+        )
+        .getSingleOrNull();
+    final city = cityRow?.read<String?>('city');
+
+    final live = branch.isActive && settings.published;
+    if (live && name.trim().isEmpty) {
+      throw StateError('Enter a storefront name before publishing.');
+    }
+    if (live && normalizeStoreCity(city ?? '').isEmpty) {
+      throw StateError('Add a city to ${branch.name} before publishing it.');
+    }
+    final hoursJson = serializeStoreHours(settings.openingHours);
+
+    // The business storefront stays published while ANY branch is live.
+    final others = await client
+        .from('customer_store_branches')
+        .select('id, storefront_published, is_active')
+        .eq('business_id', businessId)
+        .neq('id', branchId);
+    final isPublished =
+        live ||
+        others.any(
+          (r) => r['storefront_published'] == true && r['is_active'] == true,
+        );
+
+    await client.from('customer_storefronts').upsert({
+      'business_id': businessId,
+      'name': name.trim(),
+      'description': _nullIfBlank(description),
+      'currency_code': currencyCode,
+      'is_published': isPublished,
+      'offline_enabled': offlineEnabled,
+      'points_per_currency_unit': pointsPerCurrencyUnit,
+    });
+
+    await client.from('customer_store_branches').upsert({
+      'id': branch.id,
+      'business_id': businessId,
+      'name': branch.name,
+      'address': _nullIfBlank(branch.address),
+      'city': _nullIfBlank(city),
+      'phone': _nullIfBlank(settings.phone),
+      'opening_hours': jsonDecode(hoursJson),
+      'availability_override': settings.availabilityOverride?.toJson(),
+      'storefront_published': live,
+      'is_active': branch.isActive,
+    });
+
+    // Products for THIS branch only.
+    final selected = settings.productIds.isEmpty
+        ? const <Product>[]
+        : await (db.select(db.products)..where(
+                (p) =>
+                    p.businessId.equals(businessId) &
+                    p.id.isIn(settings.productIds) &
+                    p.isActive.equals(true) &
+                    p.isSellable.equals(true),
+              ))
+              .get();
+    final categories = await (db.select(
+      db.productCategories,
+    )..where((c) => c.businessId.equals(businessId))).get();
+    final categoryNames = {for (final c in categories) c.id: c.name};
+
+    if (selected.isNotEmpty) {
+      await client.from('customer_catalog_items').upsert([
+        for (final product in selected)
+          {
+            'id': product.id,
+            'business_id': businessId,
+            'name': product.name,
+            'description': _nullIfBlank(product.description),
+            'category': categoryNames[product.categoryId],
+            'unit': product.unit,
+            'price_cents': product.sellPrice,
+            'image_url': null,
+            'is_available': true,
+          },
+      ]);
+    }
+
+    final desired = selected.map((p) => p.id).toSet();
+    final existingLinks = await client
+        .from('customer_branch_catalog_items')
+        .select('catalog_item_id')
+        .eq('business_id', businessId)
+        .eq('branch_id', branchId);
+    final staleLinks = existingLinks
+        .map((r) => r['catalog_item_id'] as String)
+        .where((id) => !desired.contains(id))
+        .toList();
+    if (staleLinks.isNotEmpty) {
+      await client
+          .from('customer_branch_catalog_items')
+          .delete()
+          .eq('business_id', businessId)
+          .eq('branch_id', branchId)
+          .inFilter('catalog_item_id', staleLinks);
+    }
+    if (desired.isNotEmpty) {
+      await client.from('customer_branch_catalog_items').upsert([
+        for (final id in desired)
+          {
+            'branch_id': branchId,
+            'catalog_item_id': id,
+            'business_id': businessId,
+          },
+      ], onConflict: 'branch_id,catalog_item_id');
+    }
+
+    // Server-side cleanup that can see every branch's links.
+    try {
+      await client.rpc(
+        'cleanup_orphan_catalog_items',
+        params: {'p_business_id': businessId},
+      );
+    } on PostgrestException catch (error) {
+      if (error.message.toLowerCase().contains('schema cache') ||
+          error.message.toLowerCase().contains(
+            'cleanup_orphan_catalog_items',
+          )) {
+        throw StateError(
+          'Branch saved, but publishing needs the latest Supabase migration. '
+          'Apply 20261101080000_cleanup_orphan_catalog_items.sql, then retry.',
+        );
+      }
+      rethrow;
+    }
+
+    // Local cache
+    await _cacheStoreBranches([
+      CustomerStoreBranchWithCity(
+        branch: CustomerStoreBranch(
+          id: branch.id,
+          businessId: businessId,
+          name: branch.name,
+          address: branch.address,
+          isActive: branch.isActive,
+          updatedAt: branch.updatedAt,
+        ),
+        city: city,
+        storefrontPublished: live,
+        phone: _nullIfBlank(settings.phone),
+        openingHoursJson: hoursJson,
+      ),
+    ]);
+    await _cacheStorefronts([
+      CustomerStorefrontWithHours(
+        storefront: CustomerStorefront(
+          businessId: businessId,
+          name: name.trim(),
+          description: _nullIfBlank(description),
+          phone: null,
+          address: null,
+          city: null,
+          currencyCode: currencyCode,
+          isPublished: isPublished,
+          offlineEnabled: offlineEnabled,
+          pointsPerCurrencyUnit: pointsPerCurrencyUnit,
+          updatedAt: DateTime.now(),
+        ),
+        openingHoursJson: '{}',
+      ),
+    ]);
+    await _cacheBranchCatalog(businessId, branchId, [
+      for (final product in selected)
+        CustomerCatalogItem(
+          id: product.id,
+          businessId: businessId,
+          name: product.name,
+          description: product.description,
+          category: categoryNames[product.categoryId],
+          unit: product.unit,
+          priceCents: product.sellPrice,
+          imageUrl: null,
+          isAvailable: true,
+          updatedAt: DateTime.now(),
+        ),
+    ]);
+  }
+
   Future<String> submitOrder({
     required String userId,
     required String businessId,
@@ -868,15 +1684,34 @@ class CustomerCommerceService {
     required bool requestsOfficialReceipt,
     required String tin,
     required String notes,
-    required List<({String itemId, double quantity})> items,
+    required List<
+      ({String itemId, double quantity, List<ProductOptionSelection> options})
+    >
+    items,
+    String fulfillmentType = 'pickup',
+    String? deliveryAddressId,
+    LocationAddress? deliveryAddress,
+    String paymentMethod = 'cash',
   }) async {
     final client = _client;
     if (client == null) {
       throw StateError('Connect to the internet to submit your order.');
     }
     if (items.isEmpty) throw StateError('Add at least one item to the order.');
+    if (fulfillmentType != 'pickup' && fulfillmentType != 'delivery') {
+      throw ArgumentError.value(
+        fulfillmentType,
+        'fulfillmentType',
+        'Use pickup or delivery.',
+      );
+    }
+    if (fulfillmentType == 'delivery' && deliveryAddress == null) {
+      throw StateError('Select a delivery address.');
+    }
     final result = await client.rpc(
-      'submit_customer_order',
+      fulfillmentType == 'delivery'
+          ? 'submit_customer_delivery_order'
+          : 'submit_customer_order',
       params: {
         'p_business_id': businessId,
         'p_branch_id': branchId,
@@ -884,10 +1719,25 @@ class CustomerCommerceService {
         'p_requests_official_receipt': requestsOfficialReceipt,
         'p_tin': requestsOfficialReceipt ? tin.trim() : null,
         'p_notes': _nullIfBlank(notes),
+        'p_payment_method': paymentMethod,
         'p_items': [
           for (final item in items)
-            {'catalog_item_id': item.itemId, 'quantity': item.quantity},
+            {
+              'catalog_item_id': item.itemId,
+              'quantity': item.quantity,
+              'options': item.options.map((option) => option.toJson()).toList(),
+            },
         ],
+        if (fulfillmentType == 'delivery') ...{
+          'p_address_snapshot': {
+            'address_id': deliveryAddressId,
+            ...deliveryAddress!.toJson(),
+          },
+          'p_delivery_latitude': deliveryAddress.coordinate?.latitude,
+          'p_delivery_longitude': deliveryAddress.coordinate?.longitude,
+          'p_delivery_accuracy_meters':
+              deliveryAddress.coordinate?.accuracyMeters,
+        },
       },
     );
     final orderId = result as String;
@@ -1084,13 +1934,24 @@ class CustomerCommerceService {
 
   Future<List<CustomerCatalogItem>> _offlineCatalog(
     CustomerStorefront store,
+    String branchId,
   ) async {
     if (!store.offlineEnabled) return const [];
+    final links = await db
+        .customSelect(
+          'SELECT catalog_item_id FROM customer_branch_catalog '
+          'WHERE branch_id = ?',
+          variables: [Variable<String>(branchId)],
+        )
+        .get();
+    final ids = links.map((r) => r.read<String>('catalog_item_id')).toList();
+    if (ids.isEmpty) return const [];
     return (db.select(db.customerCatalogItems)
           ..where(
             (item) =>
                 item.businessId.equals(store.businessId) &
-                item.isAvailable.equals(true),
+                item.isAvailable.equals(true) &
+                item.id.isIn(ids),
           )
           ..orderBy([(item) => OrderingTerm.asc(item.name)]))
         .get();
@@ -1124,7 +1985,7 @@ class CustomerCommerceService {
   ) async {
     final row = await db
         .customSelect(
-          'SELECT city, storefront_published '
+          'SELECT city, storefront_published, phone, opening_hours '
           'FROM customer_store_branches WHERE id = ?',
           variables: [Variable<String>(branch.id)],
         )
@@ -1133,6 +1994,29 @@ class CustomerCommerceService {
       branch: branch,
       city: row?.read<String?>('city'),
       storefrontPublished: row?.read<bool>('storefront_published') ?? false,
+      phone: row?.read<String?>('phone'),
+      openingHoursJson: row?.read<String>('opening_hours') ?? '{}',
+      coordinate: row == null ? null : await _localBranchCoordinate(branch.id),
+    );
+  }
+
+  Future<GeoCoordinate?> _localBranchCoordinate(String branchId) async {
+    final row = await db
+        .customSelect(
+          'SELECT latitude, longitude, location_accuracy_meters '
+          'FROM branch_locations WHERE branch_id = ?',
+          variables: [Variable<String>(branchId)],
+        )
+        .getSingleOrNull();
+    if (row == null ||
+        row.read<double?>('latitude') == null ||
+        row.read<double?>('longitude') == null) {
+      return null;
+    }
+    return GeoCoordinate(
+      latitude: row.read<double>('latitude'),
+      longitude: row.read<double>('longitude'),
+      accuracyMeters: row.read<double?>('location_accuracy_meters'),
     );
   }
 
@@ -1148,10 +2032,37 @@ class CustomerCommerceService {
     });
     for (final branch in branches) {
       await db.customStatement(
-        'UPDATE customer_store_branches '
-        'SET city = ?, storefront_published = ? WHERE id = ?',
-        [branch.city, branch.storefrontPublished ? 1 : 0, branch.id],
+        'UPDATE customer_store_branches SET city = ?, storefront_published = ?, '
+        'phone = ?, opening_hours = ? WHERE id = ?',
+        [
+          branch.city,
+          branch.storefrontPublished ? 1 : 0,
+          branch.phone,
+          branch.openingHoursJson,
+          branch.id,
+        ],
       );
+      if (branch.coordinate != null) {
+        await db.customStatement(
+          '''
+          INSERT INTO branch_locations (
+            branch_id, business_id, latitude, longitude,
+            location_accuracy_meters, location_verified
+          ) VALUES (?, ?, ?, ?, ?, 'confirmed')
+          ON CONFLICT(branch_id) DO UPDATE SET
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            location_accuracy_meters = excluded.location_accuracy_meters
+          ''',
+          [
+            branch.id,
+            branch.businessId,
+            branch.coordinate!.latitude,
+            branch.coordinate!.longitude,
+            branch.coordinate!.accuracyMeters,
+          ],
+        );
+      }
     }
   }
 
@@ -1194,6 +2105,35 @@ class CustomerCommerceService {
     });
   }
 
+  Future<void> _cacheBranchCatalog(
+    String businessId,
+    String branchId,
+    List<CustomerCatalogItem> items,
+  ) async {
+    await db.transaction(() async {
+      if (items.isNotEmpty) {
+        await db.batch((batch) {
+          batch.insertAll(
+            db.customerCatalogItems,
+            items.map(_catalogCompanion).toList(),
+            mode: InsertMode.insertOrReplace,
+          );
+        });
+      }
+      await db.customStatement(
+        'DELETE FROM customer_branch_catalog WHERE branch_id = ?',
+        [branchId],
+      );
+      for (final item in items) {
+        await db.customStatement(
+          'INSERT OR REPLACE INTO customer_branch_catalog '
+          '(branch_id, catalog_item_id, business_id) VALUES (?, ?, ?)',
+          [branchId, item.id, businessId],
+        );
+      }
+    });
+  }
+
   static CustomerStorefront _storefrontFromCloud(Map<String, dynamic> row) =>
       CustomerStorefrontWithHours(
         storefront: CustomerStorefront(
@@ -1228,8 +2168,9 @@ class CustomerCommerceService {
       );
 
   static CustomerStoreBranchWithCity _branchFromCloud(
-    Map<String, dynamic> row,
-  ) => CustomerStoreBranchWithCity(
+    Map<String, dynamic> row, [
+    GeoCoordinate? coordinate,
+  ]) => CustomerStoreBranchWithCity(
     branch: CustomerStoreBranch(
       id: row['id'] as String,
       businessId: row['business_id'] as String,
@@ -1240,6 +2181,9 @@ class CustomerCommerceService {
     ),
     city: row['city'] as String?,
     storefrontPublished: row['storefront_published'] as bool,
+    phone: row['phone'] as String?,
+    openingHoursJson: _openingHoursJson(row['opening_hours']),
+    coordinate: coordinate,
   );
 
   static CustomerOrder _orderFromCloud(Map<String, dynamic> row) =>
@@ -1359,6 +2303,29 @@ class CustomerCommerceService {
 
   static String? _nullIfBlank(String? value) =>
       value == null || value.trim().isEmpty ? null : value.trim();
+
+  static GeoCoordinate? _coordinateFromMap(Map<String, dynamic> row) {
+    final latitude = (row['latitude'] as num?)?.toDouble();
+    final longitude = (row['longitude'] as num?)?.toDouble();
+    if (latitude == null || longitude == null) return null;
+    return GeoCoordinate(
+      latitude: latitude,
+      longitude: longitude,
+      accuracyMeters: (row['location_accuracy_meters'] as num?)?.toDouble(),
+    );
+  }
+
+  static GeoCoordinate? _coordinateFromRow(QueryRow? row) {
+    if (row == null) return null;
+    final latitude = row.read<double?>('latitude');
+    final longitude = row.read<double?>('longitude');
+    if (latitude == null || longitude == null) return null;
+    return GeoCoordinate(
+      latitude: latitude,
+      longitude: longitude,
+      accuracyMeters: row.read<double?>('location_accuracy_meters'),
+    );
+  }
 }
 
 String normalizeStoreCity(String city) =>
@@ -1374,8 +2341,21 @@ final customerCommerceServiceProvider = Provider<CustomerCommerceService>((
   );
 });
 
-String storefrontInvitePayload(String businessId) =>
-    'bosapp://store/$businessId';
+String storefrontInvitePayload(String businessId, {String? branchId}) =>
+    branchId == null
+    ? 'bosapp://store/$businessId'
+    : 'bosapp://store/$businessId?branch=$branchId';
+
+String? branchIdFromStorefrontInvite(String payload) {
+  final id = Uri.tryParse(payload.trim())?.queryParameters['branch'];
+  if (id == null ||
+      !RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+      ).hasMatch(id)) {
+    return null;
+  }
+  return id;
+}
 
 String? businessIdFromStorefrontInvite(String payload) {
   final uri = Uri.tryParse(payload.trim());
