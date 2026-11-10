@@ -12,6 +12,7 @@
 //   * invalid operations (overpayment, bad account, wrong business) throw
 //     and leave no partial writes behind.
 
+import 'package:bos_application/core/business/current_business.dart';
 import 'package:bos_application/core/auth/authorization_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/ledger/ledger_service.dart';
@@ -112,7 +113,7 @@ AuthorizationService _ownerAuth() => AuthorizationService(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  kCurrentBusinessId = _biz;
+  setCurrentBusinessIdForTest(_biz);
 
   late AppDatabase db;
   late LedgerService ledger;

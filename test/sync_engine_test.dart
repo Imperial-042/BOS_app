@@ -5,6 +5,7 @@
 // Supabase needed). Live push/pull against the real project runs once the
 // project's email confirmation is disabled.
 
+import 'package:bos_application/core/business/current_business.dart';
 import 'package:bos_application/core/auth/authorization_service.dart';
 import 'package:bos_application/core/business/business_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
@@ -13,8 +14,6 @@ import 'package:bos_application/core/sync/sync_coordinator.dart';
 import 'package:bos_application/core/sync/sync_tracker.dart';
 import 'package:bos_application/features/transactions/presentation/screens/customers_page.dart'
     show CustomerService;
-import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
-    show kCurrentBusinessId;
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -47,7 +46,7 @@ void main() {
     db = await _newDb();
     customers = CustomerService(db);
     biz = await _createBusiness(db, 'Alpha');
-    kCurrentBusinessId = biz.id;
+    setCurrentBusinessIdForTest(biz.id);
     SyncTracker.currentUserId = _owner;
   });
 

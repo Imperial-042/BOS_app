@@ -24,6 +24,12 @@ import 'package:bos_application/core/navigation/shell/navigation_shell.dart';
 /// Runs when the membership resolves (and again whenever it changes), never
 /// from a widget rebuild: starts sync once the member has a usable role.
 final accessSessionEffectsProvider = Provider.autoDispose<void>((ref) {
+  // Watch the device session from the moment the gate appears (loading,
+  // no-access and the app itself), as the old guard did.
+  if (ref.read(supabaseAvailableProvider)) {
+    ref.read(deviceSessionWatcherProvider);
+  }
+
   ref.listen(currentBusinessMembershipProvider, (previous, next) {
     final m = next.asData?.value;
     if (m == null) return;
@@ -31,12 +37,8 @@ final accessSessionEffectsProvider = Provider.autoDispose<void>((ref) {
     if (!custom && BosRole.fromId(m.role) == null) return;
 
     ref.read(syncTriggerServiceProvider).start();
-    if (ref.read(supabaseAvailableProvider)) {
-      ref.read(deviceSessionWatcherProvider);
-    }
   }, fireImmediately: true);
 });
-
 class BosAccessGate extends ConsumerWidget {
   const BosAccessGate({super.key});
 

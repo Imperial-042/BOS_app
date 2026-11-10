@@ -1,3 +1,4 @@
+import 'package:bos_application/core/business/current_business.dart';
 import 'package:bos_application/core/database/app_database.dart';
 import 'package:bos_application/core/stock/stock_service.dart';
 import 'package:bos_application/features/transactions/domain/costing_service.dart';
@@ -7,8 +8,6 @@ import 'package:bos_application/features/transactions/domain/purchase_line_prici
 import 'package:bos_application/features/transactions/domain/purchase_unit_options.dart';
 import 'package:bos_application/features/transactions/domain/purchase_stock_conversion.dart';
 import 'package:bos_application/features/transactions/presentation/screens/supplies_price_list_page.dart';
-import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart'
-    show kCurrentBusinessId;
 import 'package:bos_application/features/transactions/presentation/widgets/purchase_line_editor_dialog.dart';
 import 'package:bos_application/features/transactions/presentation/widgets/supply_catalog_filters.dart'
     show supplyMatchesSearch;
@@ -59,7 +58,7 @@ void main() {
   late AppDatabase database;
 
   setUp(() async {
-    kCurrentBusinessId = 'business-1';
+    setCurrentBusinessIdForTest('business-1');
     database = AppDatabase.forTesting(NativeDatabase.memory());
     await database
         .into(database.businesses)

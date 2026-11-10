@@ -2,24 +2,37 @@
 //
 // The ONE place that changes which business is open.
 //
-// kCurrentBusinessId (transaction_page.dart) is a mutable global that many
-// screens still read. It is now written only from applyCurrentBusiness(), and
-// mirrored into currentBusinessIdProvider so code can migrate to the provider
-// one call site at a time. When no reference to kCurrentBusinessId is left,
-// delete the global and the first line of applyCurrentBusiness().
+// kCurrentBusinessId is a read-only view for call sites that have no `ref`.
+// Only applyCurrentBusiness() changes it, and it also feeds
+// currentBusinessIdProvider so screens can migrate to the provider one at a
+// time. When nothing reads kCurrentBusinessId any more, delete it.
 
-import 'package:bos_application/features/transactions/presentation/screens/transaction_page.dart' show kCurrentBusinessId, ledgerVersionProvider;
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:bos_application/core/auth/authorization_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
+/// Tests only: pretend [id] is the open business.
+@visibleForTesting
+void setCurrentBusinessIdForTest(String id) => _currentBusinessId = id;
+
+String _currentBusinessId = 'biz_001';
+
+/// Read-only. Use currentBusinessIdProvider in new code.
+String get kCurrentBusinessId => _currentBusinessId;
 
 /// The open business, or null before startup has chosen one.
 final currentBusinessIdProvider = StateProvider<String?>((ref) => null);
 
+/// Bumped whenever ledger data or the open business changes, so providers
+/// that read the ledger refresh.
+final ledgerVersionProvider = StateProvider<int>((ref) => 0);
+
 /// Makes [businessId] the open business. Returns true if it changed.
 bool applyCurrentBusiness(Ref ref, String businessId) {
-  final changed = kCurrentBusinessId != businessId;
+  final changed = _currentBusinessId != businessId;
 
-  kCurrentBusinessId = businessId; // legacy global, see header
+  _currentBusinessId = businessId;
   ref.read(currentBusinessIdProvider.notifier).state = businessId;
   ref.invalidate(selectedBusinessIdProvider);
 

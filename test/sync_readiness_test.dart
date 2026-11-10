@@ -5,6 +5,7 @@
 // the real services against an in-memory Drift database. Two businesses
 // with overlapping names prove isolation end-to-end.
 
+import 'package:bos_application/core/business/current_business.dart';
 import 'package:bos_application/core/auth/authorization_service.dart';
 import 'package:bos_application/core/business/business_service.dart';
 import 'package:bos_application/core/database/app_database.dart';
@@ -82,7 +83,7 @@ void main() {
     ledger = LedgerService(db);
     customers = CustomerService(db);
     biz = await _createBusiness(db, 'Alpha');
-    kCurrentBusinessId = biz.id;
+    setCurrentBusinessIdForTest(biz.id);
     SyncTracker.currentUserId = _owner;
   });
 
@@ -242,7 +243,7 @@ void main() {
     test('export excludes the other business entirely', () async {
       final bizB = await _createBusiness(db, 'Beta');
       await customers.addCustomer(name: 'Ana'); // in biz (current)
-      kCurrentBusinessId = bizB.id;
+      setCurrentBusinessIdForTest(bizB.id);
       await customers.addCustomer(name: 'Ana'); // same name, other business
       final anaB = await (db.select(
         db.customers,
