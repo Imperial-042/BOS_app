@@ -13,6 +13,9 @@ import '../../../core/supabase/supabase_service.dart';
 import '../../../core/location/location_models.dart';
 import '../../transactions/domain/product_variants.dart';
 import 'package:bos_application/features/customer/domain/storefront_models.dart';
+import 'package:bos_application/core/auth/business_membership_lookup.dart';
+import 'package:bos_application/features/customer/domain/customer_profile_service.dart';
+import 'package:bos_application/features/customer/domain/customer_orders_service.dart';
 export 'package:bos_application/features/customer/domain/storefront_models.dart';
 export 'package:bos_application/features/customer/domain/storefront_invites.dart';
 
@@ -107,6 +110,10 @@ class CustomerCommerceService {
     ];
   }
 
+  // Customer profile: implemented in CustomerProfileService.
+  CustomerProfileService get _profiles =>
+      CustomerProfileService(db, client: _client);
+
   Future<void> ensureCustomerProfile({
     required String userId,
     required String displayName,
@@ -114,148 +121,20 @@ class CustomerCommerceService {
     String? city,
     String? address,
     GeoCoordinate? coordinate,
-  }) async {
-    final name = displayName.trim();
-    if (name.isEmpty) throw StateError('Enter your name.');
+  }) => _profiles.ensureCustomerProfile(
+    userId: userId,
+    displayName: displayName,
+    phone: phone,
+    city: city,
+    address: address,
+    coordinate: coordinate,
+  );
 
-    if (_client != null) {
-      await _client.from('customer_profiles').upsert({
-        'id': userId,
-        'display_name': name,
-        'phone': _nullIfBlank(phone),
-        'city': _nullIfBlank(city),
-        'address': _nullIfBlank(address),
-        'latitude': coordinate?.latitude,
-        'longitude': coordinate?.longitude,
-        'location_accuracy_meters': coordinate?.accuracyMeters,
-      });
-    }
+  Future<bool> hasCustomerProfile(String userId) =>
+      _profiles.hasCustomerProfile(userId);
 
-    await db
-        .into(db.customerProfiles)
-        .insertOnConflictUpdate(
-          CustomerProfilesCompanion.insert(
-            id: userId,
-            displayName: name,
-            updatedAt: Value(DateTime.now()),
-          ),
-        );
-    if (_nullIfBlank(phone) != null) {
-      await db.customStatement(
-        'UPDATE customer_profiles SET phone = ? WHERE id = ?',
-        [_nullIfBlank(phone), userId],
-      );
-    }
-    await _writeLocalCustomerLocation(
-      userId,
-      _nullIfBlank(city),
-      _nullIfBlank(address),
-      _nullIfBlank(phone),
-      coordinate,
-    );
-  }
-
-  Future<bool> hasCustomerProfile(String userId) async {
-    final local = await (db.select(
-      db.customerProfiles,
-    )..where((profile) => profile.id.equals(userId))).getSingleOrNull();
-    if (local != null) return true;
-    if (_client == null) return false;
-
-    final row = await _client
-        .from('customer_profiles')
-        .select(
-          'id, display_name, phone, city, address, latitude, longitude, '
-          'location_accuracy_meters',
-        )
-        .eq('id', userId)
-        .maybeSingle();
-    if (row == null) return false;
-    await db
-        .into(db.customerProfiles)
-        .insertOnConflictUpdate(
-          CustomerProfilesCompanion.insert(
-            id: userId,
-            displayName: row['display_name'] as String,
-          ),
-        );
-    await _writeLocalCustomerLocation(
-      userId,
-      row['city'] as String?,
-      row['address'] as String?,
-      row['phone'] as String?,
-      _coordinateFromMap(row),
-    );
-    return true;
-  }
-
-  Future<CustomerLocationProfile?> loadCustomerProfile(String userId) async {
-    Map<String, dynamic>? remote;
-    if (_client != null) {
-      try {
-        remote = await _client
-            .from('customer_profiles')
-            .select(
-              'id, display_name, phone, city, address, latitude, longitude, '
-              'location_accuracy_meters',
-            )
-            .eq('id', userId)
-            .maybeSingle();
-        if (remote != null) {
-          await db
-              .into(db.customerProfiles)
-              .insertOnConflictUpdate(
-                CustomerProfilesCompanion.insert(
-                  id: userId,
-                  displayName: remote['display_name'] as String,
-                ),
-              );
-          await _writeLocalCustomerLocation(
-            userId,
-            remote['city'] as String?,
-            remote['address'] as String?,
-            remote['phone'] as String?,
-            _coordinateFromMap(remote),
-          );
-        }
-      } on SocketException {
-        // Use the cached profile while offline.
-      } on HttpException {
-        // Use the cached profile while offline.
-      } on TimeoutException {
-        // Use the cached profile while offline.
-      }
-    }
-    if (remote != null) {
-      return CustomerLocationProfile(
-        id: userId,
-        displayName: remote['display_name'] as String,
-        phone: remote['phone'] as String?,
-        city: remote['city'] as String?,
-        address: remote['address'] as String?,
-        coordinate: _coordinateFromMap(remote),
-      );
-    }
-    final profile = await (db.select(
-      db.customerProfiles,
-    )..where((profile) => profile.id.equals(userId))).getSingleOrNull();
-    if (profile == null) return null;
-    final location = await db
-        .customSelect(
-          'SELECT phone, city, address, latitude, longitude, '
-          'location_accuracy_meters FROM customer_profiles WHERE id = ?',
-          variables: [Variable<String>(userId)],
-        )
-        .getSingleOrNull();
-    return CustomerLocationProfile(
-      id: userId,
-      displayName: profile.displayName,
-      phone: location?.read<String?>('phone'),
-      city: location?.read<String?>('city'),
-      address: location?.read<String?>('address'),
-      coordinate: _coordinateFromRow(location),
-    );
-  }
+  Future<CustomerLocationProfile?> loadCustomerProfile(String userId) =>
+      _profiles.loadCustomerProfile(userId);
 
   Future<void> updateCustomerProfile({
     required String userId,
@@ -264,176 +143,42 @@ class CustomerCommerceService {
     required String city,
     required String address,
     GeoCoordinate? coordinate,
-  }) async {
-    final cleanName = displayName.trim();
-    final cleanCity = _nullIfBlank(city);
-    if (cleanName.isEmpty) throw StateError('Enter your name.');
-    if (cleanCity == null) throw StateError('Enter your city or area.');
-    final cleanPhone = _nullIfBlank(phone);
-    final cleanAddress = _nullIfBlank(address);
-    final profile = await (db.select(
-      db.customerProfiles,
-    )..where((value) => value.id.equals(userId))).getSingleOrNull();
-    if (profile == null) throw StateError('Customer profile not found.');
-
-    final client = _client;
-    if (client != null) {
-      final rows = await client
-          .from('customer_profiles')
-          .update({
-            'display_name': cleanName,
-            'phone': cleanPhone,
-            'city': cleanCity,
-            'address': cleanAddress,
-            'latitude': coordinate?.latitude,
-            'longitude': coordinate?.longitude,
-            'location_accuracy_meters': coordinate?.accuracyMeters,
-          })
-          .eq('id', userId)
-          .select('id');
-      if (rows.isEmpty) throw StateError('Customer profile not found.');
-    }
-    await db.transaction(() async {
-      await (db.update(
-        db.customerProfiles,
-      )..where((value) => value.id.equals(userId))).write(
-        CustomerProfilesCompanion(
-          displayName: Value(cleanName),
-          updatedAt: Value(DateTime.now()),
-        ),
-      );
-      await db.customStatement(
-        'UPDATE customer_profiles SET phone = ?, city = ?, address = ?, '
-        'updated_at = ? WHERE id = ?',
-        [
-          cleanPhone,
-          cleanCity,
-          cleanAddress,
-          DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          userId,
-        ],
-      );
-    });
-  }
+  }) => _profiles.updateCustomerProfile(
+    userId: userId,
+    displayName: displayName,
+    phone: phone,
+    city: city,
+    address: address,
+    coordinate: coordinate,
+  );
 
   Future<void> updateCustomerLocation({
     required String userId,
     required String city,
     required String address,
     GeoCoordinate? coordinate,
-  }) async {
-    final cleanCity = _nullIfBlank(city);
-    final cleanAddress = _nullIfBlank(address);
-    if (cleanCity == null) throw StateError('Enter your city or area.');
-    final profile = await (db.select(
-      db.customerProfiles,
-    )..where((value) => value.id.equals(userId))).getSingleOrNull();
-    if (profile == null) throw StateError('Customer profile not found.');
+  }) => _profiles.updateCustomerLocation(
+    userId: userId,
+    city: city,
+    address: address,
+    coordinate: coordinate,
+  );
 
-    final client = _client;
-    if (client != null) {
-      final rows = await client
-          .from('customer_profiles')
-          .update({
-            'city': cleanCity,
-            'address': cleanAddress,
-            'latitude': coordinate?.latitude,
-            'longitude': coordinate?.longitude,
-            'location_accuracy_meters': coordinate?.accuracyMeters,
-          })
-          .eq('id', userId)
-          .select('id');
-      if (rows.isEmpty) throw StateError('Customer profile not found.');
-    }
-    await _writeLocalCustomerLocation(
-      userId,
-      cleanCity,
-      cleanAddress,
-      null,
-      coordinate,
-    );
-  }
 
-  Future<void> _writeLocalCustomerLocation(
-    String userId,
-    String? city,
-    String? address, [
-    String? phone,
-    GeoCoordinate? coordinate,
-  ]) async {
-    await db.customStatement(
-      'UPDATE customer_profiles SET phone = COALESCE(?, phone), city = ?, '
-      'address = ?, latitude = ?, longitude = ?, '
-      'location_accuracy_meters = ?, updated_at = ? '
-      'WHERE id = ?',
-      [
-        phone,
-        city,
-        address,
-        coordinate?.latitude,
-        coordinate?.longitude,
-        coordinate?.accuracyMeters,
-        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        userId,
-      ],
-    );
-  }
+  // Account questions, not commerce: the logic lives in
+  // BusinessMembershipLookup. Callers should move to
+  // businessMembershipLookupProvider; then delete these three.
+  BusinessMembershipLookup get _membership =>
+      BusinessMembershipLookup(db, client: _client);
 
-  Future<bool> hasBusinessMembership(String userId) async {
-    final local =
-        await (db.select(db.businessMembers)..where(
-              (member) =>
-                  member.userId.equals(userId) & member.status.equals('active'),
-            ))
-            .get();
-    if (local.isNotEmpty) return true;
-    final owned = await (db.select(
-      db.businesses,
-    )..where((business) => business.ownerUserId.equals(userId))).get();
-    if (owned.isNotEmpty) return true;
-    if (_client == null) return false;
+  Future<bool> hasBusinessMembership(String userId) =>
+      _membership.hasBusinessMembership(userId);
 
-    final memberships = await _client
-        .from('business_memberships')
-        .select('business_id')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .limit(1);
-    return memberships.isNotEmpty;
-  }
+  Future<bool> hasOwnerBusinessMembership(String userId) =>
+      _membership.hasOwnerBusinessMembership(userId);
 
-  Future<bool> hasOwnerBusinessMembership(String userId) async {
-    final owned = await (db.select(
-      db.businesses,
-    )..where((business) => business.ownerUserId.equals(userId))).get();
-    if (owned.isNotEmpty) return true;
-
-    final localOwner =
-        await (db.select(db.businessMembers)..where(
-              (member) =>
-                  member.userId.equals(userId) &
-                  member.role.equals('owner') &
-                  member.status.equals('active'),
-            ))
-            .getSingleOrNull();
-    if (localOwner != null) return true;
-    if (_client == null) return false;
-
-    final memberships = await _client
-        .from('business_memberships')
-        .select('business_id')
-        .eq('user_id', userId)
-        .eq('role', 'owner')
-        .eq('status', 'active')
-        .limit(1);
-    return memberships.isNotEmpty;
-  }
-
-  Future<bool> hasTeamBusinessMembership(String userId) async {
-    if (!await hasBusinessMembership(userId)) return false;
-    if (await hasOwnerBusinessMembership(userId)) return false;
-    return true;
-  }
+  Future<bool> hasTeamBusinessMembership(String userId) =>
+      _membership.hasTeamBusinessMembership(userId);
 
   Future<List<CustomerStorefront>> discoverStores({
     required String city,
@@ -1142,6 +887,10 @@ class CustomerCommerceService {
     ]);
   }
 
+  // Orders and loyalty: implemented in CustomerOrdersService.
+  CustomerOrdersService get _orders =>
+      CustomerOrdersService(db, client: _client);
+
   Future<String> submitOrder({
     required String userId,
     required String businessId,
@@ -1158,181 +907,49 @@ class CustomerCommerceService {
     String? deliveryAddressId,
     LocationAddress? deliveryAddress,
     String paymentMethod = 'cash',
-  }) async {
-    final client = _client;
-    if (client == null) {
-      throw StateError('Connect to the internet to submit your order.');
-    }
-    if (items.isEmpty) throw StateError('Add at least one item to the order.');
-    if (fulfillmentType != 'pickup' && fulfillmentType != 'delivery') {
-      throw ArgumentError.value(
-        fulfillmentType,
-        'fulfillmentType',
-        'Use pickup or delivery.',
-      );
-    }
-    if (fulfillmentType == 'delivery' && deliveryAddress == null) {
-      throw StateError('Select a delivery address.');
-    }
-    final result = await client.rpc(
-      fulfillmentType == 'delivery'
-          ? 'submit_customer_delivery_order'
-          : 'submit_customer_order',
-      params: {
-        'p_business_id': businessId,
-        'p_branch_id': branchId,
-        'p_phone': phone.trim(),
-        'p_requests_official_receipt': requestsOfficialReceipt,
-        'p_tin': requestsOfficialReceipt ? tin.trim() : null,
-        'p_notes': _nullIfBlank(notes),
-        'p_payment_method': paymentMethod,
-        'p_items': [
-          for (final item in items)
-            {
-              'catalog_item_id': item.itemId,
-              'quantity': item.quantity,
-              'options': item.options.map((option) => option.toJson()).toList(),
-            },
-        ],
-        if (fulfillmentType == 'delivery') ...{
-          'p_address_snapshot': {
-            'address_id': deliveryAddressId,
-            ...deliveryAddress!.toJson(),
-          },
-          'p_delivery_latitude': deliveryAddress.coordinate?.latitude,
-          'p_delivery_longitude': deliveryAddress.coordinate?.longitude,
-          'p_delivery_accuracy_meters':
-              deliveryAddress.coordinate?.accuracyMeters,
-        },
-      },
-    );
-    final orderId = result as String;
-    await loadOrders(userId: userId);
-    return orderId;
-  }
+  }) => _orders.submitOrder(
+    userId: userId,
+    businessId: businessId,
+    branchId: branchId,
+    phone: phone,
+    requestsOfficialReceipt: requestsOfficialReceipt,
+    tin: tin,
+    notes: notes,
+    items: items,
+    fulfillmentType: fulfillmentType,
+    deliveryAddressId: deliveryAddressId,
+    deliveryAddress: deliveryAddress,
+    paymentMethod: paymentMethod,
+  );
 
   Future<List<CustomerOrder>> loadOrders({
     String? userId,
     String? businessId,
     String? branchId,
-  }) async {
-    if (_client == null) {
-      return (db.select(db.customerOrders)
-            ..where((order) {
-              if (userId != null) {
-                return order.customerUserId.equals(userId);
-              }
-              return order.businessId.equals(businessId!) &
-                  (branchId == null
-                      ? const Constant(true)
-                      : order.branchId.equals(branchId));
-            })
-            ..orderBy([(order) => OrderingTerm.desc(order.createdAt)]))
-          .get();
-    }
+  }) => _orders.loadOrders(
+    userId: userId,
+    businessId: businessId,
+    branchId: branchId,
+  );
 
-    final query = _client
-        .from('customer_orders')
-        .select(
-          'id, business_id, customer_user_id, branch_id, branch_name, currency_code, status, '
-          'customer_name, customer_phone, requests_official_receipt, customer_tin, '
-          'notes, total_cents, created_at, updated_at',
-        );
-    final rows = userId != null
-        ? await query
-              .eq('customer_user_id', userId)
-              .order('created_at', ascending: false)
-        : await (branchId == null
-                  ? query.eq('business_id', businessId!)
-                  : query
-                        .eq('business_id', businessId!)
-                        .eq('branch_id', branchId))
-              .order('created_at', ascending: false);
-    final orders = rows.map(_orderFromCloud).toList();
-    await db.batch((batch) {
-      batch.insertAll(
-        db.customerOrders,
-        orders.map(_orderCompanion).toList(),
-        mode: InsertMode.insertOrReplace,
-      );
-    });
-    return orders;
-  }
-
-  Future<List<CustomerOrderItem>> loadOrderItems(String orderId) async {
-    if (_client != null) {
-      final rows = await _client
-          .from('customer_order_items')
-          .select(
-            'id, order_id, catalog_item_id, item_name, unit, quantity, '
-            'unit_price_cents, total_cents',
-          )
-          .eq('order_id', orderId);
-      final items = rows.map(_orderItemFromCloud).toList();
-      await db.batch((batch) {
-        batch.insertAll(
-          db.customerOrderItems,
-          items.map(_orderItemCompanion).toList(),
-          mode: InsertMode.insertOrReplace,
-        );
-      });
-      return items;
-    }
-    return (db.select(
-      db.customerOrderItems,
-    )..where((item) => item.orderId.equals(orderId))).get();
-  }
+  Future<List<CustomerOrderItem>> loadOrderItems(String orderId) =>
+      _orders.loadOrderItems(orderId);
 
   Future<void> updateOrderStatus({
     required String orderId,
     required String businessId,
     required String status,
-  }) async {
-    const allowed = {
-      'accepted',
-      'rejected',
-      'preparing',
-      'ready',
-      'completed',
-      'cancelled',
-    };
-    if (!allowed.contains(status)) throw ArgumentError.value(status, 'status');
-    final client = _client;
-    if (client == null) {
-      throw StateError('Connect to the cloud to update customer orders.');
-    }
-    await client
-        .from('customer_orders')
-        .update({'status': status})
-        .eq('id', orderId)
-        .eq('business_id', businessId);
-    await loadOrders(businessId: businessId);
-  }
+  }) => _orders.updateOrderStatus(
+    orderId: orderId,
+    businessId: businessId,
+    status: status,
+  );
 
   Future<int> loyaltyBalance({
     required String userId,
     required String businessId,
-  }) async {
-    if (_client != null) {
-      final rows = await _client
-          .from('customer_loyalty_entries')
-          .select('points')
-          .eq('customer_user_id', userId)
-          .eq('business_id', businessId);
-      return rows.fold<int>(
-        0,
-        (sum, row) => sum + (row['points'] as num).toInt(),
-      );
-    }
-    final rows =
-        await (db.select(db.customerLoyaltyEntries)..where(
-              (entry) =>
-                  entry.customerUserId.equals(userId) &
-                  entry.businessId.equals(businessId),
-            ))
-            .get();
-    return rows.fold<int>(0, (sum, entry) => sum + entry.points);
-  }
+  }) => _orders.loyaltyBalance(userId: userId, businessId: businessId);
+
 
   Future<List<CustomerStorefront>> _offlineStores(String city) async {
     final branchRows = await (db.select(
@@ -1652,37 +1269,6 @@ class CustomerCommerceService {
     coordinate: coordinate,
   );
 
-  static CustomerOrder _orderFromCloud(Map<String, dynamic> row) =>
-      CustomerOrder(
-        id: row['id'] as String,
-        businessId: row['business_id'] as String,
-        customerUserId: row['customer_user_id'] as String,
-        branchId: row['branch_id'] as String,
-        branchName: row['branch_name'] as String,
-        currencyCode: row['currency_code'] as String,
-        status: row['status'] as String,
-        customerName: row['customer_name'] as String,
-        customerPhone: row['customer_phone'] as String,
-        requestsOfficialReceipt: row['requests_official_receipt'] as bool,
-        customerTin: row['customer_tin'] as String?,
-        notes: row['notes'] as String?,
-        totalCents: (row['total_cents'] as num).toInt(),
-        createdAt: _date(row['created_at']),
-        updatedAt: _date(row['updated_at']),
-      );
-
-  static CustomerOrderItem _orderItemFromCloud(Map<String, dynamic> row) =>
-      CustomerOrderItem(
-        id: row['id'] as String,
-        orderId: row['order_id'] as String,
-        catalogItemId: row['catalog_item_id'] as String,
-        itemName: row['item_name'] as String,
-        unit: row['unit'] as String,
-        quantity: (row['quantity'] as num).toDouble(),
-        unitPriceCents: (row['unit_price_cents'] as num).toInt(),
-        totalCents: (row['total_cents'] as num).toInt(),
-      );
-
   static CustomerStorefrontsCompanion _storefrontCompanion(
     CustomerStorefront store,
   ) => CustomerStorefrontsCompanion.insert(
@@ -1725,38 +1311,6 @@ class CustomerCommerceService {
     updatedAt: Value(branch.updatedAt),
   );
 
-  static CustomerOrdersCompanion _orderCompanion(CustomerOrder order) =>
-      CustomerOrdersCompanion.insert(
-        id: order.id,
-        businessId: order.businessId,
-        customerUserId: order.customerUserId,
-        branchId: order.branchId,
-        branchName: order.branchName,
-        currencyCode: Value(order.currencyCode),
-        status: order.status,
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
-        requestsOfficialReceipt: Value(order.requestsOfficialReceipt),
-        customerTin: Value(order.customerTin),
-        notes: Value(order.notes),
-        totalCents: order.totalCents,
-        createdAt: Value(order.createdAt),
-        updatedAt: Value(order.updatedAt),
-      );
-
-  static CustomerOrderItemsCompanion _orderItemCompanion(
-    CustomerOrderItem item,
-  ) => CustomerOrderItemsCompanion.insert(
-    id: item.id,
-    orderId: item.orderId,
-    catalogItemId: item.catalogItemId,
-    itemName: item.itemName,
-    unit: item.unit,
-    quantity: item.quantity,
-    unitPriceCents: item.unitPriceCents,
-    totalCents: item.totalCents,
-  );
-
   static DateTime _date(Object? value) =>
       DateTime.tryParse(value?.toString() ?? '') ?? DateTime.now().toUtc();
 
@@ -1770,28 +1324,6 @@ class CustomerCommerceService {
   static String? _nullIfBlank(String? value) =>
       value == null || value.trim().isEmpty ? null : value.trim();
 
-  static GeoCoordinate? _coordinateFromMap(Map<String, dynamic> row) {
-    final latitude = (row['latitude'] as num?)?.toDouble();
-    final longitude = (row['longitude'] as num?)?.toDouble();
-    if (latitude == null || longitude == null) return null;
-    return GeoCoordinate(
-      latitude: latitude,
-      longitude: longitude,
-      accuracyMeters: (row['location_accuracy_meters'] as num?)?.toDouble(),
-    );
-  }
-
-  static GeoCoordinate? _coordinateFromRow(QueryRow? row) {
-    if (row == null) return null;
-    final latitude = row.read<double?>('latitude');
-    final longitude = row.read<double?>('longitude');
-    if (latitude == null || longitude == null) return null;
-    return GeoCoordinate(
-      latitude: latitude,
-      longitude: longitude,
-      accuracyMeters: row.read<double?>('location_accuracy_meters'),
-    );
-  }
 }
 
 final customerCommerceServiceProvider = Provider<CustomerCommerceService>((
