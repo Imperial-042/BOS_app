@@ -626,9 +626,6 @@ class _CustomerStorefrontManagementScreenState
     }
   }
 
-  bool get _isCloudId =>
-      _cloudIdPattern.hasMatch(ref.read(selectedBusinessIdProvider));
-
   Future<void> _saveBranch(_BranchDraft d) async {
     final businessId = ref.read(selectedBusinessIdProvider);
     final points = int.tryParse(_points.text.trim());
